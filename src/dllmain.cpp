@@ -925,22 +925,54 @@ static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInp
             }
         }
 
-        if (sensitivityX != 1.0f || sensitivityY != 1.0f) {
-            if (!(raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
-                static float xAccum = 0.0f;
-                static float yAccum = 0.0f;
+        if (!(raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
+            static float xAccum = 0.0f;
+            static float yAccum = 0.0f;
+            static float lastSensitivityX = 1.0f;
+            static float lastSensitivityY = 1.0f;
+            static bool hasLastSensitivity = false;
 
-                xAccum += raw->data.mouse.lLastX * sensitivityX;
-                yAccum += raw->data.mouse.lLastY * sensitivityY;
+            const bool sensitivityChanged = !hasLastSensitivity || (std::fabs(sensitivityX - lastSensitivityX) > 0.000001f) ||
+                                          (std::fabs(sensitivityY - lastSensitivityY) > 0.000001f);
+            if (sensitivityChanged) {
+                xAccum = 0.0f;
+                yAccum = 0.0f;
+                lastSensitivityX = sensitivityX;
+                lastSensitivityY = sensitivityY;
+                hasLastSensitivity = true;
+            }
 
-                LONG outputX = static_cast<LONG>(xAccum);
-                LONG outputY = static_cast<LONG>(yAccum);
+            const LONG rawX = raw->data.mouse.lLastX;
+            const LONG rawY = raw->data.mouse.lLastY;
 
-                xAccum -= outputX;
-                yAccum -= outputY;
+            // Prevent stale remainder from one direction delaying opposite-direction output.
+            if (rawX != 0 && xAccum != 0.0f && ((rawX > 0) != (xAccum > 0.0f))) { xAccum = 0.0f; }
+            if (rawY != 0 && yAccum != 0.0f && ((rawY > 0) != (yAccum > 0.0f))) { yAccum = 0.0f; }
+
+            if (sensitivityX != 1.0f || sensitivityY != 1.0f) {
+                xAccum += rawX * sensitivityX;
+                yAccum += rawY * sensitivityY;
+
+                float roundedX = std::round(xAccum);
+                float roundedY = std::round(yAccum);
+
+                if (roundedX > static_cast<float>(LONG_MAX)) roundedX = static_cast<float>(LONG_MAX);
+                if (roundedX < static_cast<float>(LONG_MIN)) roundedX = static_cast<float>(LONG_MIN);
+                if (roundedY > static_cast<float>(LONG_MAX)) roundedY = static_cast<float>(LONG_MAX);
+                if (roundedY < static_cast<float>(LONG_MIN)) roundedY = static_cast<float>(LONG_MIN);
+
+                LONG outputX = static_cast<LONG>(roundedX);
+                LONG outputY = static_cast<LONG>(roundedY);
+
+                xAccum -= static_cast<float>(outputX);
+                yAccum -= static_cast<float>(outputY);
 
                 raw->data.mouse.lLastX = outputX;
                 raw->data.mouse.lLastY = outputY;
+            } else {
+                // No scaling: avoid carrying stale fractional remainder across future overrides.
+                xAccum = 0.0f;
+                yAccum = 0.0f;
             }
         }
     }
