@@ -960,7 +960,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 if (rb && rb->fromKey != 0 && rb->toKey != 0) {
                                     DWORD triggerVkTip = rb->toKey != 0 ? rb->toKey : kc.vk;
                                     DWORD triggerScanTip = getScanCodeWithExtendedFlag(triggerVkTip);
-                                    DWORD outputVkTip = (rb->useCustomOutput && rb->customOutputVK != 0) ? rb->customOutputVK : triggerVkTip;
+                                    DWORD outputVkTip = (rb->useCustomOutput && rb->customOutputVK != 0) ? rb->customOutputVK : kc.vk;
                                     const std::string typesTip = (rb->useCustomOutput && rb->customOutputUnicode != 0)
                                                                      ? codepointToDisplay((uint32_t)rb->customOutputUnicode)
                                                                      : normalizeMouseButtonLabel(VkToString(outputVkTip));
@@ -1005,7 +1005,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                             if (rb && rb->fromKey != 0 && rb->toKey != 0) {
                                 DWORD triggerVkTip = rb->toKey != 0 ? rb->toKey : vk;
                                 DWORD triggerScanTip = getScanCodeWithExtendedFlag(triggerVkTip);
-                                DWORD outputVkTip = (rb->useCustomOutput && rb->customOutputVK != 0) ? rb->customOutputVK : triggerVkTip;
+                                DWORD outputVkTip = (rb->useCustomOutput && rb->customOutputVK != 0) ? rb->customOutputVK : vk;
                                 const std::string typesTip = (rb->useCustomOutput && rb->customOutputUnicode != 0)
                                                                  ? codepointToDisplay((uint32_t)rb->customOutputUnicode)
                                                                  : normalizeMouseButtonLabel(VkToString(outputVkTip));
@@ -1123,7 +1123,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 if (rb && rb->fromKey != 0 && rb->toKey != 0) {
                                     DWORD triggerVkTip = rb->toKey != 0 ? rb->toKey : vk;
                                     DWORD triggerScanTip = getScanCodeWithExtendedFlag(triggerVkTip);
-                                    DWORD outputVkTip = (rb->useCustomOutput && rb->customOutputVK != 0) ? rb->customOutputVK : triggerVkTip;
+                                    DWORD outputVkTip = (rb->useCustomOutput && rb->customOutputVK != 0) ? rb->customOutputVK : vk;
                                     const std::string typesTip = (rb->useCustomOutput && rb->customOutputUnicode != 0)
                                                                      ? codepointToDisplay((uint32_t)rb->customOutputUnicode)
                                                                      : normalizeMouseButtonLabel(VkToString(outputVkTip));
