@@ -56,6 +56,7 @@ extern std::mutex g_triggerOnReleaseMutex;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static bool s_forcedShowCursor = false;
+static size_t s_bestMatchKeyCount = 0;
 
 static void EnsureSystemCursorVisible() {
     if (g_gameVersion < GameVersion(1, 13, 0)) { return; }
@@ -438,7 +439,7 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         return { false, 0 };
     }
 
-    if (!isEscape && !CheckHotkeyMatch(g_config.guiHotkey, vkCode)) { return { false, 0 }; }
+    if (!isEscape && !CheckHotkeyMatch(g_config.guiHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
 
     if (g_showGui.load(std::memory_order_acquire) && !isEscape) {
         switch (uMsg) {
@@ -592,7 +593,7 @@ InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
         return { false, 0 };
     }
 
-    if (!CheckHotkeyMatch(g_config.borderlessHotkey, vkCode)) { return { false, 0 }; }
+    if (!CheckHotkeyMatch(g_config.borderlessHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
 
     static std::atomic<int64_t> s_lastToggleMs{ 0 };
     auto now = std::chrono::steady_clock::now();
@@ -649,7 +650,7 @@ InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam
         return { false, 0 };
     }
 
-    if (!CheckHotkeyMatch(g_config.imageOverlaysHotkey, vkCode)) { return { false, 0 }; }
+    if (!CheckHotkeyMatch(g_config.imageOverlaysHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
 
     static std::atomic<int64_t> s_lastToggleMs{ 0 };
     auto now = std::chrono::steady_clock::now();
@@ -708,7 +709,7 @@ InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wPara
         return { false, 0 };
     }
 
-    if (!CheckHotkeyMatch(g_config.windowOverlaysHotkey, vkCode)) { return { false, 0 }; }
+    if (!CheckHotkeyMatch(g_config.windowOverlaysHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
 
     static std::atomic<int64_t> s_lastToggleMs{ 0 };
     auto now = std::chrono::steady_clock::now();
@@ -771,7 +772,7 @@ InputHandlerResult HandleKeyRebindsToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
         return { false, 0 };
     }
 
-    if (!CheckHotkeyMatch(g_config.keyRebinds.toggleHotkey, vkCode)) { return { false, 0 }; }
+    if (!CheckHotkeyMatch(g_config.keyRebinds.toggleHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
 
     static std::atomic<int64_t> s_lastToggleMs{ 0 };
     auto now = std::chrono::steady_clock::now();
@@ -1153,10 +1154,9 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         }
 
         for (const auto& alt : hotkey.altSecondaryModes) {
-            bool matched = CheckHotkeyMatch(alt.keys, vkCode, hotkey.conditions.exclusions, hotkey.triggerOnRelease);
-            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(alt.keys, rebindTargetVk, hotkey.conditions.exclusions, hotkey.triggerOnRelease);
+            bool matched = CheckHotkeyMatch(alt.keys, vkCode, hotkey.conditions.exclusions, hotkey.triggerOnRelease, s_bestMatchKeyCount);
+            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(alt.keys, rebindTargetVk, hotkey.conditions.exclusions, hotkey.triggerOnRelease, s_bestMatchKeyCount);
             if (matched || matchedViaRebind) {
-                // When matched via rebind target, always block original key from game
                 bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
                 std::string hotkeyId = GetKeyComboString(alt.keys);
 
@@ -1224,14 +1224,12 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         }
 
         {
-            bool matched = CheckHotkeyMatch(hotkey.keys, vkCode, hotkey.conditions.exclusions, hotkey.triggerOnRelease);
-            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(hotkey.keys, rebindTargetVk, hotkey.conditions.exclusions, hotkey.triggerOnRelease);
+            bool matched = CheckHotkeyMatch(hotkey.keys, vkCode, hotkey.conditions.exclusions, hotkey.triggerOnRelease, s_bestMatchKeyCount);
+            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(hotkey.keys, rebindTargetVk, hotkey.conditions.exclusions, hotkey.triggerOnRelease, s_bestMatchKeyCount);
             if (matched || matchedViaRebind) {
-                // When matched via rebind target, always block original key from game
                 bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
                 std::string hotkeyId = GetKeyComboString(hotkey.keys);
 
-                // Handle trigger-on-release invalidation tracking
                 if (hotkey.triggerOnRelease) {
                     if (isKeyDown) {
                         std::lock_guard<std::mutex> lock(g_triggerOnReleaseMutex);
@@ -1329,10 +1327,9 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         if (!isKeyDown) { continue; }
 
         {
-            bool matched = CheckHotkeyMatch(sensHotkey.keys, vkCode, sensHotkey.conditions.exclusions, false);
-            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(sensHotkey.keys, rebindTargetVk, sensHotkey.conditions.exclusions, false);
+            bool matched = CheckHotkeyMatch(sensHotkey.keys, vkCode, sensHotkey.conditions.exclusions, false, s_bestMatchKeyCount);
+            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(sensHotkey.keys, rebindTargetVk, sensHotkey.conditions.exclusions, false, s_bestMatchKeyCount);
             if (matched || matchedViaRebind) {
-                // Sensitivity hotkeys have no blockKeyFromGame setting; only block when matched via rebind
                 bool blockKey = matchedViaRebind;
                 std::string hotkeyId = "sens_" + GetKeyComboString(sensHotkey.keys);
 
@@ -2147,6 +2144,50 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
     return { false, 0 };
 }
 
+static void ResolveHotkeyPriority(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    s_bestMatchKeyCount = 0;
+
+    DWORD vkCode = 0;
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+        vkCode = NormalizeModifierVkFromKeyMessage(static_cast<DWORD>(wParam), lParam);
+        break;
+    case WM_LBUTTONDOWN: vkCode = VK_LBUTTON; break;
+    case WM_RBUTTONDOWN: vkCode = VK_RBUTTON; break;
+    case WM_MBUTTONDOWN: vkCode = VK_MBUTTON; break;
+    case WM_XBUTTONDOWN:
+        vkCode = (GET_XBUTTON_WPARAM(wParam) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
+        break;
+    default: return;
+    }
+
+    { // Skip resolution entirely for keys that aren't bound to any hotkey
+        std::lock_guard<std::mutex> lock(g_hotkeyMainKeysMutex);
+        if (g_hotkeyMainKeys.find(vkCode) == g_hotkeyMainKeys.end()) return;
+    }
+
+    auto check = [&](const std::vector<DWORD>& keys, const std::vector<DWORD>& exclusions = {}) {
+        if (!keys.empty() && CheckHotkeyMatch(keys, vkCode, exclusions, false))
+            s_bestMatchKeyCount = (std::max)(s_bestMatchKeyCount, keys.size());
+    };
+
+    check(g_config.guiHotkey);
+    check(g_config.borderlessHotkey);
+    check(g_config.imageOverlaysHotkey);
+    check(g_config.windowOverlaysHotkey);
+    check(g_config.keyRebinds.toggleHotkey);
+
+    for (const auto& hk : g_config.hotkeys) {
+        check(hk.keys, hk.conditions.exclusions);
+        for (const auto& alt : hk.altSecondaryModes)
+            check(alt.keys, hk.conditions.exclusions);
+    }
+
+    for (const auto& sh : g_config.sensitivityHotkeys)
+        check(sh.keys, sh.conditions.exclusions);
+}
+
 LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("SubclassedWndProc");
 
@@ -2182,6 +2223,8 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     result = HandleToolscreenQueryMessages(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
+
+    ResolveHotkeyPriority(uMsg, wParam, lParam);
 
     result = HandleBorderlessToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
