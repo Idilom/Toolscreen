@@ -3121,6 +3121,14 @@ void RenderSettingsGUI() {
         s_lastRuntimeScaleFactor = scaleFactor;
     }
 
+    static ImVec2 s_lastDisplaySize = ImVec2(-1.0f, -1.0f);
+    if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f) {
+        const bool displaySizeChanged =
+            fabsf(io.DisplaySize.x - s_lastDisplaySize.x) > 0.5f || fabsf(io.DisplaySize.y - s_lastDisplaySize.y) > 0.5f;
+        if (displaySizeChanged) { g_guiNeedsRecenter.store(true, std::memory_order_relaxed); }
+        s_lastDisplaySize = io.DisplaySize;
+    }
+
     if (g_guiNeedsRecenter.exchange(false)) {
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(850 * scaleFactor, 650 * scaleFactor), ImGuiCond_Always);

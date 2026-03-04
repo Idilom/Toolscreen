@@ -127,6 +127,7 @@ static std::atomic<GLsync> g_lastCopyFence{ nullptr };
 static std::atomic<int> g_lastCopyReadIndex{ -1 };
 static std::atomic<int> g_lastCopyWidth{ 0 };
 static std::atomic<int> g_lastCopyHeight{ 0 };
+static std::atomic<bool> g_safeReadTextureValid{ false };
 
 // These track the LAST FULLY COMPLETED frame - GPU fence has signaled, safe to read
 // Updated by mirror thread after fence wait succeeds, read by OBS without waiting
@@ -682,6 +683,7 @@ GLsync GetFallbackCopyFence() { return g_lastCopyFence.load(std::memory_order_ac
 
 // This is a guaranteed valid texture (may be 1 frame behind) - no fence wait needed
 GLuint GetSafeReadTexture() {
+    if (!g_safeReadTextureValid.load(std::memory_order_acquire)) return 0;
     int writeIndex = g_copyTextureWriteIndex.load(std::memory_order_acquire);
     int readIndex = 1 - writeIndex;
     if (g_copyTextures[readIndex] == 0) return 0;
@@ -709,6 +711,7 @@ void InitCaptureTexture(int width, int height) {
 
     g_copyTextureWriteIndex.store(0);
     g_copyTextureReadIndex.store(-1);
+    g_safeReadTextureValid.store(false, std::memory_order_release);
 
     LogCategory("init", "InitCaptureTexture: Created FBO and " + std::to_string(2) + " textures of " + std::to_string(width) + "x" +
                             std::to_string(height));
@@ -733,6 +736,7 @@ void CleanupCaptureTexture() {
         g_readyFrameIndex.store(-1, std::memory_order_release);
         g_readyFrameWidth.store(0, std::memory_order_release);
         g_readyFrameHeight.store(0, std::memory_order_release);
+        g_safeReadTextureValid.store(false, std::memory_order_release);
     }
 
     if (g_copyTextures[0] != 0 || g_copyTextures[1] != 0) {
@@ -815,6 +819,7 @@ void SubmitFrameCapture(GLuint gameTexture, int width, int height) {
         g_readyFrameIndex.store(-1, std::memory_order_release);
         g_readyFrameWidth.store(0, std::memory_order_release);
         g_readyFrameHeight.store(0, std::memory_order_release);
+        g_safeReadTextureValid.store(false, std::memory_order_release);
 
         for (int i = 0; i < 2; i++) {
             glBindTexture(GL_TEXTURE_2D, g_copyTextures[i]);
@@ -906,6 +911,7 @@ void SubmitFrameCapture(GLuint gameTexture, int width, int height) {
     g_lastCopyReadIndex.store(writeIndex, std::memory_order_release);
     g_lastCopyWidth.store(width, std::memory_order_release);
     g_lastCopyHeight.store(height, std::memory_order_release);
+    g_safeReadTextureValid.store(true, std::memory_order_release);
 
     // Notify mirror thread (lock-free queue) - include texture index so mirror thread uses correct texture
     FrameCaptureNotification notif = { 0, fenceForMirrorThread, width, height, writeIndex };

@@ -463,7 +463,8 @@
 
                 ImGuiStyle& style = ImGui::GetStyle();
 
-                if (ImGui::BeginChild("ColorList", ImVec2(0, 400), true)) {
+                const bool colorListVisible = ImGui::BeginChild("ColorList", ImVec2(0, 400), true);
+                if (colorListVisible) {
                     if (ImGui::CollapsingHeader("Window", ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::Indent();
                         if (ImGui::ColorEdit4("Window Background##Col", (float*)&style.Colors[ImGuiCol_WindowBg])) {
@@ -724,8 +725,8 @@
                         ImGui::Unindent();
                     }
 
-                    ImGui::EndChild();
                 }
+                ImGui::EndChild();
 
                 ImGui::Spacing();
 

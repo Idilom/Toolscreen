@@ -41,7 +41,8 @@ if (ImGui::BeginTabItem("Misc")) {
         ImGui::Separator();
         ImGui::Spacing();
 
-        if (ImGui::BeginChild("LicenseScrollArea", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 10), true)) {
+        const bool licenseScrollVisible = ImGui::BeginChild("LicenseScrollArea", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 10), true);
+        if (licenseScrollVisible) {
             if (ImGui::CollapsingHeader("Dear ImGui", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::Indent();
                 ImGui::TextWrapped("Copyright (c) 2014-2025 Omar Cornut");
@@ -155,8 +156,8 @@ if (ImGui::BeginTabItem("Misc")) {
                 ImGui::Unindent();
             }
 
-            ImGui::EndChild();
         }
+        ImGui::EndChild();
 
         ImGui::Spacing();
 

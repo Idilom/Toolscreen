@@ -319,6 +319,14 @@ static ImFont* RT_AddFontWithArialFallback(ImFontAtlas* atlas, const std::string
     return atlas->AddFontDefault();
 }
 
+static void RT_ResetStyleAndApplyAppearance(float scaleFactor) {
+    ImGui::GetStyle() = ImGuiStyle();
+    ImGui::StyleColorsDark();
+    LoadTheme();
+    ApplyAppearanceConfig();
+    ImGui::GetStyle().ScaleAllSizes(scaleFactor);
+}
+
 static bool RT_TryInitializeImGui(HWND hwnd, const Config& cfg) {
     if (g_renderThreadImGuiInitialized) { return true; }
     if (!hwnd) { return false; }
@@ -354,10 +362,7 @@ static bool RT_TryInitializeImGui(HWND hwnd, const Config& cfg) {
         if (g_eyeZoomFontPathCached.empty()) { g_eyeZoomFontPathCached = ConfigDefaults::CONFIG_FONT_PATH; }
     }
 
-    ImGui::StyleColorsDark();
-    LoadTheme();
-    ApplyAppearanceConfig();
-    ImGui::GetStyle().ScaleAllSizes(scaleFactor);
+    RT_ResetStyleAndApplyAppearance(scaleFactor);
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -2970,10 +2975,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 g_eyeZoomTextFont = RT_AddFontWithArialFallback(io.Fonts, eyeZoomFontPath, 80.0f * scaleFactor, "EyeZoom font", &g_eyeZoomFontPathCached);
                 if (g_eyeZoomFontPathCached.empty()) { g_eyeZoomFontPathCached = ConfigDefaults::CONFIG_FONT_PATH; }
 
-                ImGui::StyleColorsDark();
-                LoadTheme();
-                ApplyAppearanceConfig();
-                ImGui::GetStyle().ScaleAllSizes(scaleFactor);
+                RT_ResetStyleAndApplyAppearance(scaleFactor);
 
                 ImGui_ImplWin32_Init(hwnd);
                 ImGui_ImplOpenGL3_Init("#version 330");
@@ -3551,10 +3553,7 @@ static void RenderThreadFunc(void* gameGLContext) {
 
                         g_fontsValid = false;
 
-                        ImGui::StyleColorsDark();
-                        LoadTheme();
-                        ApplyAppearanceConfig();
-                        ImGui::GetStyle().ScaleAllSizes(g_eyeZoomScaleFactor);
+                        RT_ResetStyleAndApplyAppearance(g_eyeZoomScaleFactor);
 
                         io.Fonts->Clear();
 
