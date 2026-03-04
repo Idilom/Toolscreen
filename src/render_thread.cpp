@@ -2757,6 +2757,7 @@ static void RT_RenderWindowOverlays(const std::vector<const WindowOverlayConfig*
 
 // This runs on the render thread, moving the work off the main thread
 static void RT_CollectActiveElements(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
+                                     uint64_t configVersion,
                                      std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
                                      std::vector<const WindowOverlayConfig*>& outWindowOverlays) {
     outMirrors.clear();
@@ -2764,15 +2765,15 @@ static void RT_CollectActiveElements(const Config& config, const std::string& mo
     outWindowOverlays.clear();
 
     // These caches are safe because `config` is immutable for the lifetime of the snapshot.
-    static const Config* s_cachedConfigPtr = nullptr;
+    static uint64_t s_cachedConfigVersion = 0;
     static std::unordered_map<std::string, const ModeConfig*> s_modeById;
     static std::unordered_map<std::string, const MirrorConfig*> s_mirrorByName;
     static std::unordered_map<std::string, const MirrorGroupConfig*> s_groupByName;
     static std::unordered_map<std::string, const ImageConfig*> s_imageByName;
     static std::unordered_map<std::string, const WindowOverlayConfig*> s_windowOverlayByName;
 
-    if (s_cachedConfigPtr != &config) {
-        s_cachedConfigPtr = &config;
+    if (s_cachedConfigVersion != configVersion) {
+        s_cachedConfigVersion = configVersion;
         s_modeById.clear();
         s_mirrorByName.clear();
         s_groupByName.clear();
@@ -3045,6 +3046,7 @@ static void RenderThreadFunc(void* gameGLContext) {
             auto cfgSnapshot = GetConfigSnapshot();
             if (!cfgSnapshot) continue;
             const Config& cfg = *cfgSnapshot;
+            const uint64_t cfgVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
 
             // === Image Processing (moved from main thread) ===
             {
@@ -3270,7 +3272,7 @@ static void RenderThreadFunc(void* gameGLContext) {
             }
 
             // Collect active elements from g_config (this work moved from main thread)
-            static const Config* s_cachedActiveCfgPtr = nullptr;
+            static uint64_t s_cachedActiveConfigVersion = 0;
             static std::string s_cachedActiveModeId;
             static bool s_cachedActiveImagesVisible = false;
             static bool s_cachedActiveWindowOverlaysVisible = false;
@@ -3281,14 +3283,16 @@ static void RenderThreadFunc(void* gameGLContext) {
             const bool imagesVisible = g_imageOverlaysVisible.load(std::memory_order_acquire);
             const bool windowOverlaysVisible = g_windowOverlaysVisible.load(std::memory_order_acquire);
 
-            if (s_cachedActiveCfgPtr != &cfg || s_cachedActiveModeId != request.modeId || s_cachedActiveImagesVisible != imagesVisible ||
+            if (s_cachedActiveConfigVersion != cfgVersion || s_cachedActiveModeId != request.modeId ||
+                s_cachedActiveImagesVisible != imagesVisible ||
                 s_cachedActiveWindowOverlaysVisible != windowOverlaysVisible) {
                 PROFILE_SCOPE_CAT("RT Collect Active Elements", "Render Thread");
-                s_cachedActiveCfgPtr = &cfg;
+                s_cachedActiveConfigVersion = cfgVersion;
                 s_cachedActiveModeId = request.modeId;
                 s_cachedActiveImagesVisible = imagesVisible;
                 s_cachedActiveWindowOverlaysVisible = windowOverlaysVisible;
-                RT_CollectActiveElements(cfg, request.modeId, false, s_cachedActiveMirrors, s_cachedActiveImages, s_cachedActiveWindowOverlays);
+                RT_CollectActiveElements(cfg, request.modeId, false, cfgVersion, s_cachedActiveMirrors, s_cachedActiveImages,
+                                         s_cachedActiveWindowOverlays);
             }
 
             const std::vector<MirrorConfig>& activeMirrors = s_cachedActiveMirrors;
@@ -3448,7 +3452,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 std::vector<MirrorConfig> eyeZoomMirrors;
                 std::vector<ImageConfig> unusedImages;
                 std::vector<const WindowOverlayConfig*> unusedOverlays;
-                RT_CollectActiveElements(cfg, "EyeZoom", false, eyeZoomMirrors, unusedImages, unusedOverlays);
+                RT_CollectActiveElements(cfg, "EyeZoom", false, cfgVersion, eyeZoomMirrors, unusedImages, unusedOverlays);
 
                 std::vector<MirrorConfig> mirrorsToSlideOut;
                 for (const auto& ezMirror : eyeZoomMirrors) {
@@ -3479,7 +3483,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 std::vector<MirrorConfig> fromModeMirrors;
                 std::vector<ImageConfig> unusedImages;
                 std::vector<const WindowOverlayConfig*> unusedOverlays;
-                RT_CollectActiveElements(cfg, request.fromModeId, false, fromModeMirrors, unusedImages, unusedOverlays);
+                RT_CollectActiveElements(cfg, request.fromModeId, false, cfgVersion, fromModeMirrors, unusedImages, unusedOverlays);
 
                 std::vector<MirrorConfig> mirrorsToSlideOut;
                 for (const auto& fromMirror : fromModeMirrors) {
