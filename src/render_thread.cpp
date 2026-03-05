@@ -3496,8 +3496,9 @@ static void RenderThreadFunc(void* gameGLContext) {
             }
 
             const bool shouldRenderWelcomeToast = request.showWelcomeToast && !isObsRequest;
+            const bool mustRunVirtualCameraCapture = isObsRequest && IsVirtualCameraActive();
 
-            if (!hasAnyVisibleOverlay && !shouldRenderAnyImGui && !shouldRenderWelcomeToast) {
+            if (!hasAnyVisibleOverlay && !shouldRenderAnyImGui && !shouldRenderWelcomeToast && !mustRunVirtualCameraCapture) {
                 // Create fence for synchronization
                 GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
                 glFlush();
