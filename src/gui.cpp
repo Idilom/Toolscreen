@@ -230,7 +230,7 @@ static bool ParseSupportersJson(const std::string& body, std::vector<SupporterRo
 
         SupporterRoleEntry role;
         role.name = roleJson.value("name", "");
-        role.imageUrl = roleJson.value("image", "");
+        role.imageUrl = (roleJson.contains("image") && roleJson["image"].is_string()) ? roleJson["image"].get<std::string>() : "";
 
         const std::string colorString = roleJson.value("color", "#FFFFFF");
         ParseColorString(colorString, role.color);

@@ -33,9 +33,9 @@ if (ImGui::BeginTabItem("Supporters")) {
             const bool hasTierTexture = EnsureSupporterTierTexture(role, tierTexture, tierTextureWidth, tierTextureHeight);
 
             const ImVec4 roleColor(role.color.r, role.color.g, role.color.b, role.color.a);
+            constexpr float kMaxIconSize = 22.0f;
             ImVec2 iconSize(0.0f, 0.0f);
             if (hasTierTexture) {
-                constexpr float kMaxIconSize = 22.0f;
                 float iconScale = 1.0f;
                 const int maxSide = (std::max)(tierTextureWidth, tierTextureHeight);
                 if (maxSide > 0) { iconScale = kMaxIconSize / static_cast<float>(maxSide); }
@@ -51,6 +51,9 @@ if (ImGui::BeginTabItem("Supporters")) {
             if (hasTierTexture) {
                 ImGui::SetCursorPosY(tierHeaderStartY + (tierHeaderHeight - iconSize.y) * 0.5f);
                 ImGui::Image((ImTextureID)(intptr_t)tierTexture, iconSize);
+                ImGui::SameLine(0.0f, 8.0f);
+            } else {
+                ImGui::Dummy(ImVec2(kMaxIconSize, textLineHeight));
                 ImGui::SameLine(0.0f, 8.0f);
             }
 
