@@ -2873,26 +2873,34 @@ void RenderSettingsGUI() {
     PROFILE_SCOPE_CAT("Settings GUI Rendering", "ImGui");
     ResetTransientBindingUiState();
 
-    static const std::vector<std::pair<const char*, const char*>> relativeToOptions = { { "topLeftViewport", "Top Left (Viewport)" },
-                                                                                        { "topRightViewport", "Top Right (Viewport)" },
-                                                                                        { "bottomLeftViewport", "Bottom Left (Viewport)" },
-                                                                                        { "bottomRightViewport",
-                                                                                          "Bottom Right (Viewport)" },
-                                                                                        { "centerViewport", "Center (Viewport)" },
-                                                                                        { "pieLeft", "Pie-Chart Left" },
-                                                                                        { "pieRight", "Pie-Chart Right" },
-                                                                                        { "topLeftScreen", "Top Left (Screen)" },
-                                                                                        { "topRightScreen", "Top Right (Screen)" },
-                                                                                        { "bottomLeftScreen", "Bottom Left (Screen)" },
-                                                                                        { "bottomRightScreen", "Bottom Right (Screen)" },
-                                                                                        { "centerScreen", "Center (Screen)" } };
-    static const std::vector<std::pair<const char*, const char*>> imageRelativeToOptions = {
-        { "topLeftViewport", "Top Left (Viewport)" },       { "topRightViewport", "Top Right (Viewport)" },
-        { "bottomLeftViewport", "Bottom Left (Viewport)" }, { "bottomRightViewport", "Bottom Right (Viewport)" },
-        { "centerViewport", "Center (Viewport)" },          { "topLeftScreen", "Top Left (Screen)" },
-        { "topRightScreen", "Top Right (Screen)" },         { "bottomLeftScreen", "Bottom Left (Screen)" },
-        { "bottomRightScreen", "Bottom Right (Screen)" },   { "centerScreen", "Center (Screen)" }
-    };
+    static const std::vector<std::pair<const char*, const char*>>
+        relativeToOptions = {
+            {"topLeftViewport", trc("position.top_left_viewport")},
+            {"topRightViewport", trc("position.top_right_viewport")},
+            {"bottomLeftViewport", trc("position.bottom_left_viewport")},
+            {"bottomRightViewport", trc("position.bottom_right_viewport")},
+            {"centerViewport", trc("position.center_viewport")},
+            {"pieLeft", trc("position.pie_left")},
+            {"pieRight", trc("position.pie_right")},
+            {"topLeftScreen", trc("position.top_left_screen")},
+            {"topRightScreen", trc("position.top_right_screen")},
+            {"bottomLeftScreen", trc("position.bottom_left_screen")},
+            {"bottomRightScreen", trc("position.bottom_right_screen")},
+            {"centerScreen", trc("position.center_screen")}
+        };
+    static const std::vector<std::pair<const char*, const char*>>
+        imageRelativeToOptions = {
+            {"topLeftViewport", trc("position.top_left_viewport")},
+            {"topRightViewport", trc("position.top_right_viewport")},
+            {"bottomLeftViewport", trc("position.bottom_left_viewport")},
+            {"bottomRightViewport", trc("position.bottom_right_viewport")},
+            {"centerViewport", trc("position.center_viewport")},
+            {"topLeftScreen", trc("position.top_left_screen")},
+            {"topRightScreen", trc("position.top_right_screen")},
+            {"bottomLeftScreen", trc("position.bottom_left_screen")},
+            {"bottomRightScreen", trc("position.bottom_right_screen")},
+            {"centerScreen", trc("position.center_screen")}
+        };
     auto getFriendlyName = [&](const std::string& key, const std::vector<std::pair<const char*, const char*>>& options) {
         for (const auto& option : options) {
             if (key == option.first) return option.second;
@@ -2911,14 +2919,15 @@ void RenderSettingsGUI() {
     static const std::vector<const char*> guiGameStates = { "wall", "inworld,cursor_free", "inworld,cursor_grabbed", "title",
                                                             "generating" };
 
-    static const std::vector<std::pair<const char*, const char*>> gameStateDisplayNames = {
-        { "wall", "Wall Screen" },
-        { "inworld,cursor_free", "In World (Cursor Free)" },
-        { "inworld,cursor_grabbed", "In World (Cursor Grabbed)" },
-        { "title", "Title Screen" },
-        { "waiting", "Waiting Screen" },
-        { "generating", "World Generation" }
-    };
+    static const std::vector<std::pair<const char*, const char*>>
+        gameStateDisplayNames = {
+            {"wall", trc("game_state.wall")},
+            {"inworld,cursor_free", trc("game_state.inworld_free")},
+            {"inworld,cursor_grabbed", trc("game_state.inworld_grabbed")},
+            {"title", trc("game_state.title")},
+            {"waiting", trc("game_state.waiting")},
+            {"generating", trc("game_state.generating")}
+        };
 
     auto getGameStateFriendlyName = [&](const std::string& gameState) {
         for (const auto& pair : gameStateDisplayNames) {
