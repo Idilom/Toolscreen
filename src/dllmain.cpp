@@ -48,6 +48,8 @@
 #include "imgui_impl_win32.h"
 #include "stb_image.h"
 
+extern "C" NTSYSAPI PVOID NTAPI RtlPcToFileHeader(PVOID PcValue, PVOID* BaseOfImage);
+
 Config g_config;
 std::atomic<bool> g_configIsDirty{ false };
 
@@ -543,6 +545,33 @@ typedef void (APIENTRY* GLBINDTEXTUREPROC)(GLenum target, GLuint texture);
 GLBINDTEXTUREPROC oglBindTexture = NULL;
 GLBINDTEXTUREPROC g_oglBindTextureDriver = NULL;
 
+static __forceinline bool IsDynamicMemoryCaller(void* caller_address) {
+    if (!caller_address) {
+        return false;
+    }
+
+    struct CallerCacheEntry {
+        void* caller;
+        bool isDynamic;
+    };
+
+    thread_local CallerCacheEntry callerCache[4] = {};
+    thread_local size_t nextCacheIndex = 0;
+
+    for (const CallerCacheEntry& entry : callerCache) {
+        if (entry.caller == caller_address) {
+            return entry.isDynamic;
+        }
+    }
+
+    PVOID baseOfImage = nullptr;
+    const bool isDynamic = (RtlPcToFileHeader(caller_address, &baseOfImage) == NULL);
+
+    callerCache[nextCacheIndex] = { caller_address, isDynamic };
+    nextCacheIndex = (nextCacheIndex + 1) % std::size(callerCache);
+    return isDynamic;
+}
+
 void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     GLBINDTEXTUREPROC next = oglBindTexture ? oglBindTexture : g_oglBindTextureDriver;
     if (next) {
@@ -552,27 +581,48 @@ void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     glBindTexture(target, texture);
 }
 
-static inline void BindTextureHook_Impl(const char* hookName, GLBINDTEXTUREPROC next, GLenum target, GLuint texture) {
-    const DWORD currentThreadId = GetCurrentThreadId();
-    const DWORD lastSwapThreadId = g_lastSwapBuffersThreadId.load(std::memory_order_acquire);
-    const bool isTexture2D = (target == GL_TEXTURE_2D);
-    const bool hasTextureId = (texture != 0);
-    const bool threadMatchesSwap = (lastSwapThreadId != 0) && (currentThreadId == lastSwapThreadId);
-
+static inline void BindTextureHook_Impl(GLBINDTEXTUREPROC next, GLenum target, GLuint texture) {
     // only track valid 2D binds from the swapbuffers thread
-    if (isTexture2D && hasTextureId && threadMatchesSwap) {
-        g_lastTrackedGameTextureBindId.store(texture, std::memory_order_release);
+    if (target == GL_TEXTURE_2D && texture != 0) {
+        const DWORD lastSwapThreadId = g_lastSwapBuffersThreadId.load(std::memory_order_acquire);
+        if (lastSwapThreadId != 0 && GetCurrentThreadId() == lastSwapThreadId) {
+            g_lastTrackedGameTextureBindId.store(texture, std::memory_order_release);
+        }
     }
 
     if (next) next(target, texture);
 }
 
 void APIENTRY hkglBindTexture(GLenum target, GLuint texture) {
-    BindTextureHook_Impl("export", oglBindTexture, target, texture);
+    void* caller_address = _ReturnAddress();
+    if (!IsDynamicMemoryCaller(caller_address)) {
+        if (oglBindTexture) {
+            oglBindTexture(target, texture);
+            return;
+        }
+        glBindTexture(target, texture);
+        return;
+    }
+
+    BindTextureHook_Impl(oglBindTexture, target, texture);
 }
 
 void APIENTRY hkglBindTexture_Driver(GLenum target, GLuint texture) {
-    BindTextureHook_Impl("driver", g_oglBindTextureDriver, target, texture);
+    void* caller_address = _ReturnAddress();
+    if (!IsDynamicMemoryCaller(caller_address)) {
+        if (g_oglBindTextureDriver) {
+            g_oglBindTextureDriver(target, texture);
+            return;
+        }
+        if (oglBindTexture) {
+            oglBindTexture(target, texture);
+            return;
+        }
+        glBindTexture(target, texture);
+        return;
+    }
+
+    BindTextureHook_Impl(g_oglBindTextureDriver, target, texture);
 }
 
 typedef void (*GLFWSETINPUTMODE)(void* window, int mode, int value);
@@ -831,10 +881,42 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     return next(stretchX, stretchY_gl, stretchWidth, stretchHeight);
 }
 
-void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height) { ViewportHook_Impl(oglViewport, x, y, width, height); }
+void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
+    if (!oglViewport) {
+        return;
+    }
+
+    if (g_internalViewportCall) {
+        oglViewport(x, y, width, height);
+        return;
+    }
+
+    void* caller_address = _ReturnAddress();
+    if (!IsDynamicMemoryCaller(caller_address)) {
+        oglViewport(x, y, width, height);
+        return;
+    }
+
+    ViewportHook_Impl(oglViewport, x, y, width, height);
+}
 
 // Driver-level glViewport hook (wglGetProcAddress / GLEW-resolved function pointer).
 void WINAPI hkglViewport_Driver(GLint x, GLint y, GLsizei width, GLsizei height) {
+    if (!g_oglViewportDriver) {
+        return;
+    }
+
+    if (g_internalViewportCall) {
+        g_oglViewportDriver(x, y, width, height);
+        return;
+    }
+
+    void* caller_address = _ReturnAddress();
+    if (!IsDynamicMemoryCaller(caller_address)) {
+        g_oglViewportDriver(x, y, width, height);
+        return;
+    }
+
     ViewportHook_Impl(g_oglViewportDriver, x, y, width, height);
 }
 
@@ -843,6 +925,23 @@ void WINAPI hkglViewport_ThirdParty(GLint x, GLint y, GLsizei width, GLsizei hei
     if (g_config.hookChainingNextTarget == HookChainingNextTarget::LatestHook) {
         next = g_oglViewportThirdParty ? g_oglViewportThirdParty : (oglViewport ? oglViewport : g_oglViewportDriver);
     }
+
+    if (!next) {
+        return;
+    }
+
+    if (g_internalViewportCall) {
+        next(x, y, width, height);
+        return;
+    }
+
+    void* caller_address = _ReturnAddress();
+
+    if (!IsDynamicMemoryCaller(caller_address)) {
+        next(x, y, width, height);
+        return;
+    }
+
     ViewportHook_Impl(next, x, y, width, height);
 }
 
@@ -1091,6 +1190,12 @@ UINT WINAPI hkGetRawInputData_ThirdParty(HRAWINPUT hRawInput, UINT uiCommand, LP
 void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
     if (drawFramebuffer != 0) {
+        return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask,
+                                       filter);
+    }
+
+    void* caller_address = _ReturnAddress();
+    if (!IsDynamicMemoryCaller(caller_address)) {
         return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask,
                                        filter);
     }
