@@ -2932,7 +2932,53 @@ struct SameThreadOverlayState {
     bool fromSlideMirrorsIn = false;
     bool toSlideMirrorsIn = false;
     float mirrorSlideProgress = 1.0f;
+    bool allowMirrorCaptureReuse = false;
 };
+
+struct SameThreadMirrorCaptureReuseState {
+    bool available = false;
+    uint64_t configVersion = 0;
+    std::string modeId;
+    std::string fromModeId;
+    bool hasEyeZoomSlideOut = false;
+    bool hasTransitionSlideOut = false;
+    GLuint sourceTexture = 0;
+    int sourceW = 0;
+    int sourceH = 0;
+};
+
+static SameThreadMirrorCaptureReuseState s_sameThreadMirrorCaptureReuseState;
+
+static void InvalidateSameThreadMirrorCaptureReuse() {
+    s_sameThreadMirrorCaptureReuseState.available = false;
+}
+
+static bool CanReuseSameThreadMirrorCapture(uint64_t configVersion, const SameThreadOverlayState& request,
+                                            bool hasEyeZoomSlideOutMirrors, bool hasTransitionSlideOutMirrors,
+                                            GLuint sourceTexture, int sourceW, int sourceH) {
+    return request.allowMirrorCaptureReuse && s_sameThreadMirrorCaptureReuseState.available &&
+           s_sameThreadMirrorCaptureReuseState.configVersion == configVersion &&
+           s_sameThreadMirrorCaptureReuseState.modeId == request.modeId &&
+           s_sameThreadMirrorCaptureReuseState.fromModeId == request.fromModeId &&
+           s_sameThreadMirrorCaptureReuseState.hasEyeZoomSlideOut == hasEyeZoomSlideOutMirrors &&
+           s_sameThreadMirrorCaptureReuseState.hasTransitionSlideOut == hasTransitionSlideOutMirrors &&
+           s_sameThreadMirrorCaptureReuseState.sourceTexture == sourceTexture &&
+           s_sameThreadMirrorCaptureReuseState.sourceW == sourceW && s_sameThreadMirrorCaptureReuseState.sourceH == sourceH;
+}
+
+static void CacheSameThreadMirrorCapture(uint64_t configVersion, const SameThreadOverlayState& request,
+                                         bool hasEyeZoomSlideOutMirrors, bool hasTransitionSlideOutMirrors, GLuint sourceTexture,
+                                         int sourceW, int sourceH) {
+    s_sameThreadMirrorCaptureReuseState.available = true;
+    s_sameThreadMirrorCaptureReuseState.configVersion = configVersion;
+    s_sameThreadMirrorCaptureReuseState.modeId = request.modeId;
+    s_sameThreadMirrorCaptureReuseState.fromModeId = request.fromModeId;
+    s_sameThreadMirrorCaptureReuseState.hasEyeZoomSlideOut = hasEyeZoomSlideOutMirrors;
+    s_sameThreadMirrorCaptureReuseState.hasTransitionSlideOut = hasTransitionSlideOutMirrors;
+    s_sameThreadMirrorCaptureReuseState.sourceTexture = sourceTexture;
+    s_sameThreadMirrorCaptureReuseState.sourceW = sourceW;
+    s_sameThreadMirrorCaptureReuseState.sourceH = sourceH;
+}
 
 static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
     const bool shouldRenderAnyImGui = request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
@@ -3131,11 +3177,19 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
 
         if (!s_cachedSameThreadCaptureConfigs.empty() &&
             SelectSameThreadGameTexture(request.gameTextureId, request.gameW, request.gameH, sourceTexture, sourceW, sourceH)) {
-            PROFILE_SCOPE_CAT("Capture Mirror Sources", "Rendering");
-            if (RenderMirrorCapturesOnCurrentThread(s_cachedSameThreadCaptureConfigs, sourceTexture, sourceW, sourceH, request.fullW,
-                                                   request.fullH, geo.finalX, geo.finalY, geo.finalW, geo.finalH)) {
-                PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
-                PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
+            const bool reuseMirrorCaptures =
+                CanReuseSameThreadMirrorCapture(cfgVersion, request, hasEyeZoomSlideOutMirrors, hasTransitionSlideOutMirrors,
+                                                sourceTexture, sourceW, sourceH);
+            if (!reuseMirrorCaptures) {
+                PROFILE_SCOPE_CAT("Capture Mirror Sources", "Rendering");
+                if (RenderMirrorCapturesOnCurrentThread(s_cachedSameThreadCaptureConfigs, sourceTexture, sourceW, sourceH,
+                                                       request.fullW, request.fullH, geo.finalX, geo.finalY, geo.finalW,
+                                                       geo.finalH)) {
+                    PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
+                    PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
+                }
+                CacheSameThreadMirrorCapture(cfgVersion, request, hasEyeZoomSlideOutMirrors, hasTransitionSlideOutMirrors,
+                                             sourceTexture, sourceW, sourceH);
             }
         }
 
@@ -3520,6 +3574,7 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
         request.toSlideMirrorsIn = modeToRender->slideMirrorsIn;
         request.mirrorSlideProgress =
             (transitionState.active && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
+        request.allowMirrorCaptureReuse = true;
 
         RenderSameThreadOverlayPass(request, *cfgSnap, obsState);
     }
@@ -4837,6 +4892,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     if (sameThreadRenderPipeline) {
         if (wantAsyncOverlayThisFrame && configSnap) {
             PROFILE_SCOPE_CAT("Immediate Overlay Render", "Rendering");
+
+            InvalidateSameThreadMirrorCaptureReuse();
 
             SameThreadOverlayState request;
             populateOverlayState(request);
