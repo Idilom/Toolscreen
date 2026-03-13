@@ -29,12 +29,9 @@ static PFN_glBlitFramebuffer Real_glBlitFramebuffer = nullptr;
 
 static GLuint g_obsRedirectFBO = 0;
 static std::mutex g_obsHookMutex;
-
-static GLuint g_obsCaptureFBO = 0;
-static GLuint g_obsCaptureTexture = 0;
-static int g_obsCaptureWidth = 0;
-static int g_obsCaptureHeight = 0;
 static GLuint g_obsRedirectAttachedTexture = 0;
+static int g_obsRedirectAttachedWidth = 0;
+static int g_obsRedirectAttachedHeight = 0;
 
 static GLuint SelectObsRedirectTexture(bool allowDedicatedObsTexture, GLsync& outFence, bool& outNeedsFenceWait) {
     outFence = nullptr;
@@ -67,6 +64,14 @@ static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX
             GLsync obsFence = nullptr;
             bool needsFenceWait = false;
             GLuint obsTexture = SelectObsRedirectTexture(allowDedicatedObsTexture, obsFence, needsFenceWait);
+            const GLuint overrideTexture = g_obsOverrideTexture.load(std::memory_order_acquire);
+            const bool usingOverrideTexture = (overrideTexture != 0 && obsTexture == overrideTexture);
+            const int overrideWidth = usingOverrideTexture ? g_obsOverrideWidth.load(std::memory_order_acquire) : 0;
+            const int overrideHeight = usingOverrideTexture ? g_obsOverrideHeight.load(std::memory_order_acquire) : 0;
+            const bool mustReattachOverride =
+                usingOverrideTexture &&
+                (g_obsRedirectAttachedTexture != obsTexture || g_obsRedirectAttachedWidth != overrideWidth ||
+                 g_obsRedirectAttachedHeight != overrideHeight);
 
             if (obsTexture != 0) {
                 PROFILE_SCOPE_CAT("OBS Capture Redirect", "OBS Hook");
@@ -81,7 +86,7 @@ static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX
                 }
 
                 glBindFramebuffer(GL_READ_FRAMEBUFFER, g_obsRedirectFBO);
-                if (g_obsRedirectAttachedTexture != obsTexture) {
+                if (g_obsRedirectAttachedTexture != obsTexture || mustReattachOverride) {
                     glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, obsTexture, 0);
 
                     GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
@@ -93,16 +98,25 @@ static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX
                             lastLoggedStatus = status;
                         }
                         g_obsRedirectAttachedTexture = 0;
+                        g_obsRedirectAttachedWidth = 0;
+                        g_obsRedirectAttachedHeight = 0;
                         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
                         Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
                         return;
                     }
 
                     g_obsRedirectAttachedTexture = obsTexture;
+                    g_obsRedirectAttachedWidth = overrideWidth;
+                    g_obsRedirectAttachedHeight = overrideHeight;
                 }
 
                 GLint blitSrcX0 = srcX0, blitSrcY0 = srcY0, blitSrcX1 = srcX1, blitSrcY1 = srcY1;
-                if (g_obsPre113Windowed.load(std::memory_order_acquire)) {
+                if (usingOverrideTexture && overrideWidth > 0 && overrideHeight > 0) {
+                    blitSrcX0 = 0;
+                    blitSrcY0 = 0;
+                    blitSrcX1 = overrideWidth;
+                    blitSrcY1 = overrideHeight;
+                } else if (g_obsPre113Windowed.load(std::memory_order_acquire)) {
                     int offsetX = g_obsPre113OffsetX.load(std::memory_order_acquire);
                     int offsetY = g_obsPre113OffsetY.load(std::memory_order_acquire);
                     blitSrcX0 = srcX0 + offsetX;
@@ -121,47 +135,22 @@ static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX
     Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
 }
 
-void CaptureBackbufferForObs(int width, int height) {
-    PROFILE_SCOPE_CAT("Capture Backbuffer for OBS", "OBS");
-
-    if (g_obsCaptureFBO == 0 || width != g_obsCaptureWidth || height != g_obsCaptureHeight) {
-        if (g_obsCaptureTexture != 0) { glDeleteTextures(1, &g_obsCaptureTexture); }
-        if (g_obsCaptureFBO == 0) { glGenFramebuffers(1, &g_obsCaptureFBO); }
-
-        glGenTextures(1, &g_obsCaptureTexture);
-        BindTextureDirect(GL_TEXTURE_2D, g_obsCaptureTexture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, g_obsCaptureFBO);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_obsCaptureTexture, 0);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        BindTextureDirect(GL_TEXTURE_2D, 0);
-
-        g_obsCaptureWidth = width;
-        g_obsCaptureHeight = height;
-    }
-
-    GLint prevReadFBO = 0, prevDrawFBO = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_obsCaptureFBO);
-
+void ObsBlitFramebufferDirect(GLint srcX0,
+                              GLint srcY0,
+                              GLint srcX1,
+                              GLint srcY1,
+                              GLint dstX0,
+                              GLint dstY0,
+                              GLint dstX1,
+                              GLint dstY1,
+                              GLbitfield mask,
+                              GLenum filter) {
     if (Real_glBlitFramebuffer) {
-        Real_glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    } else {
-        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        return;
     }
 
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
-
-    SetObsOverrideTexture(g_obsCaptureTexture, width, height);
+    glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
 }
 
 void SetObsOverrideTexture(GLuint texture, int width, int height) {
@@ -171,17 +160,19 @@ void SetObsOverrideTexture(GLuint texture, int width, int height) {
     g_obsOverrideEnabled.store(true, std::memory_order_release);
 }
 
-void ClearObsOverride() { g_obsOverrideEnabled.store(false, std::memory_order_release); }
+void ClearObsOverride() {
+    g_obsOverrideEnabled.store(false, std::memory_order_release);
+    g_obsOverrideTexture.store(0, std::memory_order_release);
+    g_obsOverrideWidth.store(0, std::memory_order_release);
+    g_obsOverrideHeight.store(0, std::memory_order_release);
+    g_obsRedirectAttachedTexture = 0;
+    g_obsRedirectAttachedWidth = 0;
+    g_obsRedirectAttachedHeight = 0;
+}
 
 void EnableObsOverride() {
     if (g_obsHookActive.load(std::memory_order_acquire)) { g_obsOverrideEnabled.store(true, std::memory_order_release); }
 }
-
-GLuint GetObsCaptureTexture() { return g_obsCaptureTexture; }
-
-int GetObsCaptureWidth() { return g_obsCaptureWidth; }
-
-int GetObsCaptureHeight() { return g_obsCaptureHeight; }
 
 bool IsObsHookDetected() {
     return GetModuleHandleA("graphics-hook64.dll") != NULL;

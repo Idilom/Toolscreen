@@ -1015,7 +1015,13 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
         const ModeConfig* fromMode = modeSnap ? GetModeFromSnapshot(*modeSnap, currentMode) : nullptr;
         const ModeConfig* toMode = modeSnap ? GetModeFromSnapshot(*modeSnap, newModeId) : nullptr;
 
-        if (modeSnap && fromMode && toMode && !EqualsIgnoreCase(fromMode->id, toMode->id)) {
+        const bool preserveEyeZoomSourceMirrorsForSlideOut =
+            fromMode && EqualsIgnoreCase(fromMode->id, "EyeZoom") && modeSnap && modeSnap->eyezoom.slideMirrorsIn && !forceCut;
+        const bool preserveModeSourceMirrorsForSlideOut = fromMode && fromMode->slideMirrorsIn && !forceCut;
+        const bool preserveSourceOnlyMirrorsForSlideOut =
+            preserveEyeZoomSourceMirrorsForSlideOut || preserveModeSourceMirrorsForSlideOut;
+
+        if (!preserveSourceOnlyMirrorsForSlideOut && modeSnap && fromMode && toMode && !EqualsIgnoreCase(fromMode->id, toMode->id)) {
             auto collectModeMirrorIds = [](const Config& cfg, const ModeConfig* mode, std::unordered_set<std::string>& outMirrorIds) {
                 if (!mode) return;
 

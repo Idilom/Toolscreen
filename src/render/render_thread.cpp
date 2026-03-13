@@ -2456,6 +2456,8 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
             }
 
             int finalX_screen, finalY_screen, finalW_screen, finalH_screen;
+            int slideAnchorX = 0;
+            int slideAnchorW = renderData.outW;
 
             if (isScreenRelative) {
                 int outX, outY;
@@ -2464,6 +2466,7 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
                 finalY_screen = outY;
                 finalW_screen = renderData.outW;
                 finalH_screen = renderData.outH;
+                slideAnchorX = finalX_screen;
 
                 renderData.screenX = finalX_screen;
                 renderData.screenY = finalY_screen;
@@ -2501,6 +2504,19 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
                     finalH_screen = renderData.outH;
                 }
 
+                slideAnchorX = finalX_screen;
+                slideAnchorW = finalW_screen;
+                if (wantsTransitionSlide) {
+                    if (fromSlideMirrorsIn && isSlideOutPass) {
+                        slideAnchorX = fromPosX;
+                        slideAnchorW = relativeStretching ? fromSizeW : renderData.outW;
+                    }
+                    else if (toSlideMirrorsIn && !isSlideOutPass) {
+                        slideAnchorX = toPosX;
+                        slideAnchorW = relativeStretching ? toSizeW : renderData.outW;
+                    }
+                }
+
                 renderData.screenX = finalX_screen;
                 renderData.screenY = finalY_screen;
                 renderData.screenW = finalW_screen;
@@ -2535,17 +2551,17 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
             if (shouldApplySlide) {
                 slideProgress = (slideProgress < 0.0f) ? 0.0f : (slideProgress > 1.0f ? 1.0f : slideProgress);
 
-                int mirrorCenterX = finalX_screen + finalW_screen / 2;
+                int mirrorCenterX = slideAnchorX + slideAnchorW / 2;
                 bool isOnLeftSide = mirrorCenterX < (fullW / 2);
 
                 int offScreenLeft = -finalW_screen;
                 int offScreenRight = fullW;
 
                 if (isOnLeftSide) {
-                    int slideX = offScreenLeft + static_cast<int>((finalX_screen - offScreenLeft) * slideProgress);
+                    int slideX = offScreenLeft + static_cast<int>((slideAnchorX - offScreenLeft) * slideProgress);
                     finalX_screen = slideX;
                 } else {
-                    int slideX = offScreenRight - static_cast<int>((offScreenRight - finalX_screen) * slideProgress);
+                    int slideX = offScreenRight - static_cast<int>((offScreenRight - slideAnchorX) * slideProgress);
                     finalX_screen = slideX;
                 }
 

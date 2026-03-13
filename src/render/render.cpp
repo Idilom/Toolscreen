@@ -269,6 +269,10 @@ static GLsizeiptr g_vboCapacityBytes = 0;
 
 int g_sceneW = 0;
 int g_sceneH = 0;
+static GLuint g_sameThreadObsComposeFBO = 0;
+static GLuint g_sameThreadObsComposeTexture = 0;
+static int g_sameThreadObsComposeW = 0;
+static int g_sameThreadObsComposeH = 0;
 
 GLuint g_fullscreenQuadVAO = 0;
 GLuint g_fullscreenQuadVBO = 0;
@@ -1345,6 +1349,11 @@ void CleanupGPUResources() {
             while (glGetError() != GL_NO_ERROR) {}
             g_sceneFBO = 0;
         }
+        if (g_sameThreadObsComposeFBO) {
+            glDeleteFramebuffers(1, &g_sameThreadObsComposeFBO);
+            while (glGetError() != GL_NO_ERROR) {}
+            g_sameThreadObsComposeFBO = 0;
+        }
     } catch (...) { Log("CleanupGPUResources: Exception during FBO cleanup"); }
 
     try {
@@ -1381,6 +1390,11 @@ void CleanupGPUResources() {
             glDeleteTextures(1, &g_sceneTexture);
             while (glGetError() != GL_NO_ERROR) {}
             g_sceneTexture = 0;
+        }
+        if (g_sameThreadObsComposeTexture) {
+            glDeleteTextures(1, &g_sameThreadObsComposeTexture);
+            while (glGetError() != GL_NO_ERROR) {}
+            g_sameThreadObsComposeTexture = 0;
         }
 
         DiscardAllGPUImages();
@@ -2380,10 +2394,13 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             int finalYScreen = 0;
             int finalWScreen = renderData.outW;
             int finalHScreen = renderData.outH;
+            int slideAnchorX = 0;
+            int slideAnchorW = renderData.outW;
 
             if (isScreenRelative) {
                 GetRelativeCoords(anchor, conf.output.x, conf.output.y, renderData.outW, renderData.outH, fullW, fullH, finalXScreen,
                                   finalYScreen);
+                slideAnchorX = finalXScreen;
             } else {
                 const int toSizeW = relativeStretching ? static_cast<int>(renderData.outW * toScaleX) : renderData.outW;
                 const int toSizeH = relativeStretching ? static_cast<int>(renderData.outH * toScaleY) : renderData.outH;
@@ -2411,6 +2428,18 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
                     finalWScreen = static_cast<int>(fromSizeW + (toSizeW - fromSizeW) * t);
                     finalHScreen = static_cast<int>(fromSizeH + (toSizeH - fromSizeH) * t);
                 }
+
+                slideAnchorX = finalXScreen;
+                slideAnchorW = finalWScreen;
+                if (wantsTransitionSlide) {
+                    if (fromSlideMirrorsIn && isSlideOutPass) {
+                        slideAnchorX = fromPosX;
+                        slideAnchorW = relativeStretching ? fromSizeW : renderData.outW;
+                    } else if (toSlideMirrorsIn && !isSlideOutPass) {
+                        slideAnchorX = toPosX;
+                        slideAnchorW = relativeStretching ? toSizeW : renderData.outW;
+                    }
+                }
             }
 
             bool shouldApplySlide = false;
@@ -2430,14 +2459,14 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
                     slideProgress = 1.0f - mirrorSlideProgress;
                 }
             }
-            if (shouldApplySlide && sourceMirrorNames.count(conf.name) > 0) { shouldApplySlide = false; }
+            if (shouldApplySlide && !isSlideOutPass && sourceMirrorNames.count(conf.name) > 0) { shouldApplySlide = false; }
             if (shouldApplySlide) {
                 slideProgress = (std::max)(0.0f, (std::min)(1.0f, slideProgress));
-                bool isOnLeftSide = (finalXScreen + finalWScreen / 2) < (fullW / 2);
+                bool isOnLeftSide = (slideAnchorX + slideAnchorW / 2) < (fullW / 2);
                 if (isOnLeftSide) {
-                    finalXScreen = -finalWScreen + static_cast<int>((finalXScreen + finalWScreen) * slideProgress);
+                    finalXScreen = -finalWScreen + static_cast<int>((slideAnchorX + finalWScreen) * slideProgress);
                 } else {
-                    finalXScreen = fullW - static_cast<int>((fullW - finalXScreen) * slideProgress);
+                    finalXScreen = fullW - static_cast<int>((fullW - slideAnchorX) * slideProgress);
                 }
             }
 
@@ -3091,8 +3120,6 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             s_cachedSameThreadCaptureHasEyeZoomSlideOut != hasEyeZoomSlideOutMirrors ||
             s_cachedSameThreadCaptureHasTransitionSlideOut != hasTransitionSlideOutMirrors) {
             std::vector<MirrorConfig> mirrorsForCapture = activeMirrors;
-            AppendUniqueMirrorsByName(mirrorsForCapture, *eyeZoomSlideOutMirrors);
-            AppendUniqueMirrorsByName(mirrorsForCapture, *transitionSlideOutMirrors);
             BuildThreadedMirrorConfigs(mirrorsForCapture, s_cachedSameThreadCaptureConfigs);
 
             s_cachedSameThreadCaptureConfigVersion = cfgVersion;
@@ -3169,6 +3196,339 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
            request.showTextureGrid || request.showEyeZoom || request.showWelcomeToast;
 }
 
+static void EnsureSameThreadObsComposeTarget(int fullW, int fullH) {
+    if (fullW <= 0 || fullH <= 0) { return; }
+
+    if (g_sameThreadObsComposeFBO == 0) { glGenFramebuffers(1, &g_sameThreadObsComposeFBO); }
+
+    if (g_sameThreadObsComposeTexture != 0 && g_sameThreadObsComposeW == fullW && g_sameThreadObsComposeH == fullH) { return; }
+
+    if (g_sameThreadObsComposeTexture != 0) {
+        glDeleteTextures(1, &g_sameThreadObsComposeTexture);
+        g_sameThreadObsComposeTexture = 0;
+    }
+
+    glGenTextures(1, &g_sameThreadObsComposeTexture);
+    BindTextureDirect(GL_TEXTURE_2D, g_sameThreadObsComposeTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, fullW, fullH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, g_sameThreadObsComposeFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_sameThreadObsComposeTexture, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    BindTextureDirect(GL_TEXTURE_2D, 0);
+
+    g_sameThreadObsComposeW = fullW;
+    g_sameThreadObsComposeH = fullH;
+}
+
+static GLuint ResolveModeBackgroundTextureId(const std::string& modeId) {
+    std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
+    auto bgTexIt = g_backgroundTextures.find(modeId);
+    if (bgTexIt == g_backgroundTextures.end()) { return 0; }
+
+    BackgroundTextureInstance& bgInst = bgTexIt->second;
+    if (bgInst.isAnimated && !bgInst.frameTextures.empty()) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - bgInst.lastFrameTime).count();
+        int delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
+        if (delay < 10) delay = 100;
+        while (elapsed >= delay) {
+            elapsed -= delay;
+            bgInst.currentFrame = (bgInst.currentFrame + 1) % bgInst.frameTextures.size();
+            delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
+            if (delay < 10) delay = 100;
+        }
+        bgInst.textureId = bgInst.frameTextures[bgInst.currentFrame];
+        bgInst.lastFrameTime = now - std::chrono::milliseconds(elapsed);
+    }
+
+    return bgInst.textureId;
+}
+
+static void DrawFullscreenSolidColor(const Color& color) {
+    glUseProgram(g_solidColorProgram);
+    glUniform4f(g_solidColorShaderLocs.color, color.r, color.g, color.b, color.a);
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glDisable(GL_BLEND);
+
+    const float quad[] = {
+        -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f,
+        -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, -1.0f, 1.0f, 0.0f, 0.0f,
+    };
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quad), quad);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+static void DrawFullscreenGradient(const BackgroundConfig& bg) {
+    if (bg.gradientStops.size() < 2) {
+        DrawFullscreenSolidColor(bg.color);
+        return;
+    }
+
+    glUseProgram(g_gradientProgram);
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glDisable(GL_BLEND);
+
+    const int numStops = (std::min)(static_cast<int>(bg.gradientStops.size()), MAX_GRADIENT_STOPS);
+    glUniform1i(g_gradientShaderLocs.numStops, numStops);
+
+    float colors[MAX_GRADIENT_STOPS * 4];
+    float positions[MAX_GRADIENT_STOPS];
+    for (int i = 0; i < numStops; ++i) {
+        colors[i * 4 + 0] = bg.gradientStops[i].color.r;
+        colors[i * 4 + 1] = bg.gradientStops[i].color.g;
+        colors[i * 4 + 2] = bg.gradientStops[i].color.b;
+        colors[i * 4 + 3] = bg.gradientStops[i].color.a;
+        positions[i] = bg.gradientStops[i].position;
+    }
+
+    glUniform4fv(g_gradientShaderLocs.stopColors, numStops, colors);
+    glUniform1fv(g_gradientShaderLocs.stopPositions, numStops, positions);
+    glUniform1f(g_gradientShaderLocs.angle, bg.gradientAngle * 3.14159265f / 180.0f);
+
+    static auto startTime = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    const float timeSeconds = std::chrono::duration<float>(now - startTime).count();
+    glUniform1f(g_gradientShaderLocs.time, timeSeconds);
+    glUniform1i(g_gradientShaderLocs.animationType, static_cast<int>(bg.gradientAnimation));
+    glUniform1f(g_gradientShaderLocs.animationSpeed, bg.gradientAnimationSpeed);
+    glUniform1i(g_gradientShaderLocs.colorFade, bg.gradientColorFade ? 1 : 0);
+
+    const float quad[] = {
+        -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f,
+    };
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quad), quad);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+static void RenderSameThreadObsBackground(const ModeConfig* modeToRender, int fullW, int fullH) {
+    if (!modeToRender || fullW <= 0 || fullH <= 0) { return; }
+
+    const BackgroundConfig& bg = modeToRender->background;
+    if (bg.selectedMode == "image") {
+        const GLuint backgroundTexture = ResolveModeBackgroundTextureId(modeToRender->id);
+        if (backgroundTexture != 0) {
+            const float sourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
+            DrawPassthroughTextureRegion(backgroundTexture, sourceRect, 0, 0, fullW, fullH, fullW, fullH, 1.0f);
+            return;
+        }
+    }
+
+    if (bg.selectedMode == "gradient") {
+        DrawFullscreenGradient(bg);
+        return;
+    }
+
+    DrawFullscreenSolidColor(bg.color);
+}
+
+static void RenderSameThreadObsBackgroundConfig(const BackgroundConfig& bg, GLuint backgroundTexture, int fullW, int fullH) {
+    if (fullW <= 0 || fullH <= 0) { return; }
+
+    if (bg.selectedMode == "image" && backgroundTexture != 0) {
+        const float sourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
+        DrawPassthroughTextureRegion(backgroundTexture, sourceRect, 0, 0, fullW, fullH, fullW, fullH, 1.0f);
+        return;
+    }
+
+    if (bg.selectedMode == "gradient") {
+        DrawFullscreenGradient(bg);
+        return;
+    }
+
+    DrawFullscreenSolidColor(bg.color);
+}
+
+bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH, bool skipAnimation) {
+    if (!modeToRender) { return false; }
+
+    const int fullW = GetCachedWindowWidth();
+    const int fullH = GetCachedWindowHeight();
+    if (fullW <= 0 || fullH <= 0) { return false; }
+
+    EnsureSameThreadObsComposeTarget(fullW, fullH);
+    if (g_sameThreadObsComposeFBO == 0 || g_sameThreadObsComposeTexture == 0) { return false; }
+
+    ModeTransitionState transitionState = GetModeTransitionState();
+    const bool transitionEffectivelyComplete = transitionState.active && transitionState.width == transitionState.targetWidth &&
+                                               transitionState.height == transitionState.targetHeight &&
+                                               transitionState.x == transitionState.targetX && transitionState.y == transitionState.targetY;
+    const bool isAnimating = transitionState.active && !skipAnimation && !transitionEffectivelyComplete;
+    const std::string fromModeId = transitionState.fromModeId;
+    const bool transitioningToFullscreen = isAnimating && EqualsIgnoreCase(modeToRender->id, "Fullscreen");
+
+    int modeWidth = modeToRender->width;
+    int modeHeight = modeToRender->height;
+    int modeX = 0;
+    int modeY = 0;
+    if (isAnimating) {
+        modeWidth = transitionState.width;
+        modeHeight = transitionState.height;
+        modeX = transitionState.x;
+        modeY = transitionState.y;
+    }
+
+    int finalX = 0;
+    int finalY = 0;
+    int finalW = 0;
+    int finalH = 0;
+    if (isAnimating) {
+        finalX = modeX;
+        finalY = modeY;
+        finalW = modeWidth;
+        finalH = modeHeight;
+    } else if (modeToRender->stretch.enabled) {
+        finalX = modeToRender->stretch.x;
+        finalY = modeToRender->stretch.y;
+        finalW = modeToRender->stretch.width;
+        finalH = modeToRender->stretch.height;
+    } else {
+        finalW = modeWidth;
+        finalH = modeHeight;
+        finalX = (fullW - finalW) / 2;
+        finalY = (fullH - finalH) / 2;
+    }
+
+    GLuint gameTextureToUse = 0;
+    int gameTextureW = 0;
+    int gameTextureH = 0;
+    if (!SelectSameThreadGameTexture(g_cachedGameTextureId.load(std::memory_order_acquire), current_gameW, current_gameH,
+                                     gameTextureToUse, gameTextureW, gameTextureH)) {
+        return false;
+    }
+
+    GLState obsState = s;
+    obsState.fb = g_sameThreadObsComposeFBO;
+    obsState.read_fb = g_sameThreadObsComposeFBO;
+    obsState.draw_fb = g_sameThreadObsComposeFBO;
+    obsState.draw_buffer = GL_COLOR_ATTACHMENT0;
+    obsState.read_buffer = GL_COLOR_ATTACHMENT0;
+
+    PrepareSameThreadOverlayState(obsState, fullW, fullH);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_sameThreadObsComposeFBO);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    bool useFromBackground = false;
+    BackgroundConfig fromBackground;
+    BorderConfig fromBorder;
+    if (isAnimating && !fromModeId.empty()) {
+        if (const ModeConfig* fromMode = GetMode_Internal(fromModeId)) {
+            fromBackground = fromMode->background;
+            fromBorder = fromMode->border;
+            const bool fromHasSpecialBackground =
+                (fromBackground.selectedMode == "gradient" || fromBackground.selectedMode == "image");
+            useFromBackground = transitioningToFullscreen || fromHasSpecialBackground;
+        }
+    }
+
+    if (useFromBackground) {
+        RenderSameThreadObsBackgroundConfig(fromBackground, ResolveModeBackgroundTextureId(fromModeId), fullW, fullH);
+    } else {
+        RenderSameThreadObsBackground(modeToRender, fullW, fullH);
+    }
+    PrepareSameThreadOverlayState(obsState, fullW, fullH);
+
+    const float sourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
+    const int dstBottom = fullH - finalY - finalH;
+    DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, finalX, dstBottom, finalX + finalW, dstBottom + finalH, fullW, fullH,
+                                 1.0f);
+
+    if (transitioningToFullscreen && fromBorder.enabled && fromBorder.width > 0) {
+        RenderGameBorder(finalX, finalY, finalW, finalH, fromBorder.width, fromBorder.radius, fromBorder.color, fullW, fullH);
+    } else if (modeToRender->border.enabled && modeToRender->border.width > 0) {
+        RenderGameBorder(finalX, finalY, finalW, finalH, modeToRender->border.width, modeToRender->border.radius,
+                         modeToRender->border.color, fullW, fullH);
+    }
+
+    if (auto cfgSnap = GetConfigSnapshot()) {
+        SameThreadOverlayState request;
+        request.fullW = fullW;
+        request.fullH = fullH;
+        request.gameW = current_gameW;
+        request.gameH = current_gameH;
+        request.finalX = finalX;
+        request.finalY = finalY;
+        request.finalW = finalW;
+        request.finalH = finalH;
+        request.gameTextureId = gameTextureToUse;
+        request.modeId = modeToRender->id;
+        request.isAnimating = isAnimating;
+        request.overlayOpacity = 1.0f;
+        request.excludeOnlyOnMyScreen = false;
+        request.skipAnimation = skipAnimation;
+        request.relativeStretching = modeToRender->relativeStretching;
+
+        const bool transitionEffectivelyCompleteForOverlays = transitionState.active && transitionState.moveProgress >= 1.0f;
+        const bool overlaysShouldLerp = transitionState.active && !transitionEffectivelyCompleteForOverlays &&
+                                        transitionState.overlayTransition != OverlayTransitionType::Cut;
+        if (overlaysShouldLerp) {
+            request.transitionProgress = transitionState.moveProgress;
+            request.fromW = transitionState.fromWidth;
+            request.fromH = transitionState.fromHeight;
+            request.fromX = transitionState.fromX;
+            request.fromY = transitionState.fromY;
+            request.toW = transitionState.targetWidth;
+            request.toH = transitionState.targetHeight;
+            request.toX = transitionState.targetX;
+            request.toY = transitionState.targetY;
+        } else {
+            request.transitionProgress = 1.0f;
+            request.fromX = finalX;
+            request.fromY = finalY;
+            request.fromW = finalW;
+            request.fromH = finalH;
+            request.toX = finalX;
+            request.toY = finalY;
+            request.toW = finalW;
+            request.toH = finalH;
+        }
+
+        request.isTransitioningFromEyeZoom = g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
+        request.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
+        request.showPerformanceOverlay = false;
+        request.showProfiler = false;
+        request.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed);
+        request.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
+        request.eyeZoomAnimatedViewportX = skipAnimation ? -1 : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
+        request.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
+        request.eyeZoomSnapshotWidth = GetEyeZoomSnapshotWidth();
+        request.eyeZoomSnapshotHeight = GetEyeZoomSnapshotHeight();
+        request.showTextureGrid = false;
+        request.textureGridModeWidth = 0;
+        request.textureGridModeHeight = 0;
+        request.showWelcomeToast = false;
+        request.welcomeToastIsFullscreen = false;
+        request.modeHasMirrors = !modeToRender->mirrorIds.empty() || !modeToRender->mirrorGroupIds.empty();
+        request.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty();
+        request.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
+                                        !modeToRender->windowOverlayIds.empty();
+        request.isRawWindowedMode = false;
+        request.fromModeId = transitionState.fromModeId;
+        if (!transitionState.fromModeId.empty()) {
+            if (const ModeConfig* fromMode = GetMode_Internal(transitionState.fromModeId)) {
+                request.fromSlideMirrorsIn = fromMode->slideMirrorsIn;
+            }
+        }
+        request.toSlideMirrorsIn = modeToRender->slideMirrorsIn;
+        request.mirrorSlideProgress =
+            (transitionState.active && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
+
+        RenderSameThreadOverlayPass(request, *cfgSnap, obsState);
+    }
+
+    SetObsOverrideTexture(g_sameThreadObsComposeTexture, fullW, fullH);
+    PrepareSameThreadOverlayState(s, fullW, fullH);
+    return true;
+}
+
 void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fullW, int fullH, float opacity,
                        int animatedViewportX, bool useSnapshot, GLuint preferredGameTexture, int preferredGameW,
                        int preferredGameH) {
@@ -3190,7 +3550,11 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         return;
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
+    if (s.fb == 0) {
+        glDrawBuffer(s.draw_buffer);
+        glReadBuffer(s.read_buffer);
+    }
     if (oglViewport)
         oglViewport(0, 0, fullW, fullH);
     else
@@ -3331,10 +3695,10 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             glDisable(GL_BLEND);
             glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
             glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_eyeZoomSnapshotTexture, 0);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s.fb);
             glBlitFramebuffer(0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight, dstLeft, dstBottom, dstRight, dstTop,
                               GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
             ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
         }
     } else {
@@ -3354,10 +3718,10 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             glDisable(GL_BLEND);
             glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
             glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTextureToUse, 0);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s.fb);
             glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, dstLeft, dstBottom, dstRight, dstTop,
                               GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
             ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
         }
 
@@ -3367,7 +3731,7 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
         glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight,
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
         s_eyeZoomSnapshotValid = true;
     }
 
@@ -3884,8 +4248,6 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     }
 
     const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
-    const bool sameThreadDedicatedObsTexture =
-        sameThreadRenderPipeline && g_config.debug.sameThreadDedicatedObsTexture && g_graphicsHookDetected.load(std::memory_order_acquire);
     g_sameThreadMirrorPipelineActive.store(sameThreadRenderPipeline, std::memory_order_release);
     if (!UpdateMirrorAsyncResourceMode(nullptr, sameThreadRenderPipeline)) {
         glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
@@ -3899,7 +4261,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         if (g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
             StopMirrorCaptureThread();
         }
-        if (!sameThreadDedicatedObsTexture && g_renderThreadRunning.load(std::memory_order_acquire)) {
+        if (g_renderThreadRunning.load(std::memory_order_acquire)) {
             StopRenderThread();
         }
     }
@@ -3924,12 +4286,12 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
         if (!useFramebufferFallback && g_graphicsHookDetected.load()) { StartObsHookThread(); }
 
-        const bool renderThreadNeeded = !sameThreadRenderPipeline || sameThreadDedicatedObsTexture;
+        const bool renderThreadNeeded = !sameThreadRenderPipeline;
 
         // Auto-start render thread when the async screen path or OBS/virtual-camera path needs it.
         if (renderThreadNeeded && !g_renderThreadRunning.load()) {
             HGLRC gameContext = wglGetCurrentContext();
-            if (gameContext) { StartRenderThread(gameContext, sameThreadDedicatedObsTexture); }
+            if (gameContext) { StartRenderThread(gameContext); }
         }
 
         // NOTE: Mirror capture config updates are now handled by logic_thread (UpdateActiveMirrorConfigs)

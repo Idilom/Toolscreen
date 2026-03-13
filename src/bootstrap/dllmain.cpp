@@ -249,6 +249,10 @@ std::chrono::steady_clock::time_point g_lastGraphicsHookCheck = std::chrono::ste
 extern const int GRAPHICS_HOOK_CHECK_INTERVAL_MS = 2000;
 
 std::atomic<bool> g_obsCaptureReady{ false };
+static GLuint g_sameThreadObsCaptureFBO = 0;
+static GLuint g_sameThreadObsCaptureTexture = 0;
+static int g_sameThreadObsCaptureWidth = 0;
+static int g_sameThreadObsCaptureHeight = 0;
 
 void LoadConfig();
 void SaveConfig();
@@ -262,6 +266,58 @@ void InvalidateTrackedGameTextureId(bool clearSwapThread) {
         g_lastSwapBuffersThreadId.store(0, std::memory_order_release);
     }
 }
+
+void CaptureBackbufferForObs(int width, int height) {
+    PROFILE_SCOPE_CAT("Capture Backbuffer for OBS", "OBS");
+
+    if (width <= 0 || height <= 0) {
+        ClearObsOverride();
+        return;
+    }
+
+    if (g_sameThreadObsCaptureFBO == 0 || width != g_sameThreadObsCaptureWidth || height != g_sameThreadObsCaptureHeight) {
+        if (g_sameThreadObsCaptureTexture != 0) {
+            glDeleteTextures(1, &g_sameThreadObsCaptureTexture);
+            g_sameThreadObsCaptureTexture = 0;
+        }
+        if (g_sameThreadObsCaptureFBO == 0) { glGenFramebuffers(1, &g_sameThreadObsCaptureFBO); }
+
+        glGenTextures(1, &g_sameThreadObsCaptureTexture);
+        BindTextureDirect(GL_TEXTURE_2D, g_sameThreadObsCaptureTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, g_sameThreadObsCaptureFBO);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_sameThreadObsCaptureTexture, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        BindTextureDirect(GL_TEXTURE_2D, 0);
+
+        g_sameThreadObsCaptureWidth = width;
+        g_sameThreadObsCaptureHeight = height;
+    }
+
+    GLint prevReadFBO = 0;
+    GLint prevDrawFBO = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_sameThreadObsCaptureFBO);
+    ObsBlitFramebufferDirect(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
+
+    SetObsOverrideTexture(g_sameThreadObsCaptureTexture, width, height);
+}
+
+GLuint GetObsCaptureTexture() { return g_sameThreadObsCaptureTexture; }
+
+int GetObsCaptureWidth() { return g_sameThreadObsCaptureWidth; }
+
+int GetObsCaptureHeight() { return g_sameThreadObsCaptureHeight; }
 
 
 bool SubclassGameWindow(HWND hwnd) {
@@ -1543,10 +1599,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     const bool needCaptureForObsOrVc = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
                     const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
                     const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
-                    const bool sameThreadDedicatedObsTexture =
-                        sameThreadRenderPipeline && g_config.debug.sameThreadDedicatedObsTexture &&
-                        g_graphicsHookDetected.load(std::memory_order_acquire);
-                    const bool renderThreadNeeded = !sameThreadRenderPipeline || sameThreadDedicatedObsTexture;
+                    const bool renderThreadNeeded = !sameThreadRenderPipeline;
                     const bool mirrorThreadNeeded = needCapture && !sameThreadRenderPipeline;
 
                     if (!renderThreadNeeded && g_renderThreadRunning.load(std::memory_order_acquire)) {
@@ -1556,9 +1609,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                         StopMirrorCaptureThread();
                     }
 
-                    if (renderThreadNeeded && !g_renderThreadRunning.load(std::memory_order_acquire)) {
-                        StartRenderThread(currentContext, sameThreadDedicatedObsTexture);
-                    }
+                    if (renderThreadNeeded && !g_renderThreadRunning.load(std::memory_order_acquire)) { StartRenderThread(currentContext); }
                     if (mirrorThreadNeeded && !g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
                         StartMirrorCaptureThread(currentContext);
                     }
@@ -1717,7 +1768,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             g_obsPre113Windowed.store(false, std::memory_order_release);
         }
 
-        if (g_graphicsHookDetected.load()) {
+        const bool shouldUseObsOverride =
+            g_graphicsHookDetected.load(std::memory_order_acquire) &&
+            (!frameCfg.debug.sameThreadRenderPipeline || frameCfg.debug.sameThreadDedicatedObsTexture);
+        if (shouldUseObsOverride) {
             EnableObsOverride();
         } else {
             ClearObsOverride();
@@ -1957,14 +2011,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
 
         bool hideAnimOnScreen = frameCfg.hideAnimationsInGame && IsModeTransitionActive();
-        const bool sameThreadDedicatedObsTexture = frameCfg.debug.sameThreadRenderPipeline && frameCfg.debug.sameThreadDedicatedObsTexture &&
-                                                   g_graphicsHookDetected.load(std::memory_order_acquire);
-
         {
             PROFILE_SCOPE_CAT("Normal Mode Handling", "Rendering");
 
-            const bool useRenderThreadDualRendering =
-                (!frameCfg.debug.sameThreadRenderPipeline && needsDualRendering) || sameThreadDedicatedObsTexture;
+            const bool useRenderThreadDualRendering = !frameCfg.debug.sameThreadRenderPipeline && needsDualRendering;
             if (useRenderThreadDualRendering) {
                 // Submit animated frame to render thread for OBS capture using helper function
                 {
@@ -1972,7 +2022,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
                     if (!g_renderThreadRunning.load(std::memory_order_acquire)) {
                         HGLRC gameContext = wglGetCurrentContext();
-                        if (gameContext) { StartRenderThread(gameContext, sameThreadDedicatedObsTexture); }
+                        if (gameContext) { StartRenderThread(gameContext); }
                     }
 
                     // Build lightweight context struct (no lock-free reads needed here - values already captured)
@@ -1987,7 +2037,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     submission.context.bgR = modeToRenderCopy.background.color.r;
                     submission.context.bgG = modeToRenderCopy.background.color.g;
                     submission.context.bgB = modeToRenderCopy.background.color.b;
-                    submission.context.shouldRenderGui = sameThreadDedicatedObsTexture ? false : shouldRenderGui;
+                    submission.context.shouldRenderGui = shouldRenderGui;
                     submission.context.showPerformanceOverlay = showPerformanceOverlay;
                     submission.context.showProfiler = showProfiler;
                     submission.context.isEyeZoom = isEyeZoom;
@@ -2001,7 +2051,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     submission.context.isRawWindowedMode = false;
                     submission.context.windowW = windowWidth;
                     submission.context.windowH = windowHeight;
-                    submission.context.preferDirectGameTexture = sameThreadDedicatedObsTexture;
+                    submission.context.preferDirectGameTexture = false;
                     submission.context.welcomeToastIsFullscreen = EqualsIgnoreCase(modeToRenderCopy.id, "Fullscreen");
                     submission.context.showWelcomeToast = false;
                     submission.isDualRenderingPath = hideAnimOnScreen;
@@ -2035,10 +2085,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             }
         }
 
-        if (frameCfg.debug.sameThreadRenderPipeline && g_graphicsHookDetected.load(std::memory_order_acquire) &&
-            !frameCfg.debug.sameThreadDedicatedObsTexture) {
+        if (frameCfg.debug.sameThreadRenderPipeline && frameCfg.debug.sameThreadDedicatedObsTexture &&
+            g_graphicsHookDetected.load(std::memory_order_acquire)) {
             PROFILE_SCOPE_CAT("Capture Same-Thread OBS Frame", "OBS");
-            CaptureBackbufferForObs(fullW, fullH);
+            RenderSameThreadObsFrame(&modeToRenderCopy, s, current_gameW, current_gameH, false);
         }
 
         {
