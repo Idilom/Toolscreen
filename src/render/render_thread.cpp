@@ -12,7 +12,7 @@
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
 #include "features/ninjabrainClient.h"
-#include "features/minecraft_font.h"
+#include "platform/resource.h"
 #include <Shlwapi.h>
 #include <unordered_map>
 #include <set>
@@ -431,12 +431,26 @@ static ImFont* RT_AddNBFont(ImFontAtlas* atlas, const std::string& customPath, f
         }
     }
     {
-        void* buf = IM_ALLOC(g_minecraftFont_ttf_len);
+        HMODULE hModule = NULL;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)&RT_AddNBFont, &hModule);
+        if (hModule) {
+            HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_MINECRAFT_FONT), RT_RCDATA);
+            if (hResource) {
+                HGLOBAL hData = LoadResource(hModule, hResource);
+                DWORD dataSize = hData ? SizeofResource(hModule, hResource) : 0;
+                const void* rawData = hData ? LockResource(hData) : nullptr;
+                if (rawData && dataSize > 0) {
+                    void* buf = IM_ALLOC(dataSize);
         if (buf) {
-            memcpy(buf, g_minecraftFont_ttf, g_minecraftFont_ttf_len);
+                        memcpy(buf, rawData, dataSize);
             fontCfg.FontDataOwnedByAtlas = true;
-            ImFont* f = atlas->AddFontFromMemoryTTF(buf, (int)g_minecraftFont_ttf_len, sizePixels, &fontCfg);
+                        ImFont* f = atlas->AddFontFromMemoryTTF(buf, (int)dataSize, sizePixels, &fontCfg);
             if (f) return f;
+                        IM_FREE(buf);
+                    }
+                }
+            }
         }
     }
     const std::string& arial = ConfigDefaults::CONFIG_FONT_PATH;
