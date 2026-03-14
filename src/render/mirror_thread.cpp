@@ -2223,7 +2223,16 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
             PROFILE_SCOPE_CAT("Finalize Mirror Capture", "Rendering");
             if (needsContentDetection) {
                 MT_ReleaseContentDetectionResources(fb);
-                inst->hasFrameContent = MT_DetectContentSynchronously(inst, fb.backFbo, inst->fbo_w, inst->fbo_h);
+                GLuint contentSourceFbo = fb.backFbo;
+                int contentSourceW = inst->fbo_w;
+                int contentSourceH = inst->fbo_h;
+                if (MT_CanRenderMirrorDirectToFinal(conf, conf.rawOutput, false) && fb.finalBackFbo != 0 && inst->final_w > 0 &&
+                    inst->final_h > 0) {
+                    contentSourceFbo = fb.finalBackFbo;
+                    contentSourceW = inst->final_w;
+                    contentSourceH = inst->final_h;
+                }
+                inst->hasFrameContent = MT_DetectContentSynchronously(inst, contentSourceFbo, contentSourceW, contentSourceH);
             }
             ComputeMirrorRenderCache(inst, conf, gameW, gameH, screenW, screenH, finalX, finalY, finalW, finalH, false);
             inst->capturedAsRawOutput = conf.rawOutput;
