@@ -463,6 +463,7 @@ struct Config {
     float mouseSensitivity = 1.0f;
     int windowsMouseSpeed = 0;                              // Windows mouse speed override (0 = disabled, 1-20 = override)
     bool hideAnimationsInGame = false;
+    bool limitCaptureFramerate = ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE;
     int obsFramerate = ConfigDefaults::CONFIG_OBS_FRAMERATE;
     KeyRebindsConfig keyRebinds;
     AppearanceConfig appearance;

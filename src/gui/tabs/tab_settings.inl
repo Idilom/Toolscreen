@@ -23,6 +23,9 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
     if (ImGui::Checkbox(trc("settings.hide_animations_in_game"), &g_config.hideAnimationsInGame)) { g_configIsDirty = true; }
     ImGui::SameLine();
     HelpMarker(trc("tooltip.hide_animations_in_game"));
+    if (ImGui::Checkbox(trc("settings.limit_capture_framerate"), &g_config.limitCaptureFramerate)) { g_configIsDirty = true; }
+    ImGui::SameLine();
+    HelpMarker(trc("settings.tooltip.limit_capture_framerate"));
 
     ImGui::Spacing();
     ImGui::SeparatorText(trc("hotkeys.window_hotkeys"));

@@ -53,6 +53,7 @@ static constexpr int OBS_TARGET_DEFAULT_FPS = 60;
 static constexpr int OBS_TARGET_MIN_FPS = 15;
 static constexpr int OBS_TARGET_MAX_FPS = 360;
 static constexpr int OBS_TARGET_HEADROOM_FPS = 1;
+static constexpr int OBS_LIMITED_TARGET_MIN_FPS = 60;
 static constexpr uint64_t OBS_TARGET_MIN_INTERVAL_US = 1000;
 static constexpr uint64_t OBS_TARGET_STALE_TIMEOUT_US = 2ull * 1000ull * 1000ull;
 
@@ -69,6 +70,12 @@ static int ClampObsTargetFramerateValue(int value) {
 
 static int RoundUpToNearestFive(int value) {
     return ((value + 4) / 5) * 5;
+}
+
+static bool ShouldLimitObsCaptureFramerate() {
+    auto cfgSnapshot = GetConfigSnapshot();
+    if (!cfgSnapshot) { return ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE; }
+    return cfgSnapshot->limitCaptureFramerate;
 }
 
 static uint64_t BlendObsGameCaptureIntervalUs(uint64_t currentUs, uint64_t newUs) {
@@ -104,6 +111,13 @@ static int CalculateObsTargetFramerate(uint64_t intervalUs) {
     const double sampledFps = 1000000.0 / static_cast<double>(intervalUs);
     const int fpsWithHeadroom = static_cast<int>(std::ceil(sampledFps + static_cast<double>(OBS_TARGET_HEADROOM_FPS)));
     return ClampObsTargetFramerateValue(RoundUpToNearestFive(fpsWithHeadroom));
+}
+
+static int ApplyObsCaptureFramerateLimit(int targetFramerate) {
+    if (!ShouldLimitObsCaptureFramerate()) { return targetFramerate; }
+
+    const int halvedFramerate = RoundUpToNearestFive(static_cast<int>(std::ceil(static_cast<double>(targetFramerate) * 0.5)));
+    return ClampObsTargetFramerateValue((std::max)(OBS_LIMITED_TARGET_MIN_FPS, halvedFramerate));
 }
 
 static bool IsObsRedirectAttachmentValidated(GLuint texture, int width, int height) {
@@ -150,12 +164,14 @@ bool ShouldUpdateObsTextureNow() {
 int GetObsTargetFramerate() {
     const uint64_t lastSampleUs = g_obsLastGameCaptureSampleTickUs.load(std::memory_order_acquire);
     const uint64_t smoothedIntervalUs = g_obsSmoothedGameCaptureIntervalUs.load(std::memory_order_acquire);
-    if (lastSampleUs == 0 || smoothedIntervalUs == 0) { return OBS_TARGET_DEFAULT_FPS; }
+    if (lastSampleUs == 0 || smoothedIntervalUs == 0) { return ApplyObsCaptureFramerateLimit(OBS_TARGET_DEFAULT_FPS); }
 
     const uint64_t nowUs = GetObsSteadyNowUs();
-    if (nowUs > lastSampleUs && (nowUs - lastSampleUs) >= OBS_TARGET_STALE_TIMEOUT_US) { return OBS_TARGET_DEFAULT_FPS; }
+    if (nowUs > lastSampleUs && (nowUs - lastSampleUs) >= OBS_TARGET_STALE_TIMEOUT_US) {
+        return ApplyObsCaptureFramerateLimit(OBS_TARGET_DEFAULT_FPS);
+    }
 
-    return CalculateObsTargetFramerate(smoothedIntervalUs);
+    return ApplyObsCaptureFramerateLimit(CalculateObsTargetFramerate(smoothedIntervalUs));
 }
 
 void ResetObsTextureUpdateSchedule() {

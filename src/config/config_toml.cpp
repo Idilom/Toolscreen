@@ -1561,6 +1561,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("mouseSensitivity", config.mouseSensitivity);
     out.insert("windowsMouseSpeed", config.windowsMouseSpeed);
     out.insert("hideAnimationsInGame", config.hideAnimationsInGame);
+    out.insert("limitCaptureFramerate", config.limitCaptureFramerate);
     out.insert("keyRepeatStartDelay", config.keyRepeatStartDelay);
     out.insert("keyRepeatDelay", config.keyRepeatDelay);
     out.insert("basicModeEnabled", config.basicModeEnabled);
@@ -1678,6 +1679,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.mouseSensitivity = GetOr(tbl, "mouseSensitivity", ConfigDefaults::CONFIG_MOUSE_SENSITIVITY);
     config.windowsMouseSpeed = GetOr(tbl, "windowsMouseSpeed", ConfigDefaults::CONFIG_WINDOWS_MOUSE_SPEED);
     config.hideAnimationsInGame = GetOr(tbl, "hideAnimationsInGame", ConfigDefaults::CONFIG_HIDE_ANIMATIONS_IN_GAME);
+    config.limitCaptureFramerate = GetOr(tbl, "limitCaptureFramerate", ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE);
     config.obsFramerate = ClampObsFramerateConfigValue(GetOr(tbl, "obsFramerate", ConfigDefaults::CONFIG_OBS_FRAMERATE));
     config.keyRepeatStartDelay = GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY);
     config.keyRepeatDelay = GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY);
@@ -1834,6 +1836,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                  "mouseSensitivity",
                                                  "windowsMouseSpeed",
                                                  "hideAnimationsInGame",
+                                                 "limitCaptureFramerate",
                                                  "keyRepeatStartDelay",
                                                  "keyRepeatDelay",
                                                  "basicModeEnabled",

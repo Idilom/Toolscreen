@@ -176,6 +176,7 @@ inline const std::string CONFIG_HOOK_CHAINING_NEXT_TARGET = "Original";
 constexpr float CONFIG_MOUSE_SENSITIVITY = 1.0f;
 constexpr int CONFIG_WINDOWS_MOUSE_SPEED = 0;
 constexpr bool CONFIG_HIDE_ANIMATIONS_IN_GAME = false;
+constexpr bool CONFIG_LIMIT_CAPTURE_FRAMERATE = true;
 constexpr int CONFIG_OBS_FRAMERATE = 60;
 constexpr int CONFIG_KEY_REPEAT_START_DELAY = 0;
 constexpr int CONFIG_KEY_REPEAT_DELAY = 0;
