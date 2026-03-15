@@ -297,7 +297,7 @@
     "label.about": "About",
     "label.action_cannot_be_undone": "This action cannot be undone.",
     "label.auto_borderless": "Auto-Borderless:",
-    "label.auto_layout_format": "Auto layout: X=%d  Y=%d  Width=%d  Height=%d",
+    "label.auto_layout_format": "Auto layout: X={}  Y={}  Width={}  Height={}",
     "label.cancel": "Cancel",
     "label.current": "(Current)",
     "label.custom": "Custom",

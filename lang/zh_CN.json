@@ -297,7 +297,7 @@
     "label.about": "关于",
     "label.action_cannot_be_undone": "此操作无法撤消。",
     "label.auto_borderless": "自动无边框：",
-    "label.auto_layout_format": "自动布局：X=%d  Y=%d  宽度=%d  高度=%d",
+    "label.auto_layout_format": "自动布局：X={}  Y={}  宽度={}  高度={}",
     "label.cancel": "取消",
     "label.current": "(当前)",
     "label.custom": "自定义",

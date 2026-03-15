@@ -614,8 +614,9 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     if (autoZoomAreaHeight < 1) autoZoomAreaHeight = 1;
 
                     int autoPosY = (monitorHeight - autoZoomAreaHeight) / 2;
-                    ImGui::TextDisabled(trc("label.auto_layout_format", autoHorizontalMargin, autoPosY, autoZoomAreaWidth,
-                                        autoZoomAreaHeight));
+                    const std::string autoLayoutText =
+                        tr("label.auto_layout_format", autoHorizontalMargin, autoPosY, autoZoomAreaWidth, autoZoomAreaHeight);
+                    ImGui::TextDisabled("%s", autoLayoutText.c_str());
                 }
 
                 ImGui::BeginDisabled(!g_config.eyezoom.useCustomSizePosition);
