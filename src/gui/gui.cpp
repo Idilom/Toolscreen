@@ -20,6 +20,7 @@
 #include "common/utils.h"
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
+#include "hooks/input_hook.h"
 
 #include <GL/glew.h>
 #include <ShlObj.h>

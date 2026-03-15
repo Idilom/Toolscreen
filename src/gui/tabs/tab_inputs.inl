@@ -245,6 +245,9 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
             ImGui::Spacing();
 
             if (ImGui::Checkbox(trc("inputs.enable_key_rebinding"), &g_config.keyRebinds.enabled)) {
+                if (!g_config.keyRebinds.enabled) {
+                    ReleaseActiveLowLevelRebindKeys(g_minecraftHwnd.load(std::memory_order_relaxed));
+                }
                 g_configIsDirty = true;
                 std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
                 RebuildHotkeyMainKeys_Internal();
@@ -1534,7 +1537,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                         eraseRebindIndex(maybeErase);
                                         if (s_layoutContextPreferredIndex == maybeErase) s_layoutContextPreferredIndex = -1;
                                     }
-                                } else if (capturedVk != VK_LWIN && capturedVk != VK_RWIN) {
+                                } else {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutBindIndex];
                                     if (s_layoutBindTarget == LayoutBindTarget::TypesVk) {
                                         r.useCustomOutput = true;
@@ -1947,19 +1950,16 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             s_rebindFromKeyToBind = -1;
                             ImGui::CloseCurrentPopup();
                         } else {
-                            // Only disallow Windows keys.
-                            if (capturedVk != VK_LWIN && capturedVk != VK_RWIN) {
-                                if (s_rebindFromKeyToBind != -1 && s_rebindFromKeyToBind < (int)g_config.keyRebinds.rebinds.size()) {
-                                    g_config.keyRebinds.rebinds[s_rebindFromKeyToBind].fromKey = capturedVk;
-                                    g_configIsDirty = true;
-                                    std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
-                                    RebuildHotkeyMainKeys_Internal();
-                                    (void)capturedLParam;
-                                    (void)capturedIsMouse;
-                                }
-                                s_rebindFromKeyToBind = -1;
-                                ImGui::CloseCurrentPopup();
+                            if (s_rebindFromKeyToBind != -1 && s_rebindFromKeyToBind < (int)g_config.keyRebinds.rebinds.size()) {
+                                g_config.keyRebinds.rebinds[s_rebindFromKeyToBind].fromKey = capturedVk;
+                                g_configIsDirty = true;
+                                std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
+                                RebuildHotkeyMainKeys_Internal();
+                                (void)capturedLParam;
+                                (void)capturedIsMouse;
                             }
+                            s_rebindFromKeyToBind = -1;
+                            ImGui::CloseCurrentPopup();
                         }
                     }
 
@@ -1986,18 +1986,16 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             s_rebindOutputVKToBind = -1;
                             ImGui::CloseCurrentPopup();
                         } else {
-                            if (capturedVk != VK_LWIN && capturedVk != VK_RWIN) {
-                                if (s_rebindOutputVKToBind >= 0 && s_rebindOutputVKToBind < (int)g_config.keyRebinds.rebinds.size()) {
-                                    auto& rebind = g_config.keyRebinds.rebinds[s_rebindOutputVKToBind];
-                                    rebind.toKey = capturedVk;
-                                    // Do not touch custom text override here.
-                                    g_configIsDirty = true;
-                                    (void)capturedLParam;
-                                    (void)capturedIsMouse;
-                                }
-                                s_rebindOutputVKToBind = -1;
-                                ImGui::CloseCurrentPopup();
+                            if (s_rebindOutputVKToBind >= 0 && s_rebindOutputVKToBind < (int)g_config.keyRebinds.rebinds.size()) {
+                                auto& rebind = g_config.keyRebinds.rebinds[s_rebindOutputVKToBind];
+                                rebind.toKey = capturedVk;
+                                // Do not touch custom text override here.
+                                g_configIsDirty = true;
+                                (void)capturedLParam;
+                                (void)capturedIsMouse;
                             }
+                            s_rebindOutputVKToBind = -1;
+                            ImGui::CloseCurrentPopup();
                         }
                     }
 
@@ -2025,19 +2023,17 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             s_rebindTextOverrideVKToBind = -1;
                             ImGui::CloseCurrentPopup();
                         } else {
-                            if (capturedVk != VK_LWIN && capturedVk != VK_RWIN) {
-                                if (s_rebindTextOverrideVKToBind >= 0 &&
-                                    s_rebindTextOverrideVKToBind < (int)g_config.keyRebinds.rebinds.size()) {
-                                    auto& rebind = g_config.keyRebinds.rebinds[s_rebindTextOverrideVKToBind];
-                                    rebind.useCustomOutput = true;
-                                    rebind.customOutputVK = capturedVk;
-                                    g_configIsDirty = true;
-                                    (void)capturedLParam;
-                                    (void)capturedIsMouse;
-                                }
-                                s_rebindTextOverrideVKToBind = -1;
-                                ImGui::CloseCurrentPopup();
+                            if (s_rebindTextOverrideVKToBind >= 0 &&
+                                s_rebindTextOverrideVKToBind < (int)g_config.keyRebinds.rebinds.size()) {
+                                auto& rebind = g_config.keyRebinds.rebinds[s_rebindTextOverrideVKToBind];
+                                rebind.useCustomOutput = true;
+                                rebind.customOutputVK = capturedVk;
+                                g_configIsDirty = true;
+                                (void)capturedLParam;
+                                (void)capturedIsMouse;
                             }
+                            s_rebindTextOverrideVKToBind = -1;
+                            ImGui::CloseCurrentPopup();
                         }
                     }
 
@@ -2064,9 +2060,8 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             s_rebindOutputScanToBind = -1;
                             ImGui::CloseCurrentPopup();
                         } else {
-                            if (capturedVk != VK_LWIN && capturedVk != VK_RWIN) {
-                                if (s_rebindOutputScanToBind >= 0 && s_rebindOutputScanToBind < (int)g_config.keyRebinds.rebinds.size()) {
-                                    auto& rebind = g_config.keyRebinds.rebinds[s_rebindOutputScanToBind];
+                            if (s_rebindOutputScanToBind >= 0 && s_rebindOutputScanToBind < (int)g_config.keyRebinds.rebinds.size()) {
+                                auto& rebind = g_config.keyRebinds.rebinds[s_rebindOutputScanToBind];
 
                                 if (capturedVk == VK_LBUTTON || capturedVk == VK_RBUTTON || capturedVk == VK_MBUTTON ||
                                     capturedVk == VK_XBUTTON1 || capturedVk == VK_XBUTTON2) {
@@ -2089,12 +2084,11 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                         " storedScan=" + std::to_string(scanCode) + " ext=" + std::string((scanCode & 0xFF00) ? "1" : "0"));
                                 }
 
-                                    g_configIsDirty = true;
-                                    (void)capturedIsMouse;
-                                }
-                                s_rebindOutputScanToBind = -1;
-                                ImGui::CloseCurrentPopup();
+                                g_configIsDirty = true;
+                                (void)capturedIsMouse;
                             }
+                            s_rebindOutputScanToBind = -1;
+                            ImGui::CloseCurrentPopup();
                         }
                     }
 

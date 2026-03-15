@@ -33,6 +33,7 @@ extern std::atomic<bool> g_configLoadFailed;
 extern std::atomic<int> g_wmMouseMoveCount;
 extern GameVersion g_gameVersion;
 extern Config g_config;
+extern HMODULE g_hModule;
 
 extern std::string g_currentModeId;
 extern std::mutex g_modeIdMutex;
@@ -63,6 +64,17 @@ static size_t s_bestMatchKeyCount = 0;
 static std::unordered_map<DWORD, size_t> s_bestMatchKeyCountByMainVk;
 static std::atomic<int> s_cachedSystemCursorVisible{ -1 };
 static std::atomic<ULONGLONG> s_cachedSystemCursorVisibilityTick{ 0 };
+static HHOOK s_lowLevelKeyboardHook = NULL;
+static std::mutex s_lowLevelKeyboardHookMutex;
+
+struct LowLevelSuppressedKeyState {
+    DWORD rawVk = 0;
+    UINT scanCodeWithFlags = 0;
+    bool isSystemKey = false;
+};
+
+static std::unordered_map<DWORD, LowLevelSuppressedKeyState> s_lowLevelSuppressedKeys;
+static std::mutex s_lowLevelSuppressedKeysMutex;
 
 static bool QuerySystemCursorVisibleCached() {
     constexpr ULONGLONG kCursorVisibilityRefreshMs = 50;
@@ -144,6 +156,27 @@ static DWORD NormalizeModifierVkFromConfig(DWORD vk, UINT scanCodeWithFlags = 0)
     default:
         return vk;
     }
+}
+
+static bool MatchesRebindSourceKey(DWORD incomingVk, DWORD incomingRawVk, DWORD fromKey) {
+    if (fromKey == 0) return false;
+    if (incomingVk == fromKey) return true;
+
+    if (fromKey == VK_CONTROL) {
+        return incomingVk == VK_LCONTROL || incomingVk == VK_RCONTROL || incomingRawVk == VK_CONTROL;
+    }
+    if (fromKey == VK_SHIFT) {
+        return incomingVk == VK_LSHIFT || incomingVk == VK_RSHIFT || incomingRawVk == VK_SHIFT;
+    }
+    if (fromKey == VK_MENU) {
+        return incomingVk == VK_LMENU || incomingVk == VK_RMENU || incomingRawVk == VK_MENU;
+    }
+
+    if (incomingRawVk == VK_CONTROL && incomingVk == VK_CONTROL && (fromKey == VK_LCONTROL || fromKey == VK_RCONTROL)) return true;
+    if (incomingRawVk == VK_SHIFT && incomingVk == VK_SHIFT && (fromKey == VK_LSHIFT || fromKey == VK_RSHIFT)) return true;
+    if (incomingRawVk == VK_MENU && incomingVk == VK_MENU && (fromKey == VK_LMENU || fromKey == VK_RMENU)) return true;
+
+    return false;
 }
 
 static bool IsModifierVk(DWORD vk) {
@@ -462,6 +495,8 @@ InputHandlerResult HandleSetCursor(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 InputHandlerResult HandleDestroy(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg != WM_DESTROY) { return { false, 0 }; }
     PROFILE_SCOPE("HandleDestroy");
+
+    ReleaseActiveLowLevelRebindKeys(hWnd);
 
     extern GameVersion g_gameVersion;
     if (g_gameVersion >= GameVersion(1, 13, 0)) { g_isShuttingDown = true; }
@@ -863,6 +898,10 @@ InputHandlerResult HandleKeyRebindsToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
     if (nowMs - lastMs < 250) { return { true, 1 }; }
     s_lastToggleMs.store(nowMs, std::memory_order_relaxed);
 
+    if (g_config.keyRebinds.enabled) {
+        ReleaseActiveLowLevelRebindKeys(hWnd);
+    }
+
     g_config.keyRebinds.enabled = !g_config.keyRebinds.enabled;
     g_configIsDirty = true;
 
@@ -1003,6 +1042,8 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
     if (wParam == WA_INACTIVE) {
         ImGuiInputQueue_EnqueueFocus(false);
+
+        ReleaseActiveLowLevelRebindKeys(hWnd);
 
         if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) Log("[WINDOW] Window became inactive.");
         extern std::atomic<bool> g_isGameFocused;
@@ -1838,6 +1879,209 @@ static LRESULT SendUnicodeScalarAsCharMessage(HWND hWnd, UINT charMsg, uint32_t 
 }
 
 static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E;
+static constexpr ULONG_PTR kToolscreenMenuMaskExtraInfo = (ULONG_PTR)0x54534D4B;
+static constexpr WORD kToolscreenMenuMaskVk = 0xFF;
+
+static bool SendSynthKeyByVirtualKey(WORD virtualKey, bool keyDown, ULONG_PTR extraInfo) {
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wVk = virtualKey;
+    in.ki.wScan = 0;
+    in.ki.dwFlags = keyDown ? 0 : KEYEVENTF_KEYUP;
+    in.ki.time = 0;
+    in.ki.dwExtraInfo = extraInfo;
+    return ::SendInput(1, &in, sizeof(INPUT)) == 1;
+}
+
+static bool SendMenuMaskKeyTap() {
+    const bool downSent = SendSynthKeyByVirtualKey(kToolscreenMenuMaskVk, true, kToolscreenMenuMaskExtraInfo);
+    const bool upSent = SendSynthKeyByVirtualKey(kToolscreenMenuMaskVk, false, kToolscreenMenuMaskExtraInfo);
+    return downSent && upSent;
+}
+
+static bool IsMenuActivationModifierVk(DWORD vk) {
+    return vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN;
+}
+
+static bool DoesRebindPreserveMenuModifier(const KeyRebind& rebind, DWORD triggerVk) {
+    if (rebind.useCustomOutput) return false;
+
+    switch (rebind.fromKey) {
+    case VK_MENU:
+        return triggerVk == VK_MENU || triggerVk == VK_LMENU || triggerVk == VK_RMENU;
+    case VK_LMENU:
+        return triggerVk == VK_LMENU;
+    case VK_RMENU:
+        return triggerVk == VK_RMENU;
+    case VK_LWIN:
+        return triggerVk == VK_LWIN;
+    case VK_RWIN:
+        return triggerVk == VK_RWIN;
+    default:
+        return false;
+    }
+}
+
+static bool ShouldMaskMenuModifierForRebind(const KeyRebind& rebind, DWORD incomingVk, DWORD incomingRawVk, bool isKeyDown,
+                                            bool isAutoRepeatKeyDown, DWORD triggerVk) {
+    if (!isKeyDown || isAutoRepeatKeyDown) return false;
+    if (!IsMenuActivationModifierVk(incomingVk) && !IsMenuActivationModifierVk(incomingRawVk) &&
+        !IsMenuActivationModifierVk(rebind.fromKey)) {
+        return false;
+    }
+
+    return !DoesRebindPreserveMenuModifier(rebind, triggerVk);
+}
+
+static bool IsDeepSuppressionEligibleSourceVk(DWORD vk) {
+    return IsMenuActivationModifierVk(vk);
+}
+
+static UINT BuildScanCodeWithFlagsFromLowLevelEvent(const KBDLLHOOKSTRUCT& info) {
+    UINT scanCodeWithFlags = static_cast<UINT>(info.scanCode & 0xFF);
+    if ((info.flags & LLKHF_EXTENDED) != 0) {
+        scanCodeWithFlags |= 0xE000;
+    }
+    return scanCodeWithFlags;
+}
+
+static bool ShouldSuppressLowLevelMenuModifierKey(DWORD rawVk) {
+    if (!IsDeepSuppressionEligibleSourceVk(rawVk)) return false;
+    if (g_isShuttingDown.load(std::memory_order_acquire)) return false;
+    if (!g_gameWindowActive.load(std::memory_order_acquire)) return false;
+    if (IsHotkeyBindingActive() || IsRebindBindingActive()) return false;
+
+    const auto cfg = GetConfigSnapshot();
+    if (!cfg || !cfg->keyRebinds.enabled) return false;
+
+    for (const auto& rebind : cfg->keyRebinds.rebinds) {
+        if (!rebind.enabled || rebind.fromKey == 0 || rebind.toKey == 0) continue;
+        if (!IsDeepSuppressionEligibleSourceVk(rebind.fromKey)) continue;
+        if (!MatchesRebindSourceKey(rawVk, rawVk, rebind.fromKey)) continue;
+
+        const DWORD triggerVk = NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
+        if (ShouldMaskMenuModifierForRebind(rebind, rawVk, rawVk, true, false, triggerVk)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool PostSuppressedLowLevelKeyMessage(HWND hWnd, const LowLevelSuppressedKeyState& state, bool isKeyDown, bool previousKeyState) {
+    if (!hWnd || state.rawVk == 0) return false;
+
+    const UINT msg = isKeyDown ? (state.isSystemKey ? WM_SYSKEYDOWN : WM_KEYDOWN) : (state.isSystemKey ? WM_SYSKEYUP : WM_KEYUP);
+    const LPARAM msgLParam = BuildKeyboardMessageLParam(state.scanCodeWithFlags, isKeyDown, state.isSystemKey, 1, previousKeyState, !isKeyDown);
+    return ::PostMessage(hWnd, msg, static_cast<WPARAM>(state.rawVk), msgLParam) != FALSE;
+}
+
+static LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
+    if (code < 0 || lParam == 0) {
+        return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
+    }
+
+    const KBDLLHOOKSTRUCT* info = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+    if (!info) {
+        return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
+    }
+
+    if (info->dwExtraInfo == kToolscreenInjectedExtraInfo || info->dwExtraInfo == kToolscreenMenuMaskExtraInfo) {
+        return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
+    }
+
+    const bool isKeyDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
+    const bool isKeyUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
+    if (!isKeyDown && !isKeyUp) {
+        return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
+    }
+
+    const DWORD rawVk = static_cast<DWORD>(info->vkCode);
+    const HWND targetHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+    if (!targetHwnd) {
+        return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
+    }
+
+    LowLevelSuppressedKeyState existingState{};
+    bool hasExistingState = false;
+    {
+        std::lock_guard<std::mutex> lock(s_lowLevelSuppressedKeysMutex);
+        auto it = s_lowLevelSuppressedKeys.find(rawVk);
+        if (it != s_lowLevelSuppressedKeys.end()) {
+            existingState = it->second;
+            hasExistingState = true;
+            if (isKeyUp) {
+                s_lowLevelSuppressedKeys.erase(it);
+            }
+        }
+    }
+
+    if (hasExistingState) {
+        (void)PostSuppressedLowLevelKeyMessage(targetHwnd, existingState, isKeyDown, true);
+        return 1;
+    }
+
+    if (!isKeyDown) {
+        return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
+    }
+
+    if (!ShouldSuppressLowLevelMenuModifierKey(rawVk)) {
+        return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
+    }
+
+    LowLevelSuppressedKeyState newState{};
+    newState.rawVk = rawVk;
+    newState.scanCodeWithFlags = BuildScanCodeWithFlagsFromLowLevelEvent(*info);
+    newState.isSystemKey = (rawVk == VK_MENU || rawVk == VK_LMENU || rawVk == VK_RMENU);
+
+    {
+        std::lock_guard<std::mutex> lock(s_lowLevelSuppressedKeysMutex);
+        s_lowLevelSuppressedKeys[rawVk] = newState;
+    }
+
+    (void)PostSuppressedLowLevelKeyMessage(targetHwnd, newState, true, false);
+    return 1;
+}
+
+static void EnsureLowLevelKeyboardHookInstalled() {
+    if (s_lowLevelKeyboardHook != NULL) return;
+    if (g_isShuttingDown.load(std::memory_order_acquire)) return;
+
+    std::lock_guard<std::mutex> lock(s_lowLevelKeyboardHookMutex);
+    if (s_lowLevelKeyboardHook != NULL) return;
+    if (g_hModule == NULL) return;
+
+    s_lowLevelKeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, g_hModule, 0);
+    if (s_lowLevelKeyboardHook == NULL) {
+        Log("WARNING: Failed to install low-level keyboard hook for deep key rebind suppression.");
+        return;
+    }
+
+    LogCategory("init", "Installed low-level keyboard hook for deep key rebind suppression.");
+}
+
+void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
+    if (!hWnd) return;
+
+    std::vector<LowLevelSuppressedKeyState> activeKeys;
+    {
+        std::lock_guard<std::mutex> lock(s_lowLevelSuppressedKeysMutex);
+        if (s_lowLevelSuppressedKeys.empty()) return;
+
+        activeKeys.reserve(s_lowLevelSuppressedKeys.size());
+        for (const auto& [vk, state] : s_lowLevelSuppressedKeys) {
+            (void)vk;
+            activeKeys.push_back(state);
+        }
+        s_lowLevelSuppressedKeys.clear();
+    }
+
+    for (const auto& state : activeKeys) {
+        const UINT msg = state.isSystemKey ? WM_SYSKEYUP : WM_KEYUP;
+        const LPARAM msgLParam = BuildKeyboardMessageLParam(state.scanCodeWithFlags, false, state.isSystemKey, 1, true, true);
+        (void)HandleKeyRebinding(hWnd, msg, static_cast<WPARAM>(state.rawVk), msgLParam);
+    }
+}
 
 static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
     INPUT in{};
@@ -1851,6 +2095,26 @@ static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
     in.ki.time = 0;
     in.ki.dwExtraInfo = kToolscreenInjectedExtraInfo;
     return ::SendInput(1, &in, sizeof(INPUT)) == 1;
+}
+
+InputHandlerResult HandleInjectedMenuMaskKey(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+        break;
+    default:
+        return { false, 0 };
+    }
+    PROFILE_SCOPE("HandleInjectedMenuMaskKey");
+
+    (void)hWnd;
+    (void)lParam;
+
+    if (GetMessageExtraInfo() != kToolscreenMenuMaskExtraInfo) { return { false, 0 }; }
+    if (static_cast<WORD>(wParam) != kToolscreenMenuMaskVk) { return { false, 0 }; }
+    return { true, 0 };
 }
 
 InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -1942,31 +2206,10 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     auto rebindCfg = GetConfigSnapshot();
     if (!rebindCfg || !rebindCfg->keyRebinds.enabled) { return { false, 0 }; }
 
-    auto matchesFromKey = [&](DWORD incomingVk, DWORD incomingRawVk, DWORD fromKey) -> bool {
-        if (fromKey == 0) return false;
-        if (incomingVk == fromKey) return true;
-
-        if (fromKey == VK_CONTROL) {
-            return incomingVk == VK_LCONTROL || incomingVk == VK_RCONTROL || incomingRawVk == VK_CONTROL;
-        }
-        if (fromKey == VK_SHIFT) {
-            return incomingVk == VK_LSHIFT || incomingVk == VK_RSHIFT || incomingRawVk == VK_SHIFT;
-        }
-        if (fromKey == VK_MENU) {
-            return incomingVk == VK_LMENU || incomingVk == VK_RMENU || incomingRawVk == VK_MENU;
-        }
-
-        if (incomingRawVk == VK_CONTROL && incomingVk == VK_CONTROL && (fromKey == VK_LCONTROL || fromKey == VK_RCONTROL)) return true;
-        if (incomingRawVk == VK_SHIFT && incomingVk == VK_SHIFT && (fromKey == VK_LSHIFT || fromKey == VK_RSHIFT)) return true;
-        if (incomingRawVk == VK_MENU && incomingVk == VK_MENU && (fromKey == VK_LMENU || fromKey == VK_RMENU)) return true;
-
-        return false;
-    };
-
     for (size_t i = 0; i < rebindCfg->keyRebinds.rebinds.size(); ++i) {
         const auto& rebind = rebindCfg->keyRebinds.rebinds[i];
 
-        if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 && matchesFromKey(vkCode, rawVkCode, rebind.fromKey)) {
+        if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 && MatchesRebindSourceKey(vkCode, rawVkCode, rebind.fromKey)) {
             const bool shiftLayerActive = IsShiftLayerActiveForRebind(rebind, vkCode, rawVkCode, isKeyDown);
             auto isNonCharSourceVk = [&](DWORD vk) {
                 if (IsModifierVk(vk)) return true;
@@ -2000,6 +2243,10 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
             const DWORD triggerVK =
                 NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
+
+            if (ShouldMaskMenuModifierForRebind(rebind, vkCode, rawVkCode, isKeyDown, isAutoRepeatKeyDown, triggerVK)) {
+                (void)SendMenuMaskKeyTap();
+            }
 
             const DWORD defaultTextVK = NormalizeModifierVkFromConfig(rebind.fromKey);
             const DWORD effectiveCustomOutputVk = ResolveEffectiveCustomOutputVk(rebind, shiftLayerActive);
@@ -2466,6 +2713,8 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
     }
 
+    EnsureLowLevelKeyboardHookInstalled();
+
     RegisterBindingInputEvent(uMsg, wParam, lParam);
 
     // Keep all window metrics/cache updates in one place to avoid split-brain resize state.
@@ -2480,6 +2729,9 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (result.consumed) return result.result;
 
     result = HandleToolscreenQueryMessages(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+
+    result = HandleInjectedMenuMaskKey(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
     switch (uMsg) {
