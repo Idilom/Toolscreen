@@ -184,6 +184,10 @@ static bool IsModifierVk(DWORD vk) {
            vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN;
 }
 
+static bool IsAltVk(DWORD vk) {
+    return vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU;
+}
+
 static bool IsShiftVk(DWORD vk) {
     return vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT;
 }
@@ -2375,9 +2379,13 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
             }
 
             const bool isSystemKeyMsg = (uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP);
-            const bool outputIsAlt = (triggerVK == VK_MENU || triggerVK == VK_LMENU || triggerVK == VK_RMENU);
-            const bool useSysKey = isSystemKeyMsg || outputIsAlt;
-            UINT outputMsg = isKeyDown ? (useSysKey ? WM_SYSKEYDOWN : WM_KEYDOWN) : (useSysKey ? WM_SYSKEYUP : WM_KEYUP);
+            const bool sourceIsAlt = IsAltVk(vkCode) || IsAltVk(rawVkCode);
+            const bool altContextActive = isSystemKeyMsg && !sourceIsAlt;
+            const bool outputIsAlt = IsAltVk(triggerVK);
+            const bool outputUsesSystemMessage = outputIsAlt;
+            const bool outputHasAltContext = altContextActive || outputIsAlt;
+            UINT outputMsg =
+                isKeyDown ? (outputUsesSystemMessage ? WM_SYSKEYDOWN : WM_KEYDOWN) : (outputUsesSystemMessage ? WM_SYSKEYUP : WM_KEYUP);
 
             const bool fromKeyIsNonChar =
                 isMouseButton ||
@@ -2401,11 +2409,10 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                         : 0u;
 
                 if (configuredUnicodeText != 0) {
-                    const UINT charMsg = isSystemKeyMsg ? WM_SYSCHAR : WM_CHAR;
-                    if (charMsg == WM_CHAR && configuredUnicodeText <= 0xFFFFu) {
+                    if (configuredUnicodeText <= 0xFFFFu) {
                         SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, (WPARAM)(WCHAR)configuredUnicodeText, charLParam);
                     } else {
-                        SendUnicodeScalarAsCharMessage(hWnd, charMsg, configuredUnicodeText, charLParam);
+                        SendUnicodeScalarAsCharMessage(hWnd, WM_CHAR, configuredUnicodeText, charLParam);
                     }
                     return;
                 }
@@ -2446,12 +2453,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                 }
 
                 if (outChar != 0) {
-                    const UINT charMsg = isSystemKeyMsg ? WM_SYSCHAR : WM_CHAR;
-                    if (charMsg == WM_CHAR) {
-                        SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, static_cast<WPARAM>(outChar), charLParam);
-                    } else {
-                        CallWindowProc(g_originalWndProc, hWnd, charMsg, static_cast<WPARAM>(outChar), charLParam);
-                    }
+                    SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, static_cast<WPARAM>(outChar), charLParam);
                 }
             };
 
@@ -2467,7 +2469,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                 if (isKeyDown && fromKeyIsNonChar && !outputScanIsModifier) {
                     const UINT textScanCode = GetScanCodeWithExtendedFlag(textVK);
                     LPARAM charLParam =
-                        BuildKeyboardMessageLParam(textScanCode, true, isSystemKeyMsg, repeatCount, previousState, transitionState);
+                        BuildKeyboardMessageLParam(textScanCode, true, outputHasAltContext, repeatCount, previousState, transitionState);
                     emitTypedChar(charLParam);
                 }
 
@@ -2483,7 +2485,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
             }();
 
             LPARAM newLParam =
-                BuildKeyboardMessageLParam(outputScanCode, isKeyDown, isSystemKeyMsg, repeatCount, previousState, transitionState);
+                BuildKeyboardMessageLParam(outputScanCode, isKeyDown, outputHasAltContext, repeatCount, previousState, transitionState);
 
             // Do NOT PostMessage keyboard outputs when the source event is a mouse button.
             LRESULT keyResult = CallWindowProc(g_originalWndProc, hWnd, outputMsg, msgVk, newLParam);

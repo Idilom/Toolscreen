@@ -639,9 +639,9 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                     auto roundPx = [](float v) -> float { return (float)(int)(v + 0.5f); };
 
                     constexpr float kKeyboardScaleMult = 1.0f;
-                    constexpr float kKeyHeightMul = 1.55f;
-                    constexpr float kKeyUnitMul = 0.92f;
-                    constexpr float kKeyGapMul = 1.00f;
+                    constexpr float kKeyHeightMul = 1.68f;
+                    constexpr float kKeyUnitMul = 0.96f;
+                    constexpr float kKeyGapMul = 1.08f;
                     constexpr float kKeyCapInsetXMul = 0.55f;
                     constexpr float kKeyCapInsetYMul = 0.45f;
                     constexpr float kKeyRoundingPx = 5.0f;
@@ -946,60 +946,129 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             if (s < 8.0f) s = 8.0f;
                             return s;
                         };
+                        auto fitTextToWidth = [&](ImFont* font, float desiredFontSize, const std::string& text, float availWidth,
+                                                  float minFontSize) {
+                            float fontSize = desiredFontSize;
+                            ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
+
+                            if (availWidth > 1.0f && textSize.x > availWidth) {
+                                const float widthScale = availWidth / (textSize.x + 0.001f);
+                                fontSize = desiredFontSize * widthScale;
+                                if (fontSize < minFontSize) fontSize = minFontSize;
+                                textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
+
+                                if (textSize.x > availWidth && fontSize > minFontSize) {
+                                    const float exactScale = availWidth / (textSize.x + 0.001f);
+                                    float refinedFontSize = fontSize * exactScale;
+                                    if (refinedFontSize < minFontSize) refinedFontSize = minFontSize;
+                                    if (refinedFontSize < fontSize) {
+                                        fontSize = refinedFontSize;
+                                        textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
+                                    }
+                                }
+                            }
+
+                            return std::pair<float, ImVec2>(fontSize, textSize);
+                        };
+                        auto centerTextXWithin = [&](float minX, float maxX, float textWidth) {
+                            const float availWidth = maxX - minX;
+                            float x = snapPxText(minX + (availWidth - textWidth) * 0.5f);
+                            const float maxStartX = maxX - textWidth;
+                            if (maxStartX >= minX) {
+                                if (x < minX) x = snapPxText(minX);
+                                if (x > maxStartX) x = snapPxText(maxStartX);
+                            }
+                            return x;
+                        };
 
                         const float textAvailW = size.x - padX * 2.0f;
                         const float textAvailH = size.y - padY * 2.0f;
+                        const float textMinX = kMin.x + padX;
+                        const float textMaxX = kMax.x - padX;
                         float layoutTextBoost = 0.85f + 0.35f * s_keyboardLayoutScale;
                         if (layoutTextBoost < 0.85f) layoutTextBoost = 0.85f;
                         if (layoutTextBoost > 1.85f) layoutTextBoost = 1.85f;
 
                         float shiftLayerFs = 0.0f;
                         ImVec2 shiftLayerSz = ImVec2(0.0f, 0.0f);
-                        float shiftLayerReserveH = 0.0f;
+                        float shiftBadgePadX = 0.0f;
+                        float shiftBadgePadY = 0.0f;
+                        float shiftBadgeH = 0.0f;
+                        float shiftLayerBodyOffset = 0.0f;
                         if (showShiftLayerText) {
-                            shiftLayerFs = snapFontSize(fSecondary->LegacySize * (0.72f + 0.18f * s_keyboardLayoutScale));
+                            shiftLayerFs = snapFontSize(fSecondary->LegacySize * (0.92f + 0.20f * s_keyboardLayoutScale));
                             shiftLayerSz = fSecondary->CalcTextSizeA(shiftLayerFs, FLT_MAX, 0.0f, shiftLayerText.c_str());
-                            if (textAvailW > 8.0f) {
-                                float shiftScaleW = (textAvailW * 0.72f) / (shiftLayerSz.x + 0.001f);
-                                if (shiftScaleW < 0.50f) shiftScaleW = 0.50f;
-                                if (shiftScaleW > 1.00f) shiftScaleW = 1.00f;
+                            shiftBadgePadX = snapPxText(3.0f * keyboardScale);
+                            shiftBadgePadY = snapPxText(1.5f * keyboardScale);
+                            if (shiftBadgePadX < 2.0f) shiftBadgePadX = 2.0f;
+                            if (shiftBadgePadY < 1.0f) shiftBadgePadY = 1.0f;
+
+                            const float shiftAvailW = textAvailW - shiftBadgePadX * 2.0f;
+                            if (shiftAvailW > 6.0f) {
+                                float shiftScaleW = shiftAvailW / (shiftLayerSz.x + 0.001f);
+                                if (shiftScaleW < 0.68f) shiftScaleW = 0.68f;
+                                if (shiftScaleW > 1.10f) shiftScaleW = 1.10f;
                                 shiftLayerFs = snapFontSize(shiftLayerFs * shiftScaleW);
                                 shiftLayerSz = fSecondary->CalcTextSizeA(shiftLayerFs, FLT_MAX, 0.0f, shiftLayerText.c_str());
                             }
-                            shiftLayerReserveH = snapPxText(shiftLayerSz.y + 2.0f * keyboardScale);
+                            shiftBadgeH = snapPxText(shiftLayerSz.y + shiftBadgePadY * 2.0f);
+
+                            const float bodyOffsetCap = textAvailH * (showSecondaryText ? 0.18f : 0.10f);
+                            if (bodyOffsetCap > 0.0f && shiftBadgeH > 0.0f) {
+                                shiftLayerBodyOffset = snapPxText((shiftBadgeH + 1.0f * keyboardScale) * (showSecondaryText ? 0.55f : 0.35f));
+                                if (shiftLayerBodyOffset > bodyOffsetCap) shiftLayerBodyOffset = snapPxText(bodyOffsetCap);
+                            }
                         }
 
-                        const float bodyTextAvailH = (shiftLayerReserveH < textAvailH) ? (textAvailH - shiftLayerReserveH) : textAvailH;
-                        const float bodyTextTopY = kMin.y + padY + ((shiftLayerReserveH < textAvailH) ? shiftLayerReserveH : 0.0f);
+                        const float bodyTextAvailH = (shiftLayerBodyOffset < textAvailH) ? (textAvailH - shiftLayerBodyOffset) : textAvailH;
+                        const float bodyTextTopY = kMin.y + padY + ((shiftLayerBodyOffset < textAvailH) ? shiftLayerBodyOffset : 0.0f);
 
                         float labelFontSize = fLabel->LegacySize * layoutTextBoost;
                         ImVec2 labelSz = fLabel->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, primaryText.c_str());
 
                         if (textAvailW > 8.0f) {
-                            float scaleW = textAvailW / (labelSz.x + 0.001f);
-                            if (scaleW < 0.45f) scaleW = 0.45f;
-                            if (scaleW > 1.00f) scaleW = 1.00f;
-                            labelFontSize = snapFontSize(fLabel->LegacySize * layoutTextBoost * scaleW);
-                            labelSz = fLabel->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, primaryText.c_str());
+                            const auto fittedPrimary = fitTextToWidth(fLabel, snapFontSize(labelFontSize), primaryText, textAvailW, 6.0f);
+                            labelFontSize = fittedPrimary.first;
+                            labelSz = fittedPrimary.second;
                         }
 
                         if (showShiftLayerText) {
                             const ImU32 shiftCol = (rb && !rb->enabled) ? IM_COL32(255, 220, 170, 215) : IM_COL32(220, 238, 255, 220);
-                            float shiftX = snapPxText(kMin.x + padX);
-                            float shiftY = snapPxText(kMin.y + padY - 1.0f * keyboardScale);
+                            const ImU32 shiftBadgeFill =
+                                (rb && !rb->enabled) ? IM_COL32(96, 62, 22, 200) : IM_COL32(28, 86, 62, 210);
+                            const ImU32 shiftBadgeBorder =
+                                (rb && !rb->enabled) ? IM_COL32(255, 184, 112, 220) : IM_COL32(74, 238, 155, 220);
+                            float shiftBadgeRound = snapPxText(4.0f * keyboardScale);
+                            if (shiftBadgeRound < 2.0f) shiftBadgeRound = 2.0f;
+
+                            const float badgeX = snapPxText(kMin.x + padX);
+                            const float badgeY = snapPxText(kMin.y + padY - 1.0f * keyboardScale);
+                            const ImVec2 badgeMin = ImVec2(badgeX, badgeY);
+                            const ImVec2 badgeMax = ImVec2(snapPxText(badgeX + shiftLayerSz.x + shiftBadgePadX * 2.0f),
+                                                           snapPxText(badgeY + shiftBadgeH));
+
+                            dl->AddRectFilled(badgeMin, badgeMax, shiftBadgeFill, shiftBadgeRound);
+                            dl->AddRect(badgeMin, badgeMax, shiftBadgeBorder, shiftBadgeRound, 0, 1.0f);
+
+                            float shiftX = snapPxText(badgeMin.x + shiftBadgePadX);
+                            float shiftY = snapPxText(badgeMin.y + shiftBadgePadY - 0.5f * keyboardScale);
                             dl->AddText(fSecondary, shiftLayerFs, ImVec2(shiftX, shiftY), shiftCol, shiftLayerText.c_str());
                         }
 
                         if (!showRebindInfo || !showSecondaryText) {
                             const float maxByHeight = bodyTextAvailH * 0.98f;
                             if (maxByHeight > 0.0f && labelFontSize > maxByHeight) {
-                                labelFontSize = snapFontSize(maxByHeight);
+                                labelFontSize = maxByHeight;
                                 labelSz = fLabel->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, primaryText.c_str());
+                                if (textAvailW > 8.0f) {
+                                    const auto fittedPrimary = fitTextToWidth(fLabel, labelFontSize, primaryText, textAvailW, 6.0f);
+                                    labelFontSize = fittedPrimary.first;
+                                    labelSz = fittedPrimary.second;
+                                }
                             }
 
-                            float x = snapPxText(kMin.x + (size.x - labelSz.x) * 0.5f);
+                            float x = centerTextXWithin(textMinX, textMaxX, labelSz.x);
                             float y = snapPxText(bodyTextTopY + (bodyTextAvailH - labelSz.y) * 0.5f);
-                            if (x < kMin.x + padX) x = snapPxText(kMin.x + padX);
                             if (y < bodyTextTopY) y = snapPxText(bodyTextTopY);
                             dl->AddText(fLabel, labelFontSize, ImVec2(x, y), theme.text, primaryText.c_str());
                         } else {
@@ -1011,11 +1080,10 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             float secondaryFs = fSecondary->LegacySize * layoutTextBoost;
                             ImVec2 secondarySz = fSecondary->CalcTextSizeA(secondaryFs, FLT_MAX, 0.0f, secondaryText.c_str());
                             if (textAvailW > 8.0f) {
-                                float secScaleW = textAvailW / (secondarySz.x + 0.001f);
-                                if (secScaleW < 0.40f) secScaleW = 0.40f;
-                                if (secScaleW > 1.00f) secScaleW = 1.00f;
-                                secondaryFs = snapFontSize(fSecondary->LegacySize * layoutTextBoost * secScaleW);
-                                secondarySz = fSecondary->CalcTextSizeA(secondaryFs, FLT_MAX, 0.0f, secondaryText.c_str());
+                                const auto fittedSecondary =
+                                    fitTextToWidth(fSecondary, snapFontSize(secondaryFs), secondaryText, textAvailW, 6.0f);
+                                secondaryFs = fittedSecondary.first;
+                                secondarySz = fittedSecondary.second;
                             }
 
                             float lineGap = snapPxText(1.0f * keyboardScale);
@@ -1025,10 +1093,20 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             if (bodyTextAvailH > 0.0f && totalH > bodyTextAvailH) {
                                 float fit = bodyTextAvailH / (totalH + 0.001f);
                                 if (fit < 1.0f) {
-                                    primaryFs = snapFontSize(primaryFs * fit);
-                                    secondaryFs = snapFontSize(secondaryFs * fit);
-                                    primarySz = f->CalcTextSizeA(primaryFs, FLT_MAX, 0.0f, primaryText.c_str());
-                                    secondarySz = fSecondary->CalcTextSizeA(secondaryFs, FLT_MAX, 0.0f, secondaryText.c_str());
+                                    primaryFs *= fit;
+                                    secondaryFs *= fit;
+                                    if (textAvailW > 8.0f) {
+                                        const auto fittedPrimary = fitTextToWidth(f, primaryFs, primaryText, textAvailW, 6.0f);
+                                        primaryFs = fittedPrimary.first;
+                                        primarySz = fittedPrimary.second;
+
+                                        const auto fittedSecondary = fitTextToWidth(fSecondary, secondaryFs, secondaryText, textAvailW, 6.0f);
+                                        secondaryFs = fittedSecondary.first;
+                                        secondarySz = fittedSecondary.second;
+                                    } else {
+                                        primarySz = f->CalcTextSizeA(primaryFs, FLT_MAX, 0.0f, primaryText.c_str());
+                                        secondarySz = fSecondary->CalcTextSizeA(secondaryFs, FLT_MAX, 0.0f, secondaryText.c_str());
+                                    }
                                     totalH = primarySz.y + lineGap + secondarySz.y;
                                 }
                             }
@@ -1036,13 +1114,11 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             float startY = snapPxText(bodyTextTopY + (bodyTextAvailH - totalH) * 0.5f);
                             if (startY < bodyTextTopY) startY = snapPxText(bodyTextTopY);
 
-                            float x1 = snapPxText(kMin.x + (size.x - primarySz.x) * 0.5f);
-                            if (x1 < kMin.x + padX) x1 = snapPxText(kMin.x + padX);
+                            float x1 = centerTextXWithin(textMinX, textMaxX, primarySz.x);
                             dl->AddText(f, primaryFs, ImVec2(x1, startY), theme.text, primaryText.c_str());
 
                             float y2 = snapPxText(startY + primarySz.y + lineGap);
-                            float x2 = snapPxText(kMin.x + (size.x - secondarySz.x) * 0.5f);
-                            if (x2 < kMin.x + padX) x2 = snapPxText(kMin.x + padX);
+                            float x2 = centerTextXWithin(textMinX, textMaxX, secondarySz.x);
 
                             const ImU32 infoCol = (rb && !rb->enabled) ? IM_COL32(255, 220, 170, 235) : IM_COL32(245, 245, 245, 235);
                             dl->AddText(fSecondary, secondaryFs, ImVec2(x2, y2), infoCol, secondaryText.c_str());
