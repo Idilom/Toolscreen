@@ -282,6 +282,189 @@ void main() {
     }
 })";
 
+static const char* mt_masked_gradient_frag_shader = R"(#version 330 core
+out vec4 FragColor;
+in vec2 TexCoord;
+
+#define MAX_STOPS 8
+#define ANIM_NONE 0
+#define ANIM_ROTATE 1
+#define ANIM_SLIDE 2
+#define ANIM_WAVE 3
+#define ANIM_SPIRAL 4
+#define ANIM_FADE 5
+
+uniform sampler2D filterTexture;
+uniform int u_borderWidth;
+uniform vec4 u_borderColor;
+uniform vec2 u_screenPixel;
+uniform int u_numStops;
+uniform vec4 u_stopColors[MAX_STOPS];
+uniform float u_stopPositions[MAX_STOPS];
+uniform float u_angle;
+uniform float u_time;
+uniform int u_animationType;
+uniform float u_animationSpeed;
+uniform bool u_colorFade;
+
+vec4 getGradientColorSeamless(float t) {
+    t = fract(t);
+
+    float lastPos = u_stopPositions[u_numStops - 1];
+    float firstPos = u_stopPositions[0];
+    float wrapSize = (1.0 - lastPos) + firstPos;
+
+    if (t <= firstPos && wrapSize > 0.001) {
+        float wrapT = (firstPos - t) / wrapSize;
+        return mix(u_stopColors[0], u_stopColors[u_numStops - 1], wrapT);
+    }
+    if (t >= lastPos && wrapSize > 0.001) {
+        float wrapT = (t - lastPos) / wrapSize;
+        return mix(u_stopColors[u_numStops - 1], u_stopColors[0], wrapT);
+    }
+
+    vec4 color = u_stopColors[0];
+    for (int i = 0; i < u_numStops - 1; i++) {
+        if (t >= u_stopPositions[i] && t <= u_stopPositions[i + 1]) {
+            float segmentT = (t - u_stopPositions[i]) / max(u_stopPositions[i + 1] - u_stopPositions[i], 0.0001);
+            color = mix(u_stopColors[i], u_stopColors[i + 1], segmentT);
+            break;
+        }
+    }
+    return color;
+}
+
+vec4 getGradientColor(float t, float timeOffset) {
+    float adjustedT = t;
+    if (u_colorFade) {
+        adjustedT = fract(t + timeOffset * 0.1);
+    }
+    adjustedT = clamp(adjustedT, 0.0, 1.0);
+
+    vec4 color = u_stopColors[0];
+    for (int i = 0; i < u_numStops - 1; i++) {
+        if (adjustedT >= u_stopPositions[i] && adjustedT <= u_stopPositions[i + 1]) {
+            float segmentT = (adjustedT - u_stopPositions[i]) / max(u_stopPositions[i + 1] - u_stopPositions[i], 0.0001);
+            color = mix(u_stopColors[i], u_stopColors[i + 1], segmentT);
+            break;
+        }
+    }
+    if (adjustedT >= u_stopPositions[u_numStops - 1]) {
+        color = u_stopColors[u_numStops - 1];
+    }
+    return color;
+}
+
+vec4 getFadeColor(float timeOffset) {
+    float cyclePos = fract(timeOffset * 0.1);
+
+    vec4 color = u_stopColors[0];
+    for (int i = 0; i < u_numStops - 1; i++) {
+        if (cyclePos >= u_stopPositions[i] && cyclePos <= u_stopPositions[i + 1]) {
+            float segmentT = (cyclePos - u_stopPositions[i]) / max(u_stopPositions[i + 1] - u_stopPositions[i], 0.0001);
+            color = mix(u_stopColors[i], u_stopColors[i + 1], segmentT);
+            break;
+        }
+    }
+    if (cyclePos > u_stopPositions[u_numStops - 1]) {
+        float wrapRange = 1.0 - u_stopPositions[u_numStops - 1] + u_stopPositions[0];
+        float wrapT = (cyclePos - u_stopPositions[u_numStops - 1]) / max(wrapRange, 0.0001);
+        color = mix(u_stopColors[u_numStops - 1], u_stopColors[0], wrapT);
+    } else if (cyclePos < u_stopPositions[0]) {
+        float wrapRange = 1.0 - u_stopPositions[u_numStops - 1] + u_stopPositions[0];
+        float wrapT = (u_stopPositions[0] - cyclePos) / max(wrapRange, 0.0001);
+        color = mix(u_stopColors[0], u_stopColors[u_numStops - 1], wrapT);
+    }
+    return color;
+}
+
+vec4 sampleGradientColor() {
+    vec2 center = vec2(0.5, 0.5);
+    vec2 uv = TexCoord - center;
+    float effectiveAngle = u_angle;
+    float t = 0.0;
+    float timeOffset = u_time * u_animationSpeed;
+
+    if (u_animationType == ANIM_NONE) {
+        vec2 dir = vec2(cos(u_angle), sin(u_angle));
+        t = clamp(dot(uv, dir) + 0.5, 0.0, 1.0);
+        return getGradientColor(t, timeOffset);
+    }
+    if (u_animationType == ANIM_ROTATE) {
+        effectiveAngle = u_angle + timeOffset;
+        vec2 dir = vec2(cos(effectiveAngle), sin(effectiveAngle));
+        t = clamp(dot(uv, dir) + 0.5, 0.0, 1.0);
+        return getGradientColor(t, timeOffset);
+    }
+    if (u_animationType == ANIM_SLIDE) {
+        vec2 dir = vec2(cos(u_angle), sin(u_angle));
+        t = dot(uv, dir) + 0.5 + timeOffset * 0.2;
+        return getGradientColorSeamless(t);
+    }
+    if (u_animationType == ANIM_WAVE) {
+        vec2 dir = vec2(cos(u_angle), sin(u_angle));
+        vec2 perpDir = vec2(-sin(u_angle), cos(u_angle));
+        float perpPos = dot(uv, perpDir);
+        float wave = sin(perpPos * 8.0 + timeOffset * 2.0) * 0.08;
+        t = clamp(dot(uv, dir) + 0.5 + wave, 0.0, 1.0);
+        return getGradientColor(t, timeOffset);
+    }
+    if (u_animationType == ANIM_SPIRAL) {
+        float dist = length(uv) * 2.0;
+        float angle = atan(uv.y, uv.x);
+        t = dist + angle / 6.28318 - timeOffset * 0.3;
+        return getGradientColorSeamless(t);
+    }
+    if (u_animationType == ANIM_FADE) {
+        return getFadeColor(timeOffset);
+    }
+
+    return getGradientColor(0.0, timeOffset);
+}
+
+bool hasBorderSample(vec2 coord, vec2 pixel) {
+    return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.5;
+}
+
+void main() {
+    if (texture(filterTexture, TexCoord).a > 0.5) {
+        FragColor = sampleGradientColor();
+        return;
+    }
+
+    if (u_borderWidth <= 0) {
+        discard;
+    }
+
+    if (u_borderWidth == 1) {
+        if (hasBorderSample(TexCoord, u_screenPixel)) {
+            FragColor = u_borderColor;
+            return;
+        }
+        discard;
+    }
+
+    for (int x = -u_borderWidth; x <= u_borderWidth; x++) {
+        for (int y = -u_borderWidth; y <= u_borderWidth; y++) {
+            if (x == 0 && y == 0) continue;
+            vec2 offset = vec2(float(x), float(y)) * u_screenPixel;
+            if (texture(filterTexture, TexCoord + offset).a > 0.5) {
+                FragColor = u_borderColor;
+                return;
+            }
+        }
+    }
+
+    discard;
+})";
+
 static const char* mt_dilate_horizontal_frag_shader = R"(#version 330 core
 out vec4 FragColor;
 in vec2 TexCoord;
@@ -426,6 +609,7 @@ static GLuint mt_passthroughProgram = 0;
 static GLuint mt_backgroundProgram = 0;
 static GLuint mt_renderProgram = 0;
 static GLuint mt_renderPassthroughProgram = 0;
+static GLuint mt_maskedGradientProgram = 0;
 static GLuint mt_dilateHorizontalProgram = 0;
 static GLuint mt_dilateVerticalProgram = 0;
 static GLuint mt_dilateVerticalPassthroughProgram = 0;
@@ -457,6 +641,11 @@ struct MT_RenderShaderLocs {
 struct MT_RenderPassthroughShaderLocs {
     GLint filterTexture = -1, borderWidth = -1, borderColor = -1, screenPixel = -1;
 };
+struct MT_MaskedGradientShaderLocs {
+    GLint filterTexture = -1, borderWidth = -1, borderColor = -1, screenPixel = -1;
+    GLint numStops = -1, stopColors = -1, stopPositions = -1, angle = -1, time = -1;
+    GLint animationType = -1, animationSpeed = -1, colorFade = -1;
+};
 struct MT_DilateHorizontalShaderLocs {
     GLint sourceTexture = -1, borderWidth = -1, screenPixel = -1;
 };
@@ -475,6 +664,7 @@ static MT_PassthroughShaderLocs mt_passthroughShaderLocs;
 static MT_BackgroundShaderLocs mt_backgroundShaderLocs;
 static MT_RenderShaderLocs mt_renderShaderLocs;
 static MT_RenderPassthroughShaderLocs mt_renderPassthroughShaderLocs;
+static MT_MaskedGradientShaderLocs mt_maskedGradientShaderLocs;
 static MT_DilateHorizontalShaderLocs mt_dilateHorizontalShaderLocs;
 static MT_DilateVerticalShaderLocs mt_dilateVerticalShaderLocs;
 static MT_DilateVerticalPassthroughShaderLocs mt_dilateVerticalPassthroughShaderLocs;
@@ -533,13 +723,14 @@ static bool MT_InitializeShaders() {
     mt_backgroundProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_background_frag_shader);
     mt_renderProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_render_frag_shader);
     mt_renderPassthroughProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_render_passthrough_frag_shader);
+    mt_maskedGradientProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_masked_gradient_frag_shader);
     mt_dilateHorizontalProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_dilate_horizontal_frag_shader);
     mt_dilateVerticalProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_dilate_vertical_frag_shader);
     mt_dilateVerticalPassthroughProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_dilate_vertical_passthrough_frag_shader);
     mt_staticBorderProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_static_border_frag_shader);
 
     if (!mt_filterProgram || !mt_filterPassthroughProgram || !mt_passthroughProgram || !mt_backgroundProgram || !mt_renderProgram ||
-        !mt_renderPassthroughProgram || !mt_dilateHorizontalProgram || !mt_dilateVerticalProgram ||
+        !mt_renderPassthroughProgram || !mt_maskedGradientProgram || !mt_dilateHorizontalProgram || !mt_dilateVerticalProgram ||
         !mt_dilateVerticalPassthroughProgram || !mt_staticBorderProgram) {
         Log("Mirror Thread: FATAL - Failed to create basic shader programs");
         return false;
@@ -576,6 +767,19 @@ static bool MT_InitializeShaders() {
     mt_renderPassthroughShaderLocs.borderWidth = glGetUniformLocation(mt_renderPassthroughProgram, "u_borderWidth");
     mt_renderPassthroughShaderLocs.borderColor = glGetUniformLocation(mt_renderPassthroughProgram, "u_borderColor");
     mt_renderPassthroughShaderLocs.screenPixel = glGetUniformLocation(mt_renderPassthroughProgram, "u_screenPixel");
+
+    mt_maskedGradientShaderLocs.filterTexture = glGetUniformLocation(mt_maskedGradientProgram, "filterTexture");
+    mt_maskedGradientShaderLocs.borderWidth = glGetUniformLocation(mt_maskedGradientProgram, "u_borderWidth");
+    mt_maskedGradientShaderLocs.borderColor = glGetUniformLocation(mt_maskedGradientProgram, "u_borderColor");
+    mt_maskedGradientShaderLocs.screenPixel = glGetUniformLocation(mt_maskedGradientProgram, "u_screenPixel");
+    mt_maskedGradientShaderLocs.numStops = glGetUniformLocation(mt_maskedGradientProgram, "u_numStops");
+    mt_maskedGradientShaderLocs.stopColors = glGetUniformLocation(mt_maskedGradientProgram, "u_stopColors");
+    mt_maskedGradientShaderLocs.stopPositions = glGetUniformLocation(mt_maskedGradientProgram, "u_stopPositions");
+    mt_maskedGradientShaderLocs.angle = glGetUniformLocation(mt_maskedGradientProgram, "u_angle");
+    mt_maskedGradientShaderLocs.time = glGetUniformLocation(mt_maskedGradientProgram, "u_time");
+    mt_maskedGradientShaderLocs.animationType = glGetUniformLocation(mt_maskedGradientProgram, "u_animationType");
+    mt_maskedGradientShaderLocs.animationSpeed = glGetUniformLocation(mt_maskedGradientProgram, "u_animationSpeed");
+    mt_maskedGradientShaderLocs.colorFade = glGetUniformLocation(mt_maskedGradientProgram, "u_colorFade");
 
     mt_dilateHorizontalShaderLocs.sourceTexture = glGetUniformLocation(mt_dilateHorizontalProgram, "sourceTexture");
     mt_dilateHorizontalShaderLocs.borderWidth = glGetUniformLocation(mt_dilateHorizontalProgram, "u_borderWidth");
@@ -620,6 +824,9 @@ static bool MT_InitializeShaders() {
     glUseProgram(mt_renderPassthroughProgram);
     glUniform1i(mt_renderPassthroughShaderLocs.filterTexture, 0);
 
+    glUseProgram(mt_maskedGradientProgram);
+    glUniform1i(mt_maskedGradientShaderLocs.filterTexture, 0);
+
     glUseProgram(mt_dilateHorizontalProgram);
     glUniform1i(mt_dilateHorizontalShaderLocs.sourceTexture, 0);
 
@@ -661,6 +868,10 @@ static void MT_CleanupShaders() {
     if (mt_renderPassthroughProgram) {
         glDeleteProgram(mt_renderPassthroughProgram);
         mt_renderPassthroughProgram = 0;
+    }
+    if (mt_maskedGradientProgram) {
+        glDeleteProgram(mt_maskedGradientProgram);
+        mt_maskedGradientProgram = 0;
     }
     if (mt_dilateHorizontalProgram) {
         glDeleteProgram(mt_dilateHorizontalProgram);
@@ -1304,16 +1515,19 @@ static int MT_UploadSourceRectInstances(MT_SourceRectGpuCacheEntry& gpuCache, co
 static bool MT_CanRenderMirrorDirectToFinal(const ThreadedMirrorConfig& conf, bool useRawOutput, bool writeToBack) {
     if (writeToBack) { return false; }
     if (useRawOutput) { return true; }
+    if (conf.gradientOutput) { return false; }
     if (conf.borderType == MirrorBorderType::Static) { return true; }
     return conf.borderType == MirrorBorderType::Dynamic && conf.dynamicBorderThickness <= 0;
 }
 
 static bool MT_CanCompositeDynamicBorderOnScreen(const ThreadedMirrorConfig& conf, bool useRawOutput, bool writeToBack) {
-    return !writeToBack && !useRawOutput && conf.borderType == MirrorBorderType::Dynamic && conf.dynamicBorderThickness == 1;
+    return !writeToBack && !useRawOutput && !conf.gradientOutput && conf.borderType == MirrorBorderType::Dynamic &&
+           conf.dynamicBorderThickness == 1;
 }
 
 static bool MT_ShouldUseSeparableDynamicBorder(const ThreadedMirrorConfig& conf, bool useRawOutput) {
-    return !useRawOutput && conf.borderType == MirrorBorderType::Dynamic && conf.dynamicBorderThickness > 1;
+    return !useRawOutput && !conf.gradientOutput && conf.borderType == MirrorBorderType::Dynamic &&
+           conf.dynamicBorderThickness > 1;
 }
 
 static bool MT_SameThreadMirrorNeedsFinalTarget(const ThreadedMirrorConfig& conf, bool useRawOutput) {
@@ -1490,6 +1704,7 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
 
     bool useRawOutput = inst->desiredRawOutput.load(std::memory_order_acquire);
     bool useColorPassthrough = conf.colorPassthrough;
+    bool useGradientOutput = conf.gradientOutput && !useRawOutput && !useColorPassthrough;
     const bool renderDirectToFinal =
         captureFinalFbo != 0 && finalTexture != 0 && MT_CanRenderMirrorDirectToFinal(conf, useRawOutput, writeToBack);
 
@@ -1659,6 +1874,46 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
                     stateCache->backgroundOpacityValid = true;
                 }
             }
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+        } else if (useGradientOutput) {
+            MT_BindFramebufferCached(captureFinalFbo, stateCache);
+            MT_SetViewportCached(0, 0, finalW, finalH, stateCache);
+            MT_SetClearColorCached(0.0f, 0.0f, 0.0f, 0.0f, stateCache);
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            MT_BindTextureCached(captureTexture, stateCache);
+            MT_UseProgramCached(mt_maskedGradientProgram, stateCache);
+
+            const int borderWidth = conf.borderType == MirrorBorderType::Dynamic ? conf.dynamicBorderThickness : 0;
+            glUniform1i(mt_maskedGradientShaderLocs.borderWidth, borderWidth);
+            glUniform4f(mt_maskedGradientShaderLocs.borderColor, conf.borderColor.r, conf.borderColor.g, conf.borderColor.b,
+                        conf.borderColor.a);
+            glUniform2f(mt_maskedGradientShaderLocs.screenPixel, 1.0f / (std::max)(1, finalW),
+                        1.0f / (std::max)(1, finalH));
+
+            const int numStops = (std::min)(static_cast<int>(conf.gradient.gradientStops.size()), MAX_GRADIENT_STOPS);
+            float colors[MAX_GRADIENT_STOPS * 4] = {};
+            float positions[MAX_GRADIENT_STOPS] = {};
+            for (int i = 0; i < numStops; ++i) {
+                colors[i * 4 + 0] = conf.gradient.gradientStops[i].color.r;
+                colors[i * 4 + 1] = conf.gradient.gradientStops[i].color.g;
+                colors[i * 4 + 2] = conf.gradient.gradientStops[i].color.b;
+                colors[i * 4 + 3] = conf.gradient.gradientStops[i].color.a;
+                positions[i] = conf.gradient.gradientStops[i].position;
+            }
+            glUniform1i(mt_maskedGradientShaderLocs.numStops, numStops);
+            glUniform4fv(mt_maskedGradientShaderLocs.stopColors, numStops, colors);
+            glUniform1fv(mt_maskedGradientShaderLocs.stopPositions, numStops, positions);
+            glUniform1f(mt_maskedGradientShaderLocs.angle, conf.gradient.gradientAngle * 3.14159265f / 180.0f);
+
+            static auto startTime = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            const float timeSeconds = std::chrono::duration<float>(now - startTime).count();
+            glUniform1f(mt_maskedGradientShaderLocs.time, timeSeconds);
+            glUniform1i(mt_maskedGradientShaderLocs.animationType, static_cast<int>(conf.gradient.gradientAnimation));
+            glUniform1f(mt_maskedGradientShaderLocs.animationSpeed, conf.gradient.gradientAnimationSpeed);
+            glUniform1i(mt_maskedGradientShaderLocs.colorFade, conf.gradient.gradientColorFade ? 1 : 0);
+
             glDrawArrays(GL_TRIANGLES, 0, 6);
         } else if (conf.borderType == MirrorBorderType::Static) {
             // Static border is rendered later during final mirror composition.
@@ -2053,6 +2308,8 @@ static void PopulateThreadedMirrorConfig(ThreadedMirrorConfig& conf, const Mirro
     conf.fps = mirror.fps;
     conf.rawOutput = mirror.rawOutput;
     conf.colorPassthrough = mirror.colorPassthrough;
+    conf.gradientOutput = mirror.gradientOutput;
+    conf.gradient = mirror.gradient;
     conf.targetColors = mirror.colors.targetColors;
     conf.outputColor = mirror.colors.output;
     conf.borderColor = mirror.colors.border;
@@ -2383,7 +2640,8 @@ void UpdateMirrorInputRegions(const std::string& mirrorName, const std::vector<M
 }
 
 void UpdateMirrorCaptureSettings(const std::string& mirrorName, int captureWidth, int captureHeight, const MirrorBorderConfig& border,
-                                 const MirrorColors& colors, float colorSensitivity, bool rawOutput, bool colorPassthrough) {
+                                 const MirrorColors& colors, float colorSensitivity, bool rawOutput, bool colorPassthrough,
+                                 bool gradientOutput, const GradientConfig& gradient) {
     std::lock_guard<std::mutex> lock(g_threadedMirrorConfigMutex);
     for (auto& conf : g_threadedMirrorConfigs) {
         if (conf.name == mirrorName) {
@@ -2407,6 +2665,8 @@ void UpdateMirrorCaptureSettings(const std::string& mirrorName, int captureWidth
             conf.colorSensitivity = colorSensitivity;
             conf.rawOutput = rawOutput;
             conf.colorPassthrough = colorPassthrough;
+            conf.gradientOutput = gradientOutput;
+            conf.gradient = gradient;
             conf.sourceRectLayoutHash = MT_ComputeSourceRectLayoutHash(conf);
             break;
         }

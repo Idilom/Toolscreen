@@ -388,6 +388,7 @@
     "mirrors.delete_mirror_confirm": "Are you sure you want to delete mirror '{}'?",
     "mirrors.delete_zone": "Delete Zone",
     "mirrors.dynamic_border": "Dynamic (around content)",
+    "mirrors.gradient_output": "Gradient Output",
     "mirrors.group_output_position": "Group Output Position",
     "mirrors.height": "Height (0=auto)",
     "mirrors.input_or_capture_zones": "Input/Capture Zones",

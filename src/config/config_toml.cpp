@@ -146,12 +146,8 @@ GradientAnimationType StringToGradientAnimationType(const std::string& str) {
     return GradientAnimationType::None;
 }
 
-void BackgroundConfigToToml(const BackgroundConfig& cfg, toml::table& out) {
+void GradientConfigToToml(const GradientConfig& cfg, toml::table& out) {
     out.is_inline(false);
-
-    out.insert("selectedMode", cfg.selectedMode);
-    out.insert("image", cfg.image);
-    out.insert("color", ColorToTomlArray(cfg.color));
 
     toml::array stopsArr;
     for (const auto& stop : cfg.gradientStops) {
@@ -163,17 +159,12 @@ void BackgroundConfigToToml(const BackgroundConfig& cfg, toml::table& out) {
     }
     out.insert("gradientStops", stopsArr);
     out.insert("gradientAngle", cfg.gradientAngle);
-
     out.insert("gradientAnimation", GradientAnimationTypeToString(cfg.gradientAnimation));
     out.insert("gradientAnimationSpeed", cfg.gradientAnimationSpeed);
     out.insert("gradientColorFade", cfg.gradientColorFade);
 }
 
-void BackgroundConfigFromToml(const toml::table& tbl, BackgroundConfig& cfg) {
-    cfg.selectedMode = GetStringOr(tbl, "selectedMode", ConfigDefaults::BACKGROUND_SELECTED_MODE);
-    cfg.image = GetStringOr(tbl, "image", "");
-    cfg.color = ColorFromTomlArray(GetArray(tbl, "color"), { 0.0f, 0.0f, 0.0f });
-
+void GradientConfigFromToml(const toml::table& tbl, GradientConfig& cfg) {
     cfg.gradientStops.clear();
     if (auto arr = GetArray(tbl, "gradientStops")) {
         for (const auto& elem : *arr) {
@@ -191,10 +182,39 @@ void BackgroundConfigFromToml(const toml::table& tbl, BackgroundConfig& cfg) {
         cfg.gradientStops.push_back({ { 1.0f, 1.0f, 1.0f }, 1.0f });
     }
     cfg.gradientAngle = GetOr(tbl, "gradientAngle", 0.0f);
-
     cfg.gradientAnimation = StringToGradientAnimationType(GetStringOr(tbl, "gradientAnimation", "None"));
     cfg.gradientAnimationSpeed = GetOr(tbl, "gradientAnimationSpeed", 1.0f);
     cfg.gradientColorFade = GetOr(tbl, "gradientColorFade", false);
+}
+
+void BackgroundConfigToToml(const BackgroundConfig& cfg, toml::table& out) {
+    out.is_inline(false);
+
+    out.insert("selectedMode", cfg.selectedMode);
+    out.insert("image", cfg.image);
+    out.insert("color", ColorToTomlArray(cfg.color));
+
+    GradientConfig gradientCfg;
+    gradientCfg.gradientStops = cfg.gradientStops;
+    gradientCfg.gradientAngle = cfg.gradientAngle;
+    gradientCfg.gradientAnimation = cfg.gradientAnimation;
+    gradientCfg.gradientAnimationSpeed = cfg.gradientAnimationSpeed;
+    gradientCfg.gradientColorFade = cfg.gradientColorFade;
+    GradientConfigToToml(gradientCfg, out);
+}
+
+void BackgroundConfigFromToml(const toml::table& tbl, BackgroundConfig& cfg) {
+    cfg.selectedMode = GetStringOr(tbl, "selectedMode", ConfigDefaults::BACKGROUND_SELECTED_MODE);
+    cfg.image = GetStringOr(tbl, "image", "");
+    cfg.color = ColorFromTomlArray(GetArray(tbl, "color"), { 0.0f, 0.0f, 0.0f });
+
+    GradientConfig gradientCfg;
+    GradientConfigFromToml(tbl, gradientCfg);
+    cfg.gradientStops = gradientCfg.gradientStops;
+    cfg.gradientAngle = gradientCfg.gradientAngle;
+    cfg.gradientAnimation = gradientCfg.gradientAnimation;
+    cfg.gradientAnimationSpeed = gradientCfg.gradientAnimationSpeed;
+    cfg.gradientColorFade = gradientCfg.gradientColorFade;
 }
 
 
@@ -445,6 +465,12 @@ void MirrorConfigToToml(const MirrorConfig& cfg, toml::table& out) {
     out.insert("opacity", std::round(cfg.opacity * 1000.0f) / 1000.0f);
     out.insert("rawOutput", cfg.rawOutput);
     out.insert("colorPassthrough", cfg.colorPassthrough);
+    out.insert("gradientOutput", cfg.gradientOutput);
+
+    toml::table gradientTbl;
+    GradientConfigToToml(cfg.gradient, gradientTbl);
+    out.insert("gradient", gradientTbl);
+
     out.insert("onlyOnMyScreen", false);
 }
 
@@ -481,6 +507,12 @@ void MirrorConfigFromToml(const toml::table& tbl, MirrorConfig& cfg) {
     cfg.opacity = GetOr(tbl, "opacity", 1.0f);
     cfg.rawOutput = GetOr(tbl, "rawOutput", ConfigDefaults::MIRROR_RAW_OUTPUT);
     cfg.colorPassthrough = GetOr(tbl, "colorPassthrough", ConfigDefaults::MIRROR_COLOR_PASSTHROUGH);
+    cfg.gradientOutput = GetOr(tbl, "gradientOutput", ConfigDefaults::MIRROR_GRADIENT_OUTPUT);
+    if (auto t = GetTable(tbl, "gradient")) {
+        GradientConfigFromToml(*t, cfg.gradient);
+    } else {
+        cfg.gradient = GradientConfig{};
+    }
     const bool parsedOnlyOnMyScreen = GetOr(tbl, "onlyOnMyScreen", ConfigDefaults::MIRROR_ONLY_ON_MY_SCREEN);
     (void)parsedOnlyOnMyScreen;
     cfg.onlyOnMyScreen = false;
@@ -1902,7 +1934,8 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                               "modeSensitivityY" };
         std::vector<std::string> mirrorKeys = { "name",   "captureWidth", "captureHeight",    "input",
                                                 "output", "colors",       "colorSensitivity", "border",
-                                                "fps",    "rawOutput",    "colorPassthrough", "onlyOnMyScreen",
+                                                "fps",    "rawOutput",    "colorPassthrough", "gradientOutput",
+                                                "gradient", "onlyOnMyScreen",
                                                 "debug" };
         std::vector<std::string> mirrorGroupKeys = { "name", "output", "mirrorIds" };
         std::vector<std::string> imageKeys = { "name",           "path",      "x",           "y",          "scale",

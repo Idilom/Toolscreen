@@ -2167,7 +2167,8 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             const MirrorInstance& inst = it->second;
             if (!inst.hasValidContent) continue;
             const bool useDynamicBorderComposite =
-                conf.border.type == MirrorBorderType::Dynamic && conf.border.dynamicThickness == 1 && !inst.capturedAsRawOutput;
+                conf.border.type == MirrorBorderType::Dynamic && conf.border.dynamicThickness == 1 && !conf.gradientOutput &&
+                !inst.capturedAsRawOutput;
 
             MirrorRenderData data{};
             data.config = &conf;

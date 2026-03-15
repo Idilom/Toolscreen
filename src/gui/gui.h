@@ -81,6 +81,18 @@ struct GradientColorStop {
     float position = 0.0f;
 };
 
+struct GradientConfig {
+    std::vector<GradientColorStop> gradientStops = {
+        { { 0.0f, 0.0f, 0.0f }, 0.0f },
+        { { 1.0f, 1.0f, 1.0f }, 1.0f },
+    };
+    float gradientAngle = 0.0f;
+
+    GradientAnimationType gradientAnimation = GradientAnimationType::None;
+    float gradientAnimationSpeed = 1.0f;
+    bool gradientColorFade = false;
+};
+
 struct BackgroundConfig {
     std::string selectedMode = "color";
     std::string image;
@@ -163,6 +175,8 @@ struct MirrorConfig {
     float opacity = 1.0f;
     bool rawOutput = false;
     bool colorPassthrough = false;
+    bool gradientOutput = false;
+    GradientConfig gradient;
     bool onlyOnMyScreen = false;
 };
 struct MirrorGroupItem {

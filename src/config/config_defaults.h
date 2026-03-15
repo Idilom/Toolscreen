@@ -36,6 +36,7 @@ inline const std::string MIRROR_GAMMA_MODE = "Auto";
 constexpr int MIRROR_FPS = 30;
 constexpr bool MIRROR_RAW_OUTPUT = false;
 constexpr bool MIRROR_COLOR_PASSTHROUGH = false;
+constexpr bool MIRROR_GRADIENT_OUTPUT = false;
 constexpr bool MIRROR_ONLY_ON_MY_SCREEN = false;
 
 inline const std::string MIRROR_BORDER_TYPE = "Dynamic";

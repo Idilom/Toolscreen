@@ -133,7 +133,17 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
 
             auto updateBorderSettings = [&]() {
                 UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
+                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough,
+                                            mirror.gradientOutput, mirror.gradient);
+                std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
+                auto it = g_mirrorInstances.find(mirror.name);
+                if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
+            };
+
+            auto syncMirrorCaptureSettings = [&]() {
+                UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
+                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough,
+                                            mirror.gradientOutput, mirror.gradient);
                 std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
                 auto it = g_mirrorInstances.find(mirror.name);
                 if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
@@ -325,24 +335,14 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
             ImGui::NextColumn();
             if (Spinner("##cap_w", &mirror.captureWidth, 1, 1)) {
                 g_configIsDirty = true;
-                UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
-                // Lock mutex before accessing g_mirrorInstances
-                std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex); // Write lock
-                auto it = g_mirrorInstances.find(mirror.name);
-                if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
+                syncMirrorCaptureSettings();
             }
             ImGui::NextColumn();
             ImGui::Text(trc("mirrors.capture_height"));
             ImGui::NextColumn();
             if (Spinner("##cap_h", &mirror.captureHeight, 1, 1)) {
                 g_configIsDirty = true;
-                UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
-                // Lock mutex before accessing g_mirrorInstances
-                std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex); // Write lock
-                auto it = g_mirrorInstances.find(mirror.name);
-                if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
+                syncMirrorCaptureSettings();
             }
             ImGui::NextColumn();
             ImGui::Columns(1);
@@ -368,11 +368,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
                     mirror.colors.targetColors[j].g = targetColorArr[1];
                     mirror.colors.targetColors[j].b = targetColorArr[2];
                     g_configIsDirty = true;
-                    UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                                mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
-                    std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-                    auto it = g_mirrorInstances.find(mirror.name);
-                    if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
+                    syncMirrorCaptureSettings();
                 }
 
                 if (mirror.colors.targetColors.size() > 1) {
@@ -386,11 +382,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
             if (target_color_to_remove != -1) {
                 mirror.colors.targetColors.erase(mirror.colors.targetColors.begin() + target_color_to_remove);
                 g_configIsDirty = true;
-                UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
-                std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-                auto it = g_mirrorInstances.find(mirror.name);
-                if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
+                syncMirrorCaptureSettings();
             }
 
             if (mirror.colors.targetColors.size() < 8) {
@@ -398,29 +390,17 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
                     Color newColor = { 0.0f, 1.0f, 0.0f };
                     mirror.colors.targetColors.push_back(newColor);
                     g_configIsDirty = true;
-                    UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                                mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
-                    std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-                    auto it = g_mirrorInstances.find(mirror.name);
-                    if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
+                    syncMirrorCaptureSettings();
                 }
             }
 
             if (ImGui::SliderFloat(trc("mirrors.color_sensitivity"), &mirror.colorSensitivity, 0.001f, 1.0f)) {
                 g_configIsDirty = true;
-                UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
-                std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-                auto it = g_mirrorInstances.find(mirror.name);
-                if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
+                syncMirrorCaptureSettings();
             }
             if (ImGui::Checkbox(trc("mirrors.color_passthrough"), &mirror.colorPassthrough)) {
                 g_configIsDirty = true;
-                UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
-                std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-                auto it = g_mirrorInstances.find(mirror.name);
-                if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
+                syncMirrorCaptureSettings();
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(trc("mirrors.tooltip.color_passthrough"));
@@ -432,7 +412,8 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
                 if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
             }
 
-            if (mirror.colorPassthrough) { ImGui::BeginDisabled(); }
+            const bool disableSolidOutputColor = mirror.colorPassthrough || mirror.rawOutput || mirror.gradientOutput;
+            if (disableSolidOutputColor) { ImGui::BeginDisabled(); }
             float outputColorArr[4] = { mirror.colors.output.r, mirror.colors.output.g, mirror.colors.output.b, mirror.colors.output.a };
             bool outputColorChangedByWidget = ImGui::ColorEdit4(trc("mirrors.output_color"), outputColorArr, ImGuiColorEditFlags_AlphaBar);
             bool outputColorChanged = outputColorChangedByWidget || outputColorArr[0] != mirror.colors.output.r ||
@@ -441,13 +422,98 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
             if (outputColorChanged) {
                 mirror.colors.output = { outputColorArr[0], outputColorArr[1], outputColorArr[2], outputColorArr[3] };
                 g_configIsDirty = true;
-                UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
-                std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-                auto it = g_mirrorInstances.find(mirror.name);
-                if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
+                syncMirrorCaptureSettings();
             }
-            if (mirror.colorPassthrough) { ImGui::EndDisabled(); }
+            if (disableSolidOutputColor) { ImGui::EndDisabled(); }
+
+            const bool disableGradientOutput = mirror.colorPassthrough || mirror.rawOutput;
+            if (disableGradientOutput) { ImGui::BeginDisabled(); }
+            if (ImGui::Checkbox(trc("mirrors.gradient_output"), &mirror.gradientOutput)) {
+                g_configIsDirty = true;
+                syncMirrorCaptureSettings();
+            }
+            if (disableGradientOutput) { ImGui::EndDisabled(); }
+
+            if (mirror.gradientOutput && !disableGradientOutput) {
+                ImGui::SetNextItemWidth(200.0f);
+                if (ImGui::SliderFloat((tr("modes.gradient_angle") + "##mirrorGradAngle").c_str(), &mirror.gradient.gradientAngle,
+                                       0.0f, 360.0f, "%.0f deg")) {
+                    g_configIsDirty = true;
+                    syncMirrorCaptureSettings();
+                }
+
+                ImGui::Text(trc("modes.color_stops"));
+                int gradientStopToRemove = -1;
+                for (size_t gradientIndex = 0; gradientIndex < mirror.gradient.gradientStops.size(); ++gradientIndex) {
+                    ImGui::PushID(static_cast<int>(gradientIndex) + 50000);
+                    auto& stop = mirror.gradient.gradientStops[gradientIndex];
+
+                    if (ImGui::ColorEdit3("##MirrorGradStopColor", &stop.color.r, ImGuiColorEditFlags_NoInputs)) {
+                        g_configIsDirty = true;
+                        syncMirrorCaptureSettings();
+                    }
+                    ImGui::SameLine();
+
+                    float pos = stop.position * 100.0f;
+                    ImGui::SetNextItemWidth(100.0f);
+                    if (ImGui::SliderFloat("##MirrorGradStopPos", &pos, 0.0f, 100.0f, "%.0f%%")) {
+                        stop.position = pos / 100.0f;
+                        g_configIsDirty = true;
+                        syncMirrorCaptureSettings();
+                    }
+
+                    if (mirror.gradient.gradientStops.size() > 2) {
+                        ImGui::SameLine();
+                        if (ImGui::Button("X##MirrorGradRemoveStop")) { gradientStopToRemove = static_cast<int>(gradientIndex); }
+                    }
+
+                    ImGui::PopID();
+                }
+
+                if (gradientStopToRemove >= 0) {
+                    mirror.gradient.gradientStops.erase(mirror.gradient.gradientStops.begin() + gradientStopToRemove);
+                    g_configIsDirty = true;
+                    syncMirrorCaptureSettings();
+                }
+
+                if (mirror.gradient.gradientStops.size() < 8) {
+                    if (ImGui::Button((tr("modes.gradient_add_color_stop") + "##mirrorGradient").c_str())) {
+                        GradientColorStop newStop;
+                        newStop.position = 0.5f;
+                        newStop.color = { 0.5f, 0.5f, 0.5f };
+                        mirror.gradient.gradientStops.push_back(newStop);
+                        std::sort(mirror.gradient.gradientStops.begin(), mirror.gradient.gradientStops.end(),
+                                  [](const GradientColorStop& left, const GradientColorStop& right) {
+                                      return left.position < right.position;
+                                  });
+                        g_configIsDirty = true;
+                        syncMirrorCaptureSettings();
+                    }
+                }
+
+                ImGui::Separator();
+                ImGui::Text(trc("modes.gradient_animation"));
+                const char* animTypeNames[] = { trc("modes.gradient_animation_none"), trc("modes.gradient_animation_rotate"),
+                                                trc("modes.gradient_animation_slide"), trc("modes.gradient_animation_wave"),
+                                                trc("modes.gradient_animation_spiral"), trc("modes.gradient_animation_fade") };
+                int currentAnimType = static_cast<int>(mirror.gradient.gradientAnimation);
+                ImGui::SetNextItemWidth(120.0f);
+                if (ImGui::Combo("Type##MirrorGradAnim", &currentAnimType, animTypeNames, IM_ARRAYSIZE(animTypeNames))) {
+                    mirror.gradient.gradientAnimation = static_cast<GradientAnimationType>(currentAnimType);
+                    g_configIsDirty = true;
+                    syncMirrorCaptureSettings();
+                }
+
+                if (mirror.gradient.gradientAnimation != GradientAnimationType::None) {
+                    ImGui::SetNextItemWidth(150.0f);
+                    if (ImGui::SliderFloat((tr("modes.gradient_animation_speed") + "##MirrorGradAnimSpeed").c_str(),
+                                           &mirror.gradient.gradientAnimationSpeed, 0.1f, 5.0f, "%.1fx")) {
+                        g_configIsDirty = true;
+                        syncMirrorCaptureSettings();
+                    }
+                }
+            }
+
             float borderColorArr[4] = { mirror.colors.border.r, mirror.colors.border.g, mirror.colors.border.b, mirror.colors.border.a };
             bool borderColorChangedByWidget = ImGui::ColorEdit4(trc("mirrors.border_color"), borderColorArr, ImGuiColorEditFlags_AlphaBar);
             bool borderColorChanged = borderColorChangedByWidget || borderColorArr[0] != mirror.colors.border.r ||
@@ -456,16 +522,11 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
             if (borderColorChanged) {
                 mirror.colors.border = { borderColorArr[0], borderColorArr[1], borderColorArr[2], borderColorArr[3] };
                 g_configIsDirty = true;
-                UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
-                std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-                auto it = g_mirrorInstances.find(mirror.name);
-                if (it != g_mirrorInstances.end()) it->second.forceUpdateFrames = 3;
+                syncMirrorCaptureSettings();
             }
             if (ImGui::Checkbox(trc("mirrors.raw_output"), &mirror.rawOutput)) {
                 g_configIsDirty = true;
-                UpdateMirrorCaptureSettings(mirror.name, mirror.captureWidth, mirror.captureHeight, mirror.border, mirror.colors,
-                                            mirror.colorSensitivity, mirror.rawOutput, mirror.colorPassthrough);
+                syncMirrorCaptureSettings();
                 // Lock mutex before accessing g_mirrorInstances
                 std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex); // Write lock
                 auto it = g_mirrorInstances.find(mirror.name);

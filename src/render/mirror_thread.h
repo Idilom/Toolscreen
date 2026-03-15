@@ -54,6 +54,8 @@ struct ThreadedMirrorConfig {
     int fps = 0;
     bool rawOutput = false;
     bool colorPassthrough = false;
+    bool gradientOutput = false;
+    GradientConfig gradient;
     std::vector<Color> targetColors;
     Color outputColor;
     Color borderColor;
@@ -98,7 +100,8 @@ void UpdateMirrorGroupOutputPosition(const std::vector<std::string>& mirrorIds, 
 void UpdateMirrorInputRegions(const std::string& mirrorName, const std::vector<MirrorCaptureConfig>& inputRegions);
 
 void UpdateMirrorCaptureSettings(const std::string& mirrorName, int captureWidth, int captureHeight, const MirrorBorderConfig& border,
-                                 const MirrorColors& colors, float colorSensitivity, bool rawOutput, bool colorPassthrough);
+                                 const MirrorColors& colors, float colorSensitivity, bool rawOutput, bool colorPassthrough,
+                                 bool gradientOutput, const GradientConfig& gradient);
 
 // Invalidate cached mirror textures/state for mirrors that are no longer active in the current mode.
 void InvalidateMirrorTextureCaches(const std::vector<std::string>& mirrorNames);
