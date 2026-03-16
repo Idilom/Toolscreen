@@ -444,8 +444,10 @@ struct KeyRebind {
     DWORD customOutputVK = 0;
     DWORD customOutputUnicode = 0;
     DWORD customOutputScanCode = 0;
+    bool baseOutputShifted = false;
     bool shiftLayerEnabled = false;
     DWORD shiftLayerOutputVK = 0;
+    DWORD shiftLayerOutputUnicode = 0;
     bool shiftLayerOutputShifted = false;
 };
 struct KeyRebindsConfig {
