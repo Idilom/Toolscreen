@@ -203,8 +203,16 @@ static bool HasShiftLayerOutputVk(const KeyRebind& rebind) {
     return rebind.shiftLayerEnabled && rebind.shiftLayerOutputVK != 0;
 }
 
+static bool HasShiftLayerOutputUnicode(const KeyRebind& rebind) {
+    return rebind.shiftLayerEnabled && rebind.shiftLayerOutputUnicode != 0;
+}
+
+static bool HasShiftLayerOutputOverride(const KeyRebind& rebind) {
+    return HasShiftLayerOutputVk(rebind) || HasShiftLayerOutputUnicode(rebind);
+}
+
 static bool IsShiftLayerActiveForRebind(const KeyRebind& rebind, DWORD incomingVk, DWORD incomingRawVk, bool isKeyDown) {
-    return HasShiftLayerOutputVk(rebind) && IsShiftDownForIncomingEvent(incomingVk, incomingRawVk, isKeyDown);
+    return HasShiftLayerOutputOverride(rebind) && IsShiftDownForIncomingEvent(incomingVk, incomingRawVk, isKeyDown);
 }
 
 static DWORD ResolveEffectiveCustomOutputVk(const KeyRebind& rebind, bool shiftLayerActive) {
@@ -1835,17 +1843,28 @@ static bool TryTranslateVkToCharWithKeyboardState(DWORD vkCode, const BYTE keybo
 }
 
 static bool ResolvePreferredOutputShiftState(const KeyRebind& rebind, bool shiftLayerActive, bool fallbackShifted) {
-    if (shiftLayerActive && HasShiftLayerOutputVk(rebind)) {
+    if (shiftLayerActive && HasShiftLayerOutputOverride(rebind)) {
         return rebind.shiftLayerOutputShifted;
+    }
+    if (rebind.baseOutputShifted) {
+        return true;
     }
     return fallbackShifted;
 }
 
 static void ApplyPreferredOutputShiftState(const KeyRebind& rebind, bool shiftLayerActive, BYTE keyboardState[256]) {
     if (!keyboardState) return;
-    if (!shiftLayerActive || !HasShiftLayerOutputVk(rebind)) return;
+    bool shouldOverrideShiftState = false;
+    BYTE shiftState = 0;
+    if (shiftLayerActive && HasShiftLayerOutputVk(rebind)) {
+        shouldOverrideShiftState = true;
+        shiftState = rebind.shiftLayerOutputShifted ? 0x80 : 0;
+    } else if (rebind.baseOutputShifted) {
+        shouldOverrideShiftState = true;
+        shiftState = 0x80;
+    }
+    if (!shouldOverrideShiftState) return;
 
-    const BYTE shiftState = rebind.shiftLayerOutputShifted ? 0x80 : 0;
     keyboardState[VK_SHIFT] = shiftState;
     keyboardState[VK_LSHIFT] = shiftState;
     keyboardState[VK_RSHIFT] = shiftState;
@@ -2325,9 +2344,11 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
                 if (isKeyDown && fromKeyIsNonCharMouse) {
                     const uint32_t configuredUnicodeText =
-                        (!shiftLayerActive && rebind.useCustomOutput && rebind.customOutputUnicode != 0)
-                            ? (uint32_t)rebind.customOutputUnicode
-                            : 0u;
+                        (shiftLayerActive && HasShiftLayerOutputUnicode(rebind))
+                            ? (uint32_t)rebind.shiftLayerOutputUnicode
+                            : ((!shiftLayerActive && rebind.useCustomOutput && rebind.customOutputUnicode != 0)
+                                   ? (uint32_t)rebind.customOutputUnicode
+                                   : 0u);
 
                     const UINT textScanCode = GetScanCodeWithExtendedFlag(textVK);
                     LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, false, 1, false, false);
@@ -2404,9 +2425,11 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
             auto emitTypedChar = [&](LPARAM charLParam) {
                 const uint32_t configuredUnicodeText =
-                    (!shiftLayerActive && rebind.useCustomOutput && rebind.customOutputUnicode != 0)
-                        ? (uint32_t)rebind.customOutputUnicode
-                        : 0u;
+                    (shiftLayerActive && HasShiftLayerOutputUnicode(rebind))
+                        ? (uint32_t)rebind.shiftLayerOutputUnicode
+                        : ((!shiftLayerActive && rebind.useCustomOutput && rebind.customOutputUnicode != 0)
+                               ? (uint32_t)rebind.customOutputUnicode
+                               : 0u);
 
                 if (configuredUnicodeText != 0) {
                     if (configuredUnicodeText <= 0xFFFFu) {
@@ -2559,14 +2582,17 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
         }
 
         if (matched) {
-            const bool shiftLayerActive = HasShiftLayerOutputVk(rebind) && matchedShifted;
+            const bool shiftLayerActive = HasShiftLayerOutputOverride(rebind) && matchedShifted;
             const bool preferShiftedText = ResolvePreferredOutputShiftState(rebind, shiftLayerActive, matchedShifted);
 
-            if (rebind.useCustomOutput && rebind.customOutputUnicode != 0) {
-                if (!shiftLayerActive) {
-                    LRESULT r = SendUnicodeScalarAsCharMessage(hWnd, uMsg, (uint32_t)rebind.customOutputUnicode, lParam);
-                    return { true, r };
-                }
+            if (shiftLayerActive && HasShiftLayerOutputUnicode(rebind)) {
+                LRESULT r = SendUnicodeScalarAsCharMessage(hWnd, uMsg, (uint32_t)rebind.shiftLayerOutputUnicode, lParam);
+                return { true, r };
+            }
+
+            if (!shiftLayerActive && rebind.useCustomOutput && rebind.customOutputUnicode != 0) {
+                LRESULT r = SendUnicodeScalarAsCharMessage(hWnd, uMsg, (uint32_t)rebind.customOutputUnicode, lParam);
+                return { true, r };
             }
 
             DWORD outputVK = ResolveEffectiveCustomOutputVk(rebind, shiftLayerActive);

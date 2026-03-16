@@ -172,13 +172,15 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
                 }
 
                 mirrorSettingsRowLabel(trc("mirrors.capture_width"));
-                if (Spinner("##cap_w", &mirror.captureWidth, 1, 1)) {
+                if (Spinner("##cap_w", &mirror.captureWidth, 1, ConfigDefaults::MIRROR_CAPTURE_MIN_DIMENSION,
+                            ConfigDefaults::MIRROR_CAPTURE_MAX_DIMENSION)) {
                     g_configIsDirty = true;
                     syncMirrorCaptureSettings();
                 }
 
                 mirrorSettingsRowLabel(trc("mirrors.capture_height"));
-                if (Spinner("##cap_h", &mirror.captureHeight, 1, 1)) {
+                if (Spinner("##cap_h", &mirror.captureHeight, 1, ConfigDefaults::MIRROR_CAPTURE_MIN_DIMENSION,
+                            ConfigDefaults::MIRROR_CAPTURE_MAX_DIMENSION)) {
                     g_configIsDirty = true;
                     syncMirrorCaptureSettings();
                 }

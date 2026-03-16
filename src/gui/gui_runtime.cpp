@@ -1,5 +1,6 @@
 #include "gui_internal.h"
 
+#include "common/i18n.h"
 #include "common/profiler.h"
 #include "common/utils.h"
 #include "imgui_cache.h"
@@ -12,6 +13,7 @@
 #include "third_party/stb_image.h"
 
 #include <GL/glew.h>
+#include <array>
 #include <algorithm>
 #include <chrono>
 
@@ -54,6 +56,45 @@ KeyboardLayoutFontRefreshState s_keyboardLayoutFontRefreshState;
 MainGuiFontRefreshState s_mainGuiFontRefreshState;
 MainGuiFontRefreshRequest s_pendingMainGuiFontRefresh;
 
+constexpr std::array<const char*, 5> kLocalizedFallbackFontPaths = {
+    "c:\\Windows\\Fonts\\msyh.ttc",
+    "c:\\Windows\\Fonts\\msyhbd.ttc",
+    "c:\\Windows\\Fonts\\Deng.ttf",
+    "c:\\Windows\\Fonts\\simhei.ttf",
+    "c:\\Windows\\Fonts\\simsun.ttc",
+};
+
+bool FontFileExists(const char* path) {
+    const DWORD attrs = GetFileAttributesA(path);
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+const ImWchar* GetGlyphRangesOrDefault(ImFontAtlas* atlas, const std::vector<ImWchar>& glyphRanges) {
+    if (!glyphRanges.empty()) {
+        return glyphRanges.data();
+    }
+    return atlas->GetGlyphRangesDefault();
+}
+
+void AddMergedLocalizedFallbackFont(ImFontAtlas* atlas, float size, const std::vector<ImWchar>& glyphRanges) {
+    ImFontConfig mergeCfg{};
+    mergeCfg.MergeMode = true;
+    mergeCfg.PixelSnapH = true;
+    mergeCfg.OversampleH = 2;
+    mergeCfg.OversampleV = 2;
+
+    const ImWchar* ranges = GetGlyphRangesOrDefault(atlas, glyphRanges);
+    for (const char* fallbackPath : kLocalizedFallbackFontPaths) {
+        if (!FontFileExists(fallbackPath)) {
+            continue;
+        }
+
+        if (atlas->AddFontFromFileTTF(fallbackPath, size, &mergeCfg, ranges) != nullptr) {
+            return;
+        }
+    }
+}
+
 }
 
 std::recursive_mutex& GetImGuiContextMutex() { return s_imguiContextMutex; }
@@ -74,10 +115,11 @@ static std::string ResolveGuiFontPath(float baseFontSize) {
     return usePath;
 }
 
-static ImFont* AddFontWithFallback(ImFontAtlas* atlas, const std::string& fontPath, float size, const ImFontConfig* config = nullptr) {
-    ImFont* font = atlas->AddFontFromFileTTF(fontPath.c_str(), size, config);
+static ImFont* AddFontWithFallback(ImFontAtlas* atlas, const std::string& fontPath, float size, const ImFontConfig* config = nullptr,
+                                   const ImWchar* glyphRanges = nullptr) {
+    ImFont* font = atlas->AddFontFromFileTTF(fontPath.c_str(), size, config, glyphRanges);
     if (!font && fontPath != ConfigDefaults::CONFIG_FONT_PATH) {
-        font = atlas->AddFontFromFileTTF(ConfigDefaults::CONFIG_FONT_PATH.c_str(), size, config);
+        font = atlas->AddFontFromFileTTF(ConfigDefaults::CONFIG_FONT_PATH.c_str(), size, config, glyphRanges);
     }
     return font;
 }
@@ -96,14 +138,17 @@ static void RebuildImGuiFontAtlas(float scaleFactor, float keyboardPrimarySize, 
 
     const float baseFontSize = 16.0f * scaleFactor;
     const std::string usePath = ResolveGuiFontPath(baseFontSize);
+    const std::vector<ImWchar> localizedGlyphRanges = BuildTranslationGlyphRanges();
+    const ImWchar* localizedRanges = GetGlyphRangesOrDefault(io.Fonts, localizedGlyphRanges);
 
     io.Fonts->Clear();
 
-    ImFont* baseFont = AddFontWithFallback(io.Fonts, usePath, baseFontSize);
+    ImFont* baseFont = AddFontWithFallback(io.Fonts, usePath, baseFontSize, nullptr, localizedRanges);
     if (!baseFont) {
         Log("GUI: Failed to load configured font, using ImGui default font");
         baseFont = io.Fonts->AddFontDefault();
     }
+    AddMergedLocalizedFallbackFont(io.Fonts, baseFontSize, localizedGlyphRanges);
     io.FontDefault = baseFont;
 
     ImFontConfig keyFontCfg{};

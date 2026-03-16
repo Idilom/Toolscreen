@@ -29,6 +29,8 @@ constexpr float MIRROR_RENDER_SCALE_X = 1.0f;
 constexpr float MIRROR_RENDER_SCALE_Y = 1.0f;
 inline const std::string MIRROR_RENDER_RELATIVE_TO = "topLeft";
 
+constexpr int MIRROR_CAPTURE_MIN_DIMENSION = 1;
+constexpr int MIRROR_CAPTURE_MAX_DIMENSION = 500;
 constexpr int MIRROR_CAPTURE_WIDTH = 50;
 constexpr int MIRROR_CAPTURE_HEIGHT = 50;
 constexpr float MIRROR_COLOR_SENSITIVITY = 0.001f;
@@ -160,8 +162,10 @@ constexpr bool KEY_REBIND_USE_CUSTOM_OUTPUT = false;
 constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_VK = 0;
 constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_UNICODE = 0;
 constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_SCANCODE = 0;
+constexpr bool KEY_REBIND_BASE_OUTPUT_SHIFTED = false;
 constexpr bool KEY_REBIND_SHIFT_LAYER_ENABLED = false;
 constexpr DWORD KEY_REBIND_SHIFT_LAYER_OUTPUT_VK = 0;
+constexpr DWORD KEY_REBIND_SHIFT_LAYER_OUTPUT_UNICODE = 0;
 constexpr bool KEY_REBIND_SHIFT_LAYER_OUTPUT_SHIFTED = false;
 
 constexpr bool KEY_REBINDS_ENABLED = false;

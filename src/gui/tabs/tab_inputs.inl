@@ -326,6 +326,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
 
                 enum class LayoutBindTarget {
                     None,
+                    FullOutputVk,
                     TypesVk,
                     TypesVkShift,
                     TriggersVk,
@@ -334,8 +335,15 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                 static int s_layoutBindIndex = -1;
                 static uint64_t s_layoutBindLastSeq = 0;
 
+                enum class LayoutUnicodeEditTarget {
+                    None,
+                    TypesBase,
+                    TypesShift,
+                };
+
                 static int s_layoutUnicodeEditIndex = -1;
                 static std::string s_layoutUnicodeEditText;
+                static LayoutUnicodeEditTarget s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::None;
 
                 static std::vector<std::string> s_rebindUnicodeTextEdit;
 
@@ -453,6 +461,8 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                 static bool s_keyboardLayoutOpen = false;
                 static float s_keyboardLayoutScale = 1.45f;
                 static bool s_layoutEscapeRequiresRelease = false;
+                static bool s_layoutContextSplitMode = false;
+                static bool s_layoutShiftUppercaseDefault = true;
                 static bool s_layoutContextPopupWasOpenLastFrame = false;
                 static bool s_keyboardLayoutWasOpenLastFrame = false;
                 static ImVec2 s_lastKeyboardLayoutWindowSize = ImVec2(-1.0f, -1.0f);
@@ -731,13 +741,16 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                     };
 
                     auto hasShiftLayerOverride = [&](const KeyRebind* rb, DWORD originalVk) -> bool {
-                        if (!rb || !rb->shiftLayerEnabled || rb->shiftLayerOutputVK == 0) return false;
+                        if (!rb || !rb->shiftLayerEnabled) return false;
+                        if (rb->shiftLayerOutputUnicode != 0) return true;
+                        if (rb->shiftLayerOutputVK == 0) return false;
                         if (rb->useCustomOutput && rb->customOutputUnicode != 0) return true;
 
                         DWORD baseTextVk = (rb->useCustomOutput && rb->customOutputVK != 0) ? rb->customOutputVK : originalVk;
                         if (baseTextVk == 0) baseTextVk = originalVk;
                         if (rb->shiftLayerOutputVK != baseTextVk) return true;
-                        return !rb->shiftLayerOutputShifted;
+                        // Keep explicit Shift-layer settings visible/configured even when VK matches base output.
+                        return true;
                     };
 
                     auto resolveTypesVkFor = [&](const KeyRebind* rb, DWORD originalVk, bool useShiftLayer) -> DWORD {
@@ -802,6 +815,9 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                     auto typesShiftValueForDisplay = [&](const KeyRebind* rb, DWORD originalVk) -> std::string {
                         if (!rb) return VkToString(originalVk);
                         if (!hasShiftLayerOverride(rb, originalVk)) return typesValueForDisplay(rb, originalVk);
+                        if (rb->shiftLayerEnabled && rb->shiftLayerOutputUnicode != 0) {
+                            return codepointToDisplay((uint32_t)rb->shiftLayerOutputUnicode);
+                        }
 
                         DWORD textVk = resolveTypesVkFor(rb, originalVk, true);
                         return normalizeMouseButtonLabel(VkToString(textVk));
@@ -913,6 +929,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             if (rb->customOutputVK != 0 && rb->customOutputVK != rb->toKey) return false;
                             if (rb->customOutputUnicode != 0) return false;
                             if (rb->customOutputScanCode != 0) return false;
+                            if (rb->baseOutputShifted) return false;
                             if (hasShiftLayerOverride(rb, vk)) return false;
                             return true;
                         }();
@@ -1029,20 +1046,133 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             labelSz = fittedPrimary.second;
                         }
 
-                        if (showShiftLayerText) {
-                            const ImU32 shiftCol = (rb && !rb->enabled) ? IM_COL32(255, 220, 170, 215) : IM_COL32(220, 238, 255, 220);
-                            float shiftX = snapPxText(textMinX);
-                            const float shiftMaxX = textMaxX - shiftLayerSz.x;
-                            if (shiftMaxX >= textMinX && shiftX > shiftMaxX) shiftX = snapPxText(shiftMaxX);
+                        const ImU32 shiftCol = (rb && !rb->enabled) ? IM_COL32(255, 220, 170, 215) : IM_COL32(220, 238, 255, 220);
+                        const ImU32 infoCol = (rb && !rb->enabled) ? IM_COL32(255, 220, 170, 235) : IM_COL32(245, 245, 245, 235);
 
-                            float shiftY = snapPxText(kMin.y + padY - 1.0f * keyboardScale);
-                            const float shiftMaxY = kMax.y - padY - shiftLayerSz.y;
-                            if (shiftMaxY >= kMin.y + padY && shiftY > shiftMaxY) shiftY = snapPxText(shiftMaxY);
+                        if (showShiftLayerText && showSecondaryText) {
+                            ImFont* fTopShift = fLabel;
+                            const float topRowBoost = 1.12f;
+                            const float pairTopPadY = snapPxText((padY * 0.40f) - (0.5f * keyboardScale));
+                            const float pairBottomPadY = snapPxText(padY * 0.55f);
+                            const float pairTextAvailH = size.y - pairTopPadY - pairBottomPadY;
 
-                            dl->AddText(fSecondary, shiftLayerFs, ImVec2(shiftX, shiftY), shiftCol, shiftLayerText.c_str());
-                        }
+                            float primaryFs = snapFontSize(fLabel->LegacySize * layoutTextBoost * topRowBoost);
+                            ImVec2 primarySz = fLabel->CalcTextSizeA(primaryFs, FLT_MAX, 0.0f, primaryText.c_str());
 
-                        if (!showRebindInfo || !showSecondaryText) {
+                            float shiftFs = primaryFs;
+                            ImVec2 shiftSz = fTopShift->CalcTextSizeA(shiftFs, FLT_MAX, 0.0f, shiftLayerText.c_str());
+
+                            float secondaryFs = snapFontSize(fSecondary->LegacySize * layoutTextBoost);
+                            ImVec2 secondarySz = fSecondary->CalcTextSizeA(secondaryFs, FLT_MAX, 0.0f, secondaryText.c_str());
+                            if (textAvailW > 8.0f) {
+                                const auto fittedSecondary =
+                                    fitTextToWidth(fSecondary, secondaryFs, secondaryText, textAvailW, 6.0f);
+                                secondaryFs = fittedSecondary.first;
+                                secondarySz = fittedSecondary.second;
+                            }
+
+                            float topGapX = snapPxText(2.0f * keyboardScale);
+                            if (topGapX < 1.0f) topGapX = 1.0f;
+
+                            auto fitTopPair = [&]() {
+                                float combinedW = shiftSz.x + topGapX + primarySz.x;
+                                if (textAvailW > 8.0f && combinedW > textAvailW) {
+                                    float fit = textAvailW / (combinedW + 0.001f);
+                                    if (fit < 1.0f) {
+                                        shiftFs = (shiftFs * fit < 6.0f) ? 6.0f : shiftFs * fit;
+                                        primaryFs = (primaryFs * fit < 6.0f) ? 6.0f : primaryFs * fit;
+                                        shiftSz = fTopShift->CalcTextSizeA(shiftFs, FLT_MAX, 0.0f, shiftLayerText.c_str());
+                                        primarySz = fLabel->CalcTextSizeA(primaryFs, FLT_MAX, 0.0f, primaryText.c_str());
+                                        combinedW = shiftSz.x + topGapX + primarySz.x;
+                                    }
+
+                                    if (combinedW > textAvailW) {
+                                        const float pairAvailW = textAvailW - topGapX;
+                                        if (pairAvailW > 8.0f) {
+                                            const float shiftRatio = shiftSz.x / (shiftSz.x + primarySz.x + 0.001f);
+                                            float shiftAvailW = pairAvailW * shiftRatio;
+                                            float primaryAvailW = pairAvailW - shiftAvailW;
+                                            if (shiftAvailW < 4.0f) shiftAvailW = 4.0f;
+                                            if (primaryAvailW < 4.0f) primaryAvailW = 4.0f;
+
+                                            const auto fittedShift =
+                                                fitTextToWidth(fTopShift, shiftFs, shiftLayerText, shiftAvailW, 6.0f);
+                                            shiftFs = fittedShift.first;
+                                            shiftSz = fittedShift.second;
+
+                                            const auto fittedPrimary =
+                                                fitTextToWidth(fLabel, primaryFs, primaryText, primaryAvailW, 6.0f);
+                                            primaryFs = fittedPrimary.first;
+                                            primarySz = fittedPrimary.second;
+                                        }
+                                    }
+                                }
+                            };
+
+                            fitTopPair();
+
+                            float lineGap = snapPxText(1.0f * keyboardScale);
+                            if (lineGap < 1.0f) lineGap = 1.0f;
+
+                            float topRowH = (shiftSz.y > primarySz.y) ? shiftSz.y : primarySz.y;
+                            float totalH = topRowH + lineGap + secondarySz.y;
+                            if (pairTextAvailH > 0.0f && totalH > pairTextAvailH) {
+                                const float fit = pairTextAvailH / (totalH + 0.001f);
+                                if (fit < 1.0f) {
+                                    shiftFs = (shiftFs * fit < 6.0f) ? 6.0f : shiftFs * fit;
+                                    primaryFs = (primaryFs * fit < 6.0f) ? 6.0f : primaryFs * fit;
+                                    secondaryFs = (secondaryFs * fit < 6.0f) ? 6.0f : secondaryFs * fit;
+
+                                    shiftSz = fTopShift->CalcTextSizeA(shiftFs, FLT_MAX, 0.0f, shiftLayerText.c_str());
+                                    primarySz = fLabel->CalcTextSizeA(primaryFs, FLT_MAX, 0.0f, primaryText.c_str());
+                                    if (textAvailW > 8.0f) {
+                                        const auto fittedSecondary =
+                                            fitTextToWidth(fSecondary, secondaryFs, secondaryText, textAvailW, 6.0f);
+                                        secondaryFs = fittedSecondary.first;
+                                        secondarySz = fittedSecondary.second;
+                                    } else {
+                                        secondarySz = fSecondary->CalcTextSizeA(secondaryFs, FLT_MAX, 0.0f, secondaryText.c_str());
+                                    }
+
+                                    fitTopPair();
+                                    topRowH = (shiftSz.y > primarySz.y) ? shiftSz.y : primarySz.y;
+                                    totalH = topRowH + lineGap + secondarySz.y;
+                                }
+                            }
+
+                            const float combinedTopW = shiftSz.x + topGapX + primarySz.x;
+                            float topY = snapPxText(kMin.y + pairTopPadY);
+                            float secondaryY = snapPxText(kMax.y - pairBottomPadY - secondarySz.y);
+                            if (secondaryY < topY + topRowH + lineGap) {
+                                float startY = snapPxText(kMin.y + pairTopPadY + (pairTextAvailH - totalH) * 0.5f);
+                                if (startY < kMin.y + pairTopPadY) startY = snapPxText(kMin.y + pairTopPadY);
+                                topY = startY;
+                                secondaryY = snapPxText(topY + topRowH + lineGap);
+                            }
+
+                            const float pairStartX = centerTextXWithin(textMinX, textMaxX, combinedTopW);
+                            const float shiftX = pairStartX;
+                            const float primaryX = snapPxText(shiftX + shiftSz.x + topGapX);
+                            const float shiftY = snapPxText(topY + (topRowH - shiftSz.y) * 0.5f);
+                            const float primaryY = snapPxText(topY + (topRowH - primarySz.y) * 0.5f);
+                            const float secondaryX = centerTextXWithin(textMinX, textMaxX, secondarySz.x);
+
+                            dl->AddText(fTopShift, shiftFs, ImVec2(shiftX, shiftY), shiftCol, shiftLayerText.c_str());
+                            dl->AddText(fLabel, primaryFs, ImVec2(primaryX, primaryY), theme.text, primaryText.c_str());
+                            dl->AddText(fSecondary, secondaryFs, ImVec2(secondaryX, secondaryY), infoCol, secondaryText.c_str());
+                        } else if (!showRebindInfo || !showSecondaryText) {
+                            if (showShiftLayerText) {
+                                float shiftX = snapPxText(textMinX);
+                                const float shiftMaxX = textMaxX - shiftLayerSz.x;
+                                if (shiftMaxX >= textMinX && shiftX > shiftMaxX) shiftX = snapPxText(shiftMaxX);
+
+                                float shiftY = snapPxText(kMin.y + padY - 1.0f * keyboardScale);
+                                const float shiftMaxY = kMax.y - padY - shiftLayerSz.y;
+                                if (shiftMaxY >= kMin.y + padY && shiftY > shiftMaxY) shiftY = snapPxText(shiftMaxY);
+
+                                dl->AddText(fSecondary, shiftLayerFs, ImVec2(shiftX, shiftY), shiftCol, shiftLayerText.c_str());
+                            }
+
                             const float maxByHeight = bodyTextAvailH * 0.98f;
                             if (maxByHeight > 0.0f && labelFontSize > maxByHeight) {
                                 labelFontSize = maxByHeight;
@@ -1113,7 +1243,6 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             float y2 = snapPxText(startY + primarySz.y + lineGap);
                             float x2 = centerTextXWithin(bodyTextMinX, textMaxX, secondarySz.x);
 
-                            const ImU32 infoCol = (rb && !rb->enabled) ? IM_COL32(255, 220, 170, 235) : IM_COL32(245, 245, 245, 235);
                             dl->AddText(fSecondary, secondaryFs, ImVec2(x2, y2), infoCol, secondaryText.c_str());
                         }
 
@@ -1424,9 +1553,13 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                     }
 
                     ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);
+                    ImGui::SetNextWindowSizeConstraints(ImVec2(420.0f, 0.0f), ImVec2(640.0f, FLT_MAX));
                     if (ImGui::BeginPopup(trc("inputs.rebind_config"))) {
                         // Also block global ESC-to-close-GUI while editing inside this popup.
                         MarkRebindBindingActive();
+                        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 4.0f));
+                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(7.0f, 6.0f));
+                        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 3.0f));
 
                         const bool nestedLayoutPopupOpen = ImGui::IsPopupOpen(trc("inputs.triggers_custom")) || ImGui::IsPopupOpen(trc("inputs.custom_unicode"));
                         if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !nestedLayoutPopupOpen) {
@@ -1435,6 +1568,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             s_layoutBindTarget = LayoutBindTarget::None;
                             s_layoutBindIndex = -1;
                             s_layoutUnicodeEditIndex = -1;
+                            s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::None;
                             s_layoutUnicodeEditText.clear();
                             ImGui::CloseCurrentPopup();
                         }
@@ -1447,6 +1581,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             if (r.customOutputVK != 0 && r.customOutputVK != r.toKey) return false;
                             if (r.customOutputUnicode != 0) return false;
                             if (r.customOutputScanCode != 0) return false;
+                            if (r.baseOutputShifted) return false;
                             if (hasShiftLayerOverride(&r, originalVk)) return false;
                             return true;
                         };
@@ -1539,36 +1674,255 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             return scanCodeToDisplayName(displayScan, triggerVk);
                         };
 
+                        auto syncCustomOutputState = [&](KeyRebind& r) {
+                            r.useCustomOutput = (r.customOutputVK != 0) || (r.customOutputUnicode != 0) || (r.customOutputScanCode != 0);
+                        };
+
+                        auto clearBaseTypesOverrideIfDefault = [&](KeyRebind& r, DWORD originalVk) {
+                            if (r.customOutputUnicode == 0 && r.customOutputVK == originalVk && !r.baseOutputShifted) {
+                                r.customOutputVK = 0;
+                            }
+                            syncCustomOutputState(r);
+                        };
+
+                        auto clearShiftLayerOverrideIfDefault = [&](KeyRebind& r, DWORD originalVk) {
+                            if (!r.shiftLayerEnabled) {
+                                r.shiftLayerOutputVK = 0;
+                                r.shiftLayerOutputUnicode = 0;
+                                r.shiftLayerOutputShifted = false;
+                                return;
+                            }
+
+                            if (r.shiftLayerOutputUnicode != 0) {
+                                if (r.shiftLayerOutputVK == 0) {
+                                    r.shiftLayerOutputVK = resolveTypesVkFor(&r, originalVk, false);
+                                }
+                                return;
+                            }
+
+                            const DWORD baseTypesVk = resolveTypesVkFor(&r, originalVk, false);
+                            if (r.shiftLayerOutputVK == 0) {
+                                r.shiftLayerOutputVK = baseTypesVk;
+                            }
+                        };
+
+                        auto setFullRebindState = [&](KeyRebind& r, DWORD originalVk) {
+                            DWORD unifiedVk = resolveTriggerVkFor(&r, originalVk);
+                            if (unifiedVk == 0) unifiedVk = originalVk;
+
+                            r.toKey = unifiedVk;
+                            r.customOutputUnicode = 0;
+                            r.baseOutputShifted = false;
+                            r.shiftLayerEnabled = false;
+                            r.shiftLayerOutputVK = 0;
+                            r.shiftLayerOutputUnicode = 0;
+                            r.shiftLayerOutputShifted = false;
+                            r.customOutputVK = unifiedVk;
+                            clearBaseTypesOverrideIfDefault(r, originalVk);
+                        };
+
+                        auto isSplitRebindUiMode = [&](const KeyRebind* rb, DWORD originalVk) -> bool {
+                            if (!rb) return false;
+                            if (rb->customOutputUnicode != 0) return true;
+                            if (rb->shiftLayerOutputUnicode != 0) return true;
+                            if (rb->baseOutputShifted) return true;
+                            if (hasShiftLayerOverride(rb, originalVk)) return true;
+                            return resolveTypesVkFor(rb, originalVk, false) != resolveTriggerVkFor(rb, originalVk);
+                        };
+
                         static std::vector<std::pair<DWORD, std::string>> s_knownScanCodes;
                         static bool s_knownScanCodesBuilt = false;
                         if (!s_knownScanCodesBuilt) {
-                            std::vector<std::pair<DWORD, std::string>> tmp;
-                            tmp.reserve(300);
-                            for (DWORD vk = 1; vk <= 255; ++vk) {
-                                DWORD scan = getScanCodeWithExtendedFlag(vk);
-                                if (scan == 0) continue;
-
-                                tmp.emplace_back(scan, VkToString(vk));
-                            }
-
-                            std::sort(tmp.begin(), tmp.end(), [](const auto& a, const auto& b) {
-                                if (a.first == b.first) return a.second < b.second;
-                                return a.first < b.first;
-                            });
+                            struct ScanMenuEntry {
+                                DWORD scan = 0;
+                                std::string name;
+                                std::string sortName;
+                                int group = 0;
+                                int order = 0;
+                            };
 
                             s_knownScanCodes.clear();
-                            s_knownScanCodes.reserve(tmp.size());
-                            DWORD lastScan = 0xFFFFFFFFu;
-                            for (const auto& it : tmp) {
-                                if (it.first == lastScan) continue;
-                                s_knownScanCodes.push_back(it);
-                                lastScan = it.first;
+                            s_knownScanCodes.reserve(0x1FE);
+                            std::vector<ScanMenuEntry> entries;
+                            entries.reserve(0x1FE);
+
+                            auto toUpperAscii = [](std::string s) -> std::string {
+                                for (char& ch : s) {
+                                    if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
+                                }
+                                return s;
+                            };
+
+                            auto navOrderForVk = [](DWORD vk) -> int {
+                                switch (vk) {
+                                case VK_INSERT: return 0;
+                                case VK_HOME: return 1;
+                                case VK_PRIOR: return 2;
+                                case VK_DELETE: return 3;
+                                case VK_END: return 4;
+                                case VK_NEXT: return 5;
+                                case VK_UP: return 6;
+                                case VK_LEFT: return 7;
+                                case VK_DOWN: return 8;
+                                case VK_RIGHT: return 9;
+                                case VK_SNAPSHOT: return 10;
+                                case VK_SCROLL: return 11;
+                                case VK_PAUSE: return 12;
+                                default: return 1000 + (int)vk;
+                                }
+                            };
+
+                            auto numpadOrderFor = [](DWORD vk, DWORD scan) -> int {
+                                switch (vk) {
+                                case VK_NUMLOCK: return 0;
+                                case VK_DIVIDE: return 1;
+                                case VK_MULTIPLY: return 2;
+                                case VK_SUBTRACT: return 3;
+                                case VK_NUMPAD7: return 4;
+                                case VK_NUMPAD8: return 5;
+                                case VK_NUMPAD9: return 6;
+                                case VK_ADD: return 7;
+                                case VK_NUMPAD4: return 8;
+                                case VK_NUMPAD5: return 9;
+                                case VK_NUMPAD6: return 10;
+                                case VK_NUMPAD1: return 11;
+                                case VK_NUMPAD2: return 12;
+                                case VK_NUMPAD3: return 13;
+                                case VK_RETURN: return ((scan & 0xFF00) != 0) ? 14 : 1000;
+                                case VK_NUMPAD0: return 15;
+                                case VK_DECIMAL: return 16;
+                                default: return 1000 + (int)vk;
+                                }
+                            };
+
+                            auto modifierOrderForVk = [](DWORD vk) -> int {
+                                switch (vk) {
+                                case VK_ESCAPE: return 0;
+                                case VK_TAB: return 1;
+                                case VK_CAPITAL: return 2;
+                                case VK_SHIFT:
+                                case VK_LSHIFT:
+                                case VK_RSHIFT:
+                                    return 3;
+                                case VK_CONTROL:
+                                case VK_LCONTROL:
+                                case VK_RCONTROL:
+                                    return 4;
+                                case VK_MENU:
+                                case VK_LMENU:
+                                case VK_RMENU:
+                                    return 5;
+                                case VK_LWIN:
+                                case VK_RWIN:
+                                    return 6;
+                                case VK_SPACE: return 7;
+                                case VK_RETURN: return 8;
+                                case VK_BACK: return 9;
+                                case VK_APPS: return 10;
+                                default: return 1000 + (int)vk;
+                                }
+                            };
+
+                            auto classifyGroupOrder = [&](DWORD scan, DWORD vk) -> std::pair<int, int> {
+                                if (vk >= 'A' && vk <= 'Z') {
+                                    return { 0, (int)(vk - 'A') };
+                                }
+                                if (vk >= '0' && vk <= '9') {
+                                    return { 1, (int)(vk - '0') };
+                                }
+                                if (vk >= VK_F1 && vk <= VK_F24) {
+                                    return { 2, (int)(vk - VK_F1) };
+                                }
+
+                                switch (vk) {
+                                case VK_INSERT:
+                                case VK_HOME:
+                                case VK_PRIOR:
+                                case VK_DELETE:
+                                case VK_END:
+                                case VK_NEXT:
+                                case VK_UP:
+                                case VK_LEFT:
+                                case VK_DOWN:
+                                case VK_RIGHT:
+                                case VK_SNAPSHOT:
+                                case VK_SCROLL:
+                                case VK_PAUSE:
+                                    return { 3, navOrderForVk(vk) };
+                                default:
+                                    break;
+                                }
+
+                                const bool isNumpad =
+                                    (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) || vk == VK_NUMLOCK || vk == VK_DIVIDE ||
+                                    vk == VK_MULTIPLY || vk == VK_SUBTRACT || vk == VK_ADD || vk == VK_DECIMAL ||
+                                    (vk == VK_RETURN && ((scan & 0xFF00) != 0));
+                                if (isNumpad) {
+                                    return { 4, numpadOrderFor(vk, scan) };
+                                }
+
+                                switch (vk) {
+                                case VK_ESCAPE:
+                                case VK_TAB:
+                                case VK_CAPITAL:
+                                case VK_SHIFT:
+                                case VK_LSHIFT:
+                                case VK_RSHIFT:
+                                case VK_CONTROL:
+                                case VK_LCONTROL:
+                                case VK_RCONTROL:
+                                case VK_MENU:
+                                case VK_LMENU:
+                                case VK_RMENU:
+                                case VK_LWIN:
+                                case VK_RWIN:
+                                case VK_SPACE:
+                                case VK_RETURN:
+                                case VK_BACK:
+                                case VK_APPS:
+                                    return { 5, modifierOrderForVk(vk) };
+                                default:
+                                    break;
+                                }
+
+                                if (vk == 0) {
+                                    return { 7, (int)scan };
+                                }
+
+                                return { 6, (int)vk };
+                            };
+
+                            auto appendScan = [&](DWORD scan) {
+                                DWORD vkFromScan = MapVirtualKey(scan, MAPVK_VSC_TO_VK_EX);
+                                std::string name = scanCodeToDisplayName(scan, vkFromScan);
+                                const auto [group, order] = classifyGroupOrder(scan, vkFromScan);
+                                ScanMenuEntry e;
+                                e.scan = scan;
+                                e.name = name;
+                                e.sortName = toUpperAscii(name);
+                                e.group = group;
+                                e.order = order;
+                                entries.push_back(std::move(e));
+                            };
+
+                            for (DWORD low = 1; low <= 0xFF; ++low) {
+                                appendScan(low);
                             }
 
-                            std::sort(s_knownScanCodes.begin(), s_knownScanCodes.end(), [](const auto& a, const auto& b) {
-                                if (a.first == b.first) return a.second < b.second;
-                                return a.first < b.first;
+                            for (DWORD low = 1; low <= 0xFF; ++low) {
+                                appendScan(0xE000 | low);
+                            }
+
+                            std::sort(entries.begin(), entries.end(), [](const ScanMenuEntry& a, const ScanMenuEntry& b) {
+                                if (a.group != b.group) return a.group < b.group;
+                                if (a.order != b.order) return a.order < b.order;
+                                if (a.sortName != b.sortName) return a.sortName < b.sortName;
+                                return a.scan < b.scan;
                             });
+
+                            for (const auto& e : entries) {
+                                s_knownScanCodes.emplace_back(e.scan, e.name);
+                            }
 
                             s_knownScanCodesBuilt = true;
                         }
@@ -1608,7 +1962,23 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                     }
                                 } else {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutBindIndex];
-                                    if (s_layoutBindTarget == LayoutBindTarget::TypesVk) {
+                                    if (s_layoutBindTarget == LayoutBindTarget::FullOutputVk) {
+                                        r.toKey = capturedVk;
+                                        r.customOutputUnicode = 0;
+                                        r.customOutputScanCode = 0;
+                                        r.baseOutputShifted = false;
+                                        r.shiftLayerEnabled = false;
+                                        r.shiftLayerOutputVK = 0;
+                                        r.shiftLayerOutputUnicode = 0;
+                                        r.shiftLayerOutputShifted = false;
+                                        r.customOutputVK = capturedVk;
+                                        if (s_layoutBindIndex >= 0 && s_layoutBindIndex < (int)s_rebindUnicodeTextEdit.size()) {
+                                            s_rebindUnicodeTextEdit[s_layoutBindIndex].clear();
+                                        }
+
+                                        clearBaseTypesOverrideIfDefault(r, r.fromKey);
+                                        g_configIsDirty = true;
+                                    } else if (s_layoutBindTarget == LayoutBindTarget::TypesVk) {
                                         r.useCustomOutput = true;
                                         r.customOutputVK = capturedVk;
                                         r.customOutputUnicode = 0;
@@ -1616,22 +1986,32 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                             s_rebindUnicodeTextEdit[s_layoutBindIndex].clear();
                                         }
 
-                                        if (r.customOutputVK == r.fromKey) {
-                                            r.customOutputVK = 0;
-                                            if (r.customOutputScanCode == 0 && r.customOutputUnicode == 0) r.useCustomOutput = false;
-                                        }
+                                        clearBaseTypesOverrideIfDefault(r, r.fromKey);
                                         g_configIsDirty = true;
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TypesVkShift) {
                                         r.shiftLayerEnabled = true;
-                                        r.shiftLayerOutputVK = capturedVk;
-
-                                        const DWORD baseTypesVk = resolveTypesVkFor(&r, r.fromKey, false);
-                                        if (r.shiftLayerOutputVK == baseTypesVk && r.shiftLayerOutputShifted) {
-                                            r.shiftLayerOutputVK = 0;
+                                        if (r.shiftLayerOutputVK == 0 && r.shiftLayerOutputUnicode == 0) {
+                                            r.shiftLayerOutputShifted = s_layoutShiftUppercaseDefault;
                                         }
+                                        r.shiftLayerOutputVK = capturedVk;
+                                        r.shiftLayerOutputUnicode = 0;
+
+                                        clearShiftLayerOverrideIfDefault(r, r.fromKey);
                                         g_configIsDirty = true;
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TriggersVk) {
                                         r.toKey = capturedVk;
+
+                                        if (!s_layoutContextSplitMode) {
+                                            r.customOutputUnicode = 0;
+                                            r.customOutputScanCode = 0;
+                                            r.baseOutputShifted = false;
+                                            r.shiftLayerEnabled = false;
+                                            r.shiftLayerOutputVK = 0;
+                                            r.shiftLayerOutputUnicode = 0;
+                                            r.shiftLayerOutputShifted = false;
+                                            r.customOutputVK = capturedVk;
+                                            clearBaseTypesOverrideIfDefault(r, r.fromKey);
+                                        }
                                         g_configIsDirty = true;
                                     }
 
@@ -1661,6 +2041,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                 s_layoutEscapeRequiresRelease = true;
                                 layoutEscapeConsumedThisFrame = true;
                                 s_layoutUnicodeEditIndex = -1;
+                                s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::None;
                                 s_layoutUnicodeEditText.clear();
                                 ImGui::CloseCurrentPopup();
                             }
@@ -1675,22 +2056,45 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             if (ImGui::Button(trc("button.apply"), ImVec2(120, 0)) && canApply) {
                                 if (s_layoutUnicodeEditIndex >= 0 && s_layoutUnicodeEditIndex < (int)g_config.keyRebinds.rebinds.size()) {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutUnicodeEditIndex];
-                                    if (s_layoutUnicodeEditText.empty()) {
-                                        r.customOutputUnicode = 0;
-                                        if (r.customOutputVK == 0 && r.customOutputScanCode == 0) r.useCustomOutput = false;
-                                        g_configIsDirty = true;
-                                    } else {
-                                        uint32_t cp = 0;
-                                        if (tryParseUnicodeInput(s_layoutUnicodeEditText, cp)) {
-                                            r.useCustomOutput = true;
-                                            r.customOutputUnicode = (DWORD)cp;
+                                    if (s_layoutUnicodeEditTarget == LayoutUnicodeEditTarget::TypesShift) {
+                                        const bool hadShiftOutput = (r.shiftLayerOutputVK != 0) || (r.shiftLayerOutputUnicode != 0);
+                                        r.shiftLayerEnabled = true;
+                                        if (r.shiftLayerOutputVK == 0) {
+                                            r.shiftLayerOutputVK = resolveTypesVkFor(&r, r.fromKey, false);
+                                        }
+                                        if (!hadShiftOutput) {
+                                            r.shiftLayerOutputShifted = s_layoutShiftUppercaseDefault;
+                                        }
+                                        if (s_layoutUnicodeEditText.empty()) {
+                                            r.shiftLayerOutputUnicode = 0;
+                                            clearShiftLayerOverrideIfDefault(r, r.fromKey);
                                             g_configIsDirty = true;
+                                        } else {
+                                            uint32_t cp = 0;
+                                            if (tryParseUnicodeInput(s_layoutUnicodeEditText, cp)) {
+                                                r.shiftLayerOutputUnicode = (DWORD)cp;
+                                                g_configIsDirty = true;
+                                            }
+                                        }
+                                    } else {
+                                        if (s_layoutUnicodeEditText.empty()) {
+                                            r.customOutputUnicode = 0;
+                                            if (r.customOutputVK == 0 && r.customOutputScanCode == 0) r.useCustomOutput = false;
+                                            g_configIsDirty = true;
+                                        } else {
+                                            uint32_t cp = 0;
+                                            if (tryParseUnicodeInput(s_layoutUnicodeEditText, cp)) {
+                                                r.useCustomOutput = true;
+                                                r.customOutputUnicode = (DWORD)cp;
+                                                g_configIsDirty = true;
+                                            }
                                         }
                                     }
 
                                     if (isNoOpRebindForKey(r, r.fromKey)) {
                                         int eraseIdx = s_layoutUnicodeEditIndex;
                                         s_layoutUnicodeEditIndex = -1;
+                                        s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::None;
                                         s_layoutUnicodeEditText.clear();
                                         ImGui::CloseCurrentPopup();
                                         eraseRebindIndex(eraseIdx);
@@ -1698,6 +2102,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                 }
 
                                 s_layoutUnicodeEditIndex = -1;
+                                s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::None;
                                 s_layoutUnicodeEditText.clear();
                                 ImGui::CloseCurrentPopup();
                             }
@@ -1712,6 +2117,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                     }
                                 }
                                 s_layoutUnicodeEditIndex = -1;
+                                s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::None;
                                 s_layoutUnicodeEditText.clear();
                                 ImGui::CloseCurrentPopup();
                             }
@@ -1719,48 +2125,25 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                         }
 
                         KeyRebind* rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
+                        if (ImGui::IsWindowAppearing()) {
+                            s_layoutContextSplitMode = isSplitRebindUiMode(rbPtr, s_layoutContextVk);
+                        }
+
+                        const float bindButtonW = 132.0f;
+                        const float auxButtonW = 82.0f;
+                        const float labelColumnW = 142.0f;
+                        const float popupInlineGap = 6.0f;
+                        bool openTriggersCustomPopup = false;
+                        ImVec2 triggersCustomPopupAnchor = ImVec2(0.0f, 0.0f);
                         const std::string typesValue = typesValueFor(rbPtr, s_layoutContextVk);
+                        const std::string typesShiftValue = typesShiftValueFor(rbPtr, s_layoutContextVk);
                         const std::string triggersValue = triggersValueFor(rbPtr, s_layoutContextVk);
 
-                        // Wider so key names like "RSHIFT" / "NUMLOCK" fit without truncation.
-                        const float vBtnW = 138.0f;
-
-                        ImGui::TextUnformatted(trc("inputs.types_label"));
-                        ImGui::SameLine();
-                        {
-                            std::string label = (s_layoutBindTarget == LayoutBindTarget::TypesVk) ? std::string(trc("hotkeys.press_keys")) : typesValue;
-                            if (ImGui::Button((label + "##types").c_str(), ImVec2(vBtnW, 0))) {
-                                idx = createRebindForKeyIfMissing(s_layoutContextVk);
-                                s_layoutContextPreferredIndex = idx;
-                                if (idx >= 0) {
-                                    s_layoutBindTarget = LayoutBindTarget::TypesVk;
-                                    s_layoutBindIndex = idx;
-                                    s_layoutBindLastSeq = GetLatestBindingInputSequence();
-                                    MarkRebindBindingActive();
-                                }
-                            }
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button((tr("label.custom") + "##types_custom").c_str(), ImVec2(112, 0))) {
-                            idx = createRebindForKeyIfMissing(s_layoutContextVk);
-                            s_layoutContextPreferredIndex = idx;
-                            if (idx >= 0) {
-                                s_layoutUnicodeEditIndex = idx;
-                                const auto& r = g_config.keyRebinds.rebinds[idx];
-                                s_layoutUnicodeEditText = (r.customOutputUnicode != 0) ? formatCodepointUPlus((uint32_t)r.customOutputUnicode) : std::string();
-                                MarkRebindBindingActive();
-                            }
-                        }
-
-                        ImGui::Spacing();
-
-                        bool shiftLayerEnabled = rbPtr && rbPtr->shiftLayerEnabled;
-                        if (ImGui::Checkbox(trc("inputs.shift_layer_label"), &shiftLayerEnabled)) {
-                            idx = createRebindForKeyIfMissing(s_layoutContextVk);
-                            s_layoutContextPreferredIndex = idx;
-                            if (idx >= 0) {
+                        if (ImGui::RadioButton(trc("inputs.full_rebind_label"), !s_layoutContextSplitMode)) {
+                            s_layoutContextSplitMode = false;
+                            if (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) {
                                 auto& r = g_config.keyRebinds.rebinds[idx];
-                                r.shiftLayerEnabled = shiftLayerEnabled;
+                                setFullRebindState(r, r.fromKey);
                                 g_configIsDirty = true;
 
                                 if (isNoOpRebindForKey(r, r.fromKey)) {
@@ -1770,82 +2153,211 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                 }
                             }
                         }
+                        if (ImGui::RadioButton(trc("inputs.split_rebind_label"), s_layoutContextSplitMode)) {
+                            s_layoutContextSplitMode = true;
+                        }
 
                         rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
-                        if (rbPtr && rbPtr->shiftLayerEnabled) {
-                            const std::string typesShiftValue = typesShiftValueFor(rbPtr, s_layoutContextVk);
+                        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+                        ImGui::Separator();
 
-                            ImGui::TextUnformatted(trc("inputs.types_shift_label"));
-                            ImGui::SameLine();
-                            {
-                                std::string label = (s_layoutBindTarget == LayoutBindTarget::TypesVkShift)
-                                    ? std::string(trc("hotkeys.press_keys"))
-                                    : typesShiftValue;
-                                if (ImGui::Button((label + "##types_shift").c_str(), ImVec2(vBtnW, 0))) {
-                                    idx = createRebindForKeyIfMissing(s_layoutContextVk);
-                                    s_layoutContextPreferredIndex = idx;
-                                    if (idx >= 0) {
-                                        auto& r = g_config.keyRebinds.rebinds[idx];
-                                        r.shiftLayerEnabled = true;
-                                        s_layoutBindTarget = LayoutBindTarget::TypesVkShift;
-                                        s_layoutBindIndex = idx;
-                                        s_layoutBindLastSeq = GetLatestBindingInputSequence();
-                                        MarkRebindBindingActive();
+                        auto drawPopupRowLabel = [&](const char* tooltip, const char* label) {
+                            HelpMarker(tooltip);
+                            ImGui::SameLine(0.0f, popupInlineGap);
+                            ImGui::AlignTextToFramePadding();
+                            ImGui::TextUnformatted(label);
+                        };
+
+                        if (ImGui::BeginTable("##rebind_config_rows", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX)) {
+                            ImGui::TableSetupColumn("##rebind_label", ImGuiTableColumnFlags_WidthFixed, labelColumnW);
+                            ImGui::TableSetupColumn("##rebind_value", ImGuiTableColumnFlags_WidthStretch);
+
+                            if (!s_layoutContextSplitMode) {
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                drawPopupRowLabel(trc("inputs.tooltip.rebind_output"), trc("inputs.output_label"));
+                                ImGui::TableSetColumnIndex(1);
+                                {
+                                    std::string label = (s_layoutBindTarget == LayoutBindTarget::FullOutputVk)
+                                        ? std::string(trc("hotkeys.press_keys"))
+                                        : triggersValue;
+                                    if (ImGui::Button((label + "##output_full").c_str(), ImVec2(bindButtonW, 0))) {
+                                        idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                        s_layoutContextPreferredIndex = idx;
+                                        if (idx >= 0) {
+                                            s_layoutBindTarget = LayoutBindTarget::FullOutputVk;
+                                            s_layoutBindIndex = idx;
+                                            s_layoutBindLastSeq = GetLatestBindingInputSequence();
+                                            MarkRebindBindingActive();
+                                        }
+                                    }
+                                    ImGui::SameLine(0.0f, popupInlineGap);
+                                    if (ImGui::Button((tr("label.custom") + "##output_scan_custom").c_str(), ImVec2(auxButtonW, 0))) {
+                                        openTriggersCustomPopup = true;
+                                        triggersCustomPopupAnchor =
+                                            ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f);
                                     }
                                 }
-                            }
+                            } else {
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                drawPopupRowLabel(trc("inputs.tooltip.rebind_types"), trc("inputs.types_label"));
+                                ImGui::TableSetColumnIndex(1);
+                                {
+                                    std::string label = (s_layoutBindTarget == LayoutBindTarget::TypesVk)
+                                        ? std::string(trc("hotkeys.press_keys"))
+                                        : typesValue;
+                                    if (ImGui::Button((label + "##types").c_str(), ImVec2(bindButtonW, 0))) {
+                                        idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                        s_layoutContextPreferredIndex = idx;
+                                        if (idx >= 0) {
+                                            s_layoutBindTarget = LayoutBindTarget::TypesVk;
+                                            s_layoutBindIndex = idx;
+                                            s_layoutBindLastSeq = GetLatestBindingInputSequence();
+                                            MarkRebindBindingActive();
+                                        }
+                                    }
+                                    ImGui::SameLine(0.0f, popupInlineGap);
+                                    if (ImGui::Button((tr("label.custom") + "##types_custom").c_str(), ImVec2(auxButtonW, 0))) {
+                                        idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                        s_layoutContextPreferredIndex = idx;
+                                        if (idx >= 0) {
+                                            s_layoutUnicodeEditIndex = idx;
+                                            s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::TypesBase;
+                                            const auto& r = g_config.keyRebinds.rebinds[idx];
+                                            s_layoutUnicodeEditText =
+                                                (r.customOutputUnicode != 0) ? formatCodepointUPlus((uint32_t)r.customOutputUnicode) : std::string();
+                                            MarkRebindBindingActive();
+                                        }
+                                    }
+                                    ImGui::SameLine(0.0f, popupInlineGap);
+                                    ImGui::AlignTextToFramePadding();
+                                    bool baseOutputShifted = rbPtr ? rbPtr->baseOutputShifted : false;
+                                    if (ImGui::Checkbox((std::string(trc("inputs.uppercase_label")) + "##types_uppercase").c_str(), &baseOutputShifted)) {
+                                        idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                        s_layoutContextPreferredIndex = idx;
+                                        if (idx >= 0) {
+                                            auto& r = g_config.keyRebinds.rebinds[idx];
+                                            r.baseOutputShifted = baseOutputShifted;
+                                            clearBaseTypesOverrideIfDefault(r, r.fromKey);
+                                            g_configIsDirty = true;
 
-                            rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx]
-                                                                                                  : nullptr;
-                            if (rbPtr && rbPtr->shiftLayerOutputVK != 0) {
-                                bool shiftLayerOutputShifted = rbPtr->shiftLayerOutputShifted;
-                                if (ImGui::Checkbox(trc("inputs.shift_layer_output_shifted_label"), &shiftLayerOutputShifted)) {
-                                    idx = createRebindForKeyIfMissing(s_layoutContextVk);
-                                    s_layoutContextPreferredIndex = idx;
-                                    if (idx >= 0) {
-                                        auto& r = g_config.keyRebinds.rebinds[idx];
-                                        r.shiftLayerEnabled = true;
-                                        r.shiftLayerOutputShifted = shiftLayerOutputShifted;
-                                        g_configIsDirty = true;
-
-                                        if (isNoOpRebindForKey(r, r.fromKey)) {
-                                            eraseRebindIndex(idx);
-                                            s_layoutContextPreferredIndex = -1;
-                                            idx = -1;
+                                            if (isNoOpRebindForKey(r, r.fromKey)) {
+                                                eraseRebindIndex(idx);
+                                                s_layoutContextPreferredIndex = -1;
+                                                idx = -1;
+                                            }
                                         }
                                     }
                                 }
-                            }
 
-                            ImGui::Spacing();
-                        }
+                                rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
 
-                        ImGui::TextUnformatted(trc("inputs.triggers_label"));
-                        ImGui::SameLine();
-                        {
-                            std::string label = (s_layoutBindTarget == LayoutBindTarget::TriggersVk) ? std::string(trc("hotkeys.press_keys")) : triggersValue;
-                            if (ImGui::Button((label + "##triggers").c_str(), ImVec2(vBtnW, 0))) {
-                                idx = createRebindForKeyIfMissing(s_layoutContextVk);
-                                s_layoutContextPreferredIndex = idx;
-                                if (idx >= 0) {
-                                    s_layoutBindTarget = LayoutBindTarget::TriggersVk;
-                                    s_layoutBindIndex = idx;
-                                    s_layoutBindLastSeq = GetLatestBindingInputSequence();
-                                    MarkRebindBindingActive();
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                drawPopupRowLabel(trc("inputs.tooltip.rebind_types_shift"), trc("inputs.types_shift_label"));
+                                ImGui::TableSetColumnIndex(1);
+                                {
+                                    std::string label = (s_layoutBindTarget == LayoutBindTarget::TypesVkShift)
+                                        ? std::string(trc("hotkeys.press_keys"))
+                                        : typesShiftValue;
+                                    if (ImGui::Button((label + "##types_shift").c_str(), ImVec2(bindButtonW, 0))) {
+                                        idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                        s_layoutContextPreferredIndex = idx;
+                                        if (idx >= 0) {
+                                            auto& r = g_config.keyRebinds.rebinds[idx];
+                                            r.shiftLayerEnabled = true;
+                                            if (r.shiftLayerOutputVK == 0 && r.shiftLayerOutputUnicode == 0) {
+                                                r.shiftLayerOutputShifted = s_layoutShiftUppercaseDefault;
+                                            }
+                                            s_layoutBindTarget = LayoutBindTarget::TypesVkShift;
+                                            s_layoutBindIndex = idx;
+                                            s_layoutBindLastSeq = GetLatestBindingInputSequence();
+                                            MarkRebindBindingActive();
+                                        }
+                                    }
+                                    ImGui::SameLine(0.0f, popupInlineGap);
+                                    if (ImGui::Button((tr("label.custom") + "##types_shift_custom").c_str(), ImVec2(auxButtonW, 0))) {
+                                        idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                        s_layoutContextPreferredIndex = idx;
+                                        if (idx >= 0) {
+                                            const auto& r = g_config.keyRebinds.rebinds[idx];
+                                            s_layoutUnicodeEditIndex = idx;
+                                            s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::TypesShift;
+                                            s_layoutUnicodeEditText =
+                                                (r.shiftLayerOutputUnicode != 0)
+                                                    ? formatCodepointUPlus((uint32_t)r.shiftLayerOutputUnicode)
+                                                    : std::string();
+                                            MarkRebindBindingActive();
+                                        }
+                                    }
+                                    ImGui::SameLine(0.0f, popupInlineGap);
+                                    ImGui::AlignTextToFramePadding();
+                                    bool shiftLayerOutputShifted = rbPtr ? rbPtr->shiftLayerOutputShifted : false;
+                                    if (ImGui::Checkbox((std::string(trc("inputs.uppercase_label")) + "##types_shift_uppercase").c_str(),
+                                                        &shiftLayerOutputShifted)) {
+                                        idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                        s_layoutContextPreferredIndex = idx;
+                                        if (idx >= 0) {
+                                            auto& r = g_config.keyRebinds.rebinds[idx];
+                                            r.shiftLayerEnabled = true;
+                                            if (r.shiftLayerOutputVK == 0) {
+                                                r.shiftLayerOutputVK = resolveTypesVkFor(&r, r.fromKey, false);
+                                            }
+                                            r.shiftLayerOutputShifted = shiftLayerOutputShifted;
+                                            s_layoutShiftUppercaseDefault = shiftLayerOutputShifted;
+                                            clearShiftLayerOverrideIfDefault(r, r.fromKey);
+                                            g_configIsDirty = true;
+
+                                            if (isNoOpRebindForKey(r, r.fromKey)) {
+                                                eraseRebindIndex(idx);
+                                                s_layoutContextPreferredIndex = -1;
+                                                idx = -1;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                drawPopupRowLabel(trc("inputs.tooltip.rebind_triggers"), trc("inputs.triggers_label"));
+                                ImGui::TableSetColumnIndex(1);
+                                {
+                                    std::string label = (s_layoutBindTarget == LayoutBindTarget::TriggersVk)
+                                        ? std::string(trc("hotkeys.press_keys"))
+                                        : triggersValue;
+                                    if (ImGui::Button((label + "##triggers").c_str(), ImVec2(bindButtonW, 0))) {
+                                        idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                        s_layoutContextPreferredIndex = idx;
+                                        if (idx >= 0) {
+                                            s_layoutBindTarget = LayoutBindTarget::TriggersVk;
+                                            s_layoutBindIndex = idx;
+                                            s_layoutBindLastSeq = GetLatestBindingInputSequence();
+                                            MarkRebindBindingActive();
+                                        }
+                                    }
+                                    ImGui::SameLine(0.0f, popupInlineGap);
+                                    if (ImGui::Button((tr("label.custom") + "##triggers_scan_custom").c_str(), ImVec2(auxButtonW, 0))) {
+                                        openTriggersCustomPopup = true;
+                                        triggersCustomPopupAnchor =
+                                            ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f);
+                                    }
                                 }
                             }
+
+                            ImGui::EndTable();
                         }
 
-                        ImGui::SameLine();
-                        {
-                            idx = (idx >= 0) ? idx : findBestRebindIndexForKey(s_layoutContextVk);
-                            KeyRebind* r = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
+                        idx = (idx >= 0) ? idx : findBestRebindIndexForKey(s_layoutContextVk);
+                        KeyRebind* r = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
 
-                            if (ImGui::Button((tr("label.custom") + "##triggers_scan_custom").c_str(), ImVec2(82, 0))) {
-                                ImGui::OpenPopup(trc("inputs.triggers_custom"));
-                            }
+                        if (openTriggersCustomPopup) {
+                            ImGui::SetNextWindowPos(triggersCustomPopupAnchor, ImGuiCond_Appearing);
+                            ImGui::OpenPopup(trc("inputs.triggers_custom"));
+                        }
+                        ImGui::SetNextWindowSizeConstraints(ImVec2(340.0f, 220.0f), ImVec2(520.0f, 460.0f));
 
-                            if (ImGui::BeginPopup(trc("inputs.triggers_custom"))) {
+                        if (ImGui::BeginPopup(trc("inputs.triggers_custom"))) {
                                 MarkRebindBindingActive();
                                 if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                                     s_layoutEscapeRequiresRelease = true;
@@ -1875,12 +2387,10 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                 }
                                 ImGui::Separator();
 
-                                ImGui::BeginChild("##triggers_custom_list", ImVec2(360.0f, 230.0f), true);
+                                ImGui::BeginChild("##triggers_custom_list", ImVec2(0.0f, 260.0f), true);
                                 for (const auto& it : s_knownScanCodes) {
                                     const DWORD scan = it.first;
-                                    DWORD vkFromScan = MapVirtualKey(scan, MAPVK_VSC_TO_VK_EX);
-                                    if (vkFromScan == 0) vkFromScan = curTriggerVk;
-                                    const std::string name = scanCodeToDisplayName(scan, vkFromScan);
+                                    const std::string& name = it.second;
                                     const std::string itemLabel = name + "  (" + formatScanHex(scan) + ")##scan_" + std::to_string((unsigned)scan);
 
                                     const bool selected = (r && r->useCustomOutput && r->customOutputScanCode == scan);
@@ -1898,7 +2408,6 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                 ImGui::EndChild();
 
                                 ImGui::EndPopup();
-                            }
                         }
 
                         if (cannotTypeFor(rbPtr, s_layoutContextVk)) {
@@ -1907,15 +2416,17 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
 
                         ImGui::Spacing();
 
-                        if (ImGui::Button((tr("button.reset_defaults") + "##layout_reset").c_str(), ImVec2(170, 0))) {
+                        if (ImGui::Button((tr("label.reset") + "##layout_reset").c_str(), ImVec2(102, 0))) {
                             if (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) {
                                 auto& r = g_config.keyRebinds.rebinds[idx];
                                 r.toKey = r.fromKey;
                                 r.customOutputVK = 0;
                                 r.customOutputUnicode = 0;
                                 r.customOutputScanCode = 0;
+                                r.baseOutputShifted = false;
                                 r.shiftLayerEnabled = false;
                                 r.shiftLayerOutputVK = 0;
+                                r.shiftLayerOutputUnicode = 0;
                                 r.shiftLayerOutputShifted = false;
                                 r.useCustomOutput = false;
                                 r.enabled = true;
@@ -1933,6 +2444,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             }
                         }
 
+                        ImGui::PopStyleVar(3);
                         ImGui::EndPopup();
                     }
 
@@ -1949,6 +2461,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                             if (r.customOutputVK != 0 && r.customOutputVK != r.toKey) return false;
                             if (r.customOutputUnicode != 0) return false;
                             if (r.customOutputScanCode != 0) return false;
+                            if (r.baseOutputShifted) return false;
                             if (hasShiftLayerOverride(&r, r.fromKey)) return false;
                             return true;
                         };
@@ -1958,6 +2471,10 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
 
                             std::string fromStr = VkToString(r.fromKey);
                             std::string typesStr = typesValueForDisplay(&r, r.fromKey);
+                            if (hasShiftLayerOverride(&r, r.fromKey)) {
+                                const std::string shiftTypesStr = typesShiftValueForDisplay(&r, r.fromKey);
+                                typesStr += "/" + shiftTypesStr;
+                            }
 
                             DWORD triggerVk = resolveTriggerVkFor(&r, r.fromKey);
                             DWORD displayScan = resolveTriggerScanFor(&r, r.fromKey);

@@ -4,6 +4,7 @@
 #include "runtime/logic_thread.h"
 #include "common/utils.h"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -30,6 +31,10 @@ const toml::table* GetTable(const toml::table& tbl, const std::string& key) {
 const toml::array* GetArray(const toml::table& tbl, const std::string& key) {
     if (auto node = tbl.get(key)) { return node->as_array(); }
     return nullptr;
+}
+
+static int ClampMirrorCaptureDimension(int value) {
+    return std::clamp(value, ConfigDefaults::MIRROR_CAPTURE_MIN_DIMENSION, ConfigDefaults::MIRROR_CAPTURE_MAX_DIMENSION);
 }
 
 void WriteTableOrdered(std::ostream& out, const toml::table& tbl, const std::vector<std::string>& orderedKeys) {
@@ -436,8 +441,8 @@ void MirrorBorderConfigFromToml(const toml::table& tbl, MirrorBorderConfig& cfg)
 
 void MirrorConfigToToml(const MirrorConfig& cfg, toml::table& out) {
     out.insert("name", cfg.name);
-    out.insert("captureWidth", cfg.captureWidth);
-    out.insert("captureHeight", cfg.captureHeight);
+    out.insert("captureWidth", ClampMirrorCaptureDimension(cfg.captureWidth));
+    out.insert("captureHeight", ClampMirrorCaptureDimension(cfg.captureHeight));
 
     toml::array inputArr;
     for (const auto& input : cfg.input) {
@@ -476,8 +481,8 @@ void MirrorConfigToToml(const MirrorConfig& cfg, toml::table& out) {
 
 void MirrorConfigFromToml(const toml::table& tbl, MirrorConfig& cfg) {
     cfg.name = GetStringOr(tbl, "name", "");
-    cfg.captureWidth = GetOr(tbl, "captureWidth", ConfigDefaults::MIRROR_CAPTURE_WIDTH);
-    cfg.captureHeight = GetOr(tbl, "captureHeight", ConfigDefaults::MIRROR_CAPTURE_HEIGHT);
+    cfg.captureWidth = ClampMirrorCaptureDimension(GetOr(tbl, "captureWidth", ConfigDefaults::MIRROR_CAPTURE_WIDTH));
+    cfg.captureHeight = ClampMirrorCaptureDimension(GetOr(tbl, "captureHeight", ConfigDefaults::MIRROR_CAPTURE_HEIGHT));
 
     cfg.input.clear();
     if (auto arr = GetArray(tbl, "input")) {
@@ -1424,8 +1429,10 @@ void KeyRebindToToml(const KeyRebind& cfg, toml::table& out) {
     out.insert("customOutputVK", static_cast<int64_t>(cfg.customOutputVK));
     out.insert("customOutputUnicode", static_cast<int64_t>(cfg.customOutputUnicode));
     out.insert("customOutputScanCode", static_cast<int64_t>(cfg.customOutputScanCode));
+    out.insert("baseOutputShifted", cfg.baseOutputShifted);
     out.insert("shiftLayerEnabled", cfg.shiftLayerEnabled);
     out.insert("shiftLayerOutputVK", static_cast<int64_t>(cfg.shiftLayerOutputVK));
+    out.insert("shiftLayerOutputUnicode", static_cast<int64_t>(cfg.shiftLayerOutputUnicode));
     out.insert("shiftLayerOutputShifted", cfg.shiftLayerOutputShifted);
 }
 
@@ -1509,9 +1516,24 @@ void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {
     }
     cfg.customOutputScanCode =
         static_cast<DWORD>(GetOr<int64_t>(tbl, "customOutputScanCode", ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_SCANCODE));
+    cfg.baseOutputShifted = GetOr(tbl, "baseOutputShifted", ConfigDefaults::KEY_REBIND_BASE_OUTPUT_SHIFTED);
     cfg.shiftLayerEnabled = GetOr(tbl, "shiftLayerEnabled", ConfigDefaults::KEY_REBIND_SHIFT_LAYER_ENABLED);
     cfg.shiftLayerOutputVK =
         static_cast<DWORD>(GetOr<int64_t>(tbl, "shiftLayerOutputVK", ConfigDefaults::KEY_REBIND_SHIFT_LAYER_OUTPUT_VK));
+    cfg.shiftLayerOutputUnicode = ConfigDefaults::KEY_REBIND_SHIFT_LAYER_OUTPUT_UNICODE;
+    if (auto su = tbl["shiftLayerOutputUnicode"]) {
+        if (auto v = su.value<int64_t>()) {
+            uint64_t vv = (uint64_t)*v;
+            if (vv <= 0x10FFFFull && vv != 0 && !(vv >= 0xD800ull && vv <= 0xDFFFull)) {
+                cfg.shiftLayerOutputUnicode = (DWORD)vv;
+            }
+        } else if (auto s = su.value<std::string>()) {
+            uint32_t cp = 0;
+            if (TryParseUnicodeCodepointString(*s, cp)) {
+                cfg.shiftLayerOutputUnicode = (DWORD)cp;
+            }
+        }
+    }
     cfg.shiftLayerOutputShifted =
         GetOr(tbl, "shiftLayerOutputShifted", ConfigDefaults::KEY_REBIND_SHIFT_LAYER_OUTPUT_SHIFTED);
 }

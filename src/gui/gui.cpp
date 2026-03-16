@@ -611,6 +611,7 @@ void RenderSettingsGUI() {
                                 if (g_config.lang != langCode) {
                                     g_config.lang = langCode;
                                     LoadTranslation(langCode);
+                                    RequestDynamicGuiFontRefresh(true);
                                     g_configIsDirty = true;
                                 }
                             }
