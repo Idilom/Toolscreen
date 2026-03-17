@@ -2459,7 +2459,10 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
                     slideProgress = 1.0f - mirrorSlideProgress;
                 }
             }
-            if (shouldApplySlide && !isSlideOutPass && sourceMirrorConfigs.count(conf.name) > 0) { shouldApplySlide = false; }
+            if (shouldApplySlide && !isSlideOutPass && sourceMirrorConfigs.count(conf.name) > 0) {
+                const bool sharedMirrorChangesHorizontalPlacement = (fromPosX != toPosX) || (sourceSizeW != targetSizeW);
+                if (!sharedMirrorChangesHorizontalPlacement) { shouldApplySlide = false; }
+            }
             if (shouldApplySlide) {
                 slideProgress = (std::max)(0.0f, (std::min)(1.0f, slideProgress));
                 bool isOnLeftSide = (slideAnchorX + slideAnchorW / 2) < (fullW / 2);
