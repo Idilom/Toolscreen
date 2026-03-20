@@ -78,7 +78,7 @@ static void EnsureConfigCachesValid() {
     }
 }
 
-void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass, uint64_t configVersion,
+void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
                                   std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
                                   std::vector<const WindowOverlayConfig*>& outWindowOverlays,
                                   std::vector<const BrowserOverlayConfig*>& outBrowserOverlays) {
@@ -87,7 +87,7 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
     outWindowOverlays.clear();
     outBrowserOverlays.clear();
 
-    static uint64_t s_cachedConfigVersion = 0;
+    static const Config* s_cachedConfig = nullptr;
     static std::unordered_map<std::string, const ModeConfig*> s_modeById;
     static std::unordered_map<std::string, const ModeConfig*> s_modeByIdLowered;
     static std::unordered_map<std::string, const MirrorConfig*> s_mirrorByName;
@@ -96,8 +96,8 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
     static std::unordered_map<std::string, const WindowOverlayConfig*> s_windowOverlayByName;
     static std::unordered_map<std::string, const BrowserOverlayConfig*> s_browserOverlayByName;
 
-    if (s_cachedConfigVersion != configVersion) {
-        s_cachedConfigVersion = configVersion;
+    if (s_cachedConfig != &config) {
+        s_cachedConfig = &config;
         s_modeById.clear();
         s_modeByIdLowered.clear();
         s_mirrorByName.clear();
@@ -2623,9 +2623,8 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
         std::vector<ImageConfig> unusedImages;
         std::vector<const WindowOverlayConfig*> unusedWindowOverlays;
         std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
-        const uint64_t cfgVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
-        CollectActiveElementsForMode(cfg, fromModeId, false, cfgVersion, sourceMirrors, unusedImages, unusedWindowOverlays,
-                                     unusedBrowserOverlays);
+        CollectActiveElementsForMode(cfg, fromModeId, false, sourceMirrors, unusedImages, unusedWindowOverlays,
+                         unusedBrowserOverlays);
         sourceMirrorConfigs.reserve(sourceMirrors.size());
         for (const auto& sourceMirror : sourceMirrors) {
             sourceMirrorConfigs[sourceMirror.name] = &sourceMirror;
@@ -3565,7 +3564,7 @@ struct SameThreadOverlayState {
 struct SameThreadMirrorCaptureReuseState {
     bool available = false;
     uint64_t frameTag = 0;
-    uint64_t configVersion = 0;
+    const Config* configIdentity = nullptr;
     std::string modeId;
     std::string fromModeId;
     bool hasEyeZoomSlideOut = false;
@@ -3605,12 +3604,12 @@ static uint64_t BeginSameThreadMirrorCaptureFrame() {
     return s_sameThreadMirrorCaptureFrameTag;
 }
 
-static bool CanReuseSameThreadMirrorCapture(uint64_t configVersion, const SameThreadOverlayState& request,
+static bool CanReuseSameThreadMirrorCapture(const Config& cfg, const SameThreadOverlayState& request,
                                             bool hasEyeZoomSlideOutMirrors, bool hasTransitionSlideOutMirrors,
                                             GLuint sourceTexture, int sourceW, int sourceH) {
     return request.allowMirrorCaptureReuse && request.mirrorCaptureFrameTag != 0 && s_sameThreadMirrorCaptureReuseState.available &&
            s_sameThreadMirrorCaptureReuseState.frameTag == request.mirrorCaptureFrameTag &&
-           s_sameThreadMirrorCaptureReuseState.configVersion == configVersion &&
+           s_sameThreadMirrorCaptureReuseState.configIdentity == &cfg &&
            s_sameThreadMirrorCaptureReuseState.modeId == request.modeId &&
            s_sameThreadMirrorCaptureReuseState.fromModeId == request.fromModeId &&
            s_sameThreadMirrorCaptureReuseState.hasEyeZoomSlideOut == hasEyeZoomSlideOutMirrors &&
@@ -3619,12 +3618,12 @@ static bool CanReuseSameThreadMirrorCapture(uint64_t configVersion, const SameTh
            s_sameThreadMirrorCaptureReuseState.sourceW == sourceW && s_sameThreadMirrorCaptureReuseState.sourceH == sourceH;
 }
 
-static void CacheSameThreadMirrorCapture(uint64_t configVersion, const SameThreadOverlayState& request,
+static void CacheSameThreadMirrorCapture(const Config& cfg, const SameThreadOverlayState& request,
                                          bool hasEyeZoomSlideOutMirrors, bool hasTransitionSlideOutMirrors, GLuint sourceTexture,
                                          int sourceW, int sourceH) {
     s_sameThreadMirrorCaptureReuseState.available = true;
     s_sameThreadMirrorCaptureReuseState.frameTag = request.mirrorCaptureFrameTag;
-    s_sameThreadMirrorCaptureReuseState.configVersion = configVersion;
+    s_sameThreadMirrorCaptureReuseState.configIdentity = &cfg;
     s_sameThreadMirrorCaptureReuseState.modeId = request.modeId;
     s_sameThreadMirrorCaptureReuseState.fromModeId = request.fromModeId;
     s_sameThreadMirrorCaptureReuseState.hasEyeZoomSlideOut = hasEyeZoomSlideOutMirrors;
@@ -3680,7 +3679,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
     }
 
-    static uint64_t s_cachedActiveConfigVersion = 0;
+    static const Config* s_cachedActiveConfig = nullptr;
     static std::string s_cachedActiveModeId;
     static bool s_cachedActiveImagesVisible = false;
     static bool s_cachedActiveWindowOverlaysVisible = false;
@@ -3689,14 +3688,14 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     static std::vector<ImageConfig> s_cachedActiveImages;
     static std::vector<const WindowOverlayConfig*> s_cachedActiveWindowOverlays;
     static std::vector<const BrowserOverlayConfig*> s_cachedActiveBrowserOverlays;
-    static uint64_t s_cachedEyeZoomSlideOutConfigVersion = 0;
+    static const Config* s_cachedEyeZoomSlideOutConfig = nullptr;
     static std::string s_cachedEyeZoomSlideOutTargetModeId;
     static std::vector<MirrorConfig> s_cachedEyeZoomSlideOutMirrors;
-    static uint64_t s_cachedTransitionSlideOutConfigVersion = 0;
+    static const Config* s_cachedTransitionSlideOutConfig = nullptr;
     static std::string s_cachedTransitionSlideOutFromModeId;
     static std::string s_cachedTransitionSlideOutTargetModeId;
     static std::vector<MirrorConfig> s_cachedTransitionSlideOutMirrors;
-    static uint64_t s_cachedSameThreadCaptureConfigVersion = 0;
+    static const Config* s_cachedSameThreadCaptureConfig = nullptr;
     static std::string s_cachedSameThreadCaptureModeId;
     static std::vector<ThreadedMirrorConfig> s_cachedSameThreadCaptureConfigs;
     static const std::vector<MirrorConfig> s_emptyMirrors;
@@ -3720,21 +3719,20 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                                          request.mirrorSlideProgress < 1.0f && !request.skipAnimation));
     const bool needModeElements = request.modeHasMirrors || request.modeHasImages || request.modeHasWindowOverlays ||
                                   request.modeHasBrowserOverlays || hasMirrorSlideOutWork;
-    const uint64_t cfgVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
     const bool imagesVisible = request.modeHasImages;
     const bool windowOverlaysVisible = request.modeHasWindowOverlays;
     const bool browserOverlaysVisible = request.modeHasBrowserOverlays;
     if (needModeElements) {
-        if (s_cachedActiveConfigVersion != cfgVersion || s_cachedActiveModeId != request.modeId ||
+        if (s_cachedActiveConfig != &cfg || s_cachedActiveModeId != request.modeId ||
             s_cachedActiveImagesVisible != imagesVisible || s_cachedActiveWindowOverlaysVisible != windowOverlaysVisible ||
             s_cachedActiveBrowserOverlaysVisible != browserOverlaysVisible) {
             PROFILE_SCOPE_CAT("Collect Active Mode Elements", "Rendering");
-            s_cachedActiveConfigVersion = cfgVersion;
+            s_cachedActiveConfig = &cfg;
             s_cachedActiveModeId = request.modeId;
             s_cachedActiveImagesVisible = imagesVisible;
             s_cachedActiveWindowOverlaysVisible = windowOverlaysVisible;
             s_cachedActiveBrowserOverlaysVisible = browserOverlaysVisible;
-            CollectActiveElementsForMode(cfg, request.modeId, false, cfgVersion, s_cachedActiveMirrors, s_cachedActiveImages,
+            CollectActiveElementsForMode(cfg, request.modeId, false, s_cachedActiveMirrors, s_cachedActiveImages,
                                          s_cachedActiveWindowOverlays, s_cachedActiveBrowserOverlays);
         }
     }
@@ -3746,7 +3744,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         needModeElements ? s_cachedActiveBrowserOverlays : s_emptyBrowserOverlays;
 
     if (!request.isRawWindowedMode && request.isTransitioningFromEyeZoom && cfg.eyezoom.slideMirrorsIn && !request.skipAnimation) {
-        if (s_cachedEyeZoomSlideOutConfigVersion != cfgVersion || s_cachedEyeZoomSlideOutTargetModeId != request.modeId) {
+        if (s_cachedEyeZoomSlideOutConfig != &cfg || s_cachedEyeZoomSlideOutTargetModeId != request.modeId) {
             PROFILE_SCOPE_CAT("Resolve EyeZoom Slide-Out Mirrors", "Rendering");
             std::vector<MirrorConfig> eyeZoomMirrors;
             std::vector<ImageConfig> unusedImages;
@@ -3758,7 +3756,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                 activeMirrorNames.insert(targetMirror.name);
             }
 
-            CollectActiveElementsForMode(cfg, "EyeZoom", false, cfgVersion, eyeZoomMirrors, unusedImages, unusedOverlays,
+            CollectActiveElementsForMode(cfg, "EyeZoom", false, eyeZoomMirrors, unusedImages, unusedOverlays,
                                          unusedBrowserOverlays);
 
             s_cachedEyeZoomSlideOutMirrors.clear();
@@ -3769,7 +3767,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                 }
             }
 
-            s_cachedEyeZoomSlideOutConfigVersion = cfgVersion;
+            s_cachedEyeZoomSlideOutConfig = &cfg;
             s_cachedEyeZoomSlideOutTargetModeId = request.modeId;
         }
 
@@ -3778,7 +3776,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
 
     if (!request.isRawWindowedMode && !request.isTransitioningFromEyeZoom && request.fromSlideMirrorsIn && !request.fromModeId.empty() &&
         request.mirrorSlideProgress < 1.0f && !request.skipAnimation) {
-        if (s_cachedTransitionSlideOutConfigVersion != cfgVersion || s_cachedTransitionSlideOutFromModeId != request.fromModeId ||
+        if (s_cachedTransitionSlideOutConfig != &cfg || s_cachedTransitionSlideOutFromModeId != request.fromModeId ||
             s_cachedTransitionSlideOutTargetModeId != request.modeId) {
             PROFILE_SCOPE_CAT("Resolve Transition Slide-Out Mirrors", "Rendering");
             std::vector<MirrorConfig> fromModeMirrors;
@@ -3791,7 +3789,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                 activeMirrorNames.insert(targetMirror.name);
             }
 
-            CollectActiveElementsForMode(cfg, request.fromModeId, false, cfgVersion, fromModeMirrors, unusedImages, unusedOverlays,
+            CollectActiveElementsForMode(cfg, request.fromModeId, false, fromModeMirrors, unusedImages, unusedOverlays,
                                          unusedBrowserOverlays);
 
             s_cachedTransitionSlideOutMirrors.clear();
@@ -3802,7 +3800,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                 }
             }
 
-            s_cachedTransitionSlideOutConfigVersion = cfgVersion;
+            s_cachedTransitionSlideOutConfig = &cfg;
             s_cachedTransitionSlideOutFromModeId = request.fromModeId;
             s_cachedTransitionSlideOutTargetModeId = request.modeId;
         }
@@ -3830,12 +3828,12 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         int sourceH = 0;
         const bool hasEyeZoomSlideOutMirrors = !eyeZoomSlideOutMirrors->empty();
         const bool hasTransitionSlideOutMirrors = !transitionSlideOutMirrors->empty();
-        if (s_cachedSameThreadCaptureConfigVersion != cfgVersion || s_cachedSameThreadCaptureModeId != request.modeId) {
+        if (s_cachedSameThreadCaptureConfig != &cfg || s_cachedSameThreadCaptureModeId != request.modeId) {
             PROFILE_SCOPE_CAT("Build Same-Thread Capture Configs", "Rendering");
             std::vector<MirrorConfig> mirrorsForCapture = activeMirrors;
             BuildThreadedMirrorConfigs(mirrorsForCapture, s_cachedSameThreadCaptureConfigs);
 
-            s_cachedSameThreadCaptureConfigVersion = cfgVersion;
+            s_cachedSameThreadCaptureConfig = &cfg;
             s_cachedSameThreadCaptureModeId = request.modeId;
         }
 
@@ -3848,7 +3846,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
 
         if (!s_cachedSameThreadCaptureConfigs.empty() && hasCaptureSource) {
             const bool reuseMirrorCaptures =
-                CanReuseSameThreadMirrorCapture(cfgVersion, request, hasEyeZoomSlideOutMirrors, hasTransitionSlideOutMirrors,
+                CanReuseSameThreadMirrorCapture(cfg, request, hasEyeZoomSlideOutMirrors, hasTransitionSlideOutMirrors,
                                                 sourceTexture, sourceW, sourceH);
             if (!reuseMirrorCaptures) {
                 PROFILE_SCOPE_CAT("Capture Mirror Sources", "Rendering");
@@ -3858,7 +3856,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                     PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
                     PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
                 }
-                CacheSameThreadMirrorCapture(cfgVersion, request, hasEyeZoomSlideOutMirrors, hasTransitionSlideOutMirrors,
+                CacheSameThreadMirrorCapture(cfg, request, hasEyeZoomSlideOutMirrors, hasTransitionSlideOutMirrors,
                                              sourceTexture, sourceW, sourceH);
             }
         }

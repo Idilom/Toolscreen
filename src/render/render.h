@@ -242,7 +242,7 @@ void RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, const GameVie
                    float modeOpacity = 1.0f, bool excludeOnlyOnMyScreen = false);
 void RenderImages(const std::vector<ImageConfig>& activeImages, int fullW, int fullH, float modeOpacity = 1.0f,
                   bool excludeOnlyOnMyScreen = false);
-void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass, uint64_t configVersion,
+void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
                                   std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
                                   std::vector<const WindowOverlayConfig*>& outWindowOverlays,
                                   std::vector<const BrowserOverlayConfig*>& outBrowserOverlays);
