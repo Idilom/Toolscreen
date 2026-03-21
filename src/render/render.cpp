@@ -2072,8 +2072,12 @@ void CleanupGPUResources() {
     Log("CleanupGPUResources: Cleanup complete.");
 }
 void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
-    PROFILE_SCOPE_CAT("GPU Image Upload", "GPU Operations");
     PixelStoreStateGuard pixelStoreGuard;
+    UploadDecodedImageToGPU_Internal(imgData);
+}
+
+void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
+    PROFILE_SCOPE_CAT("GPU Image Upload", "GPU Operations");
 
     size_t decodedBytes = 0;
     std::string decodedReason;
@@ -4942,8 +4946,24 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
 
-    const bool useDefaultOverlay = (zoomConfig.activeOverlayIndex < 0 ||
-                                    zoomConfig.activeOverlayIndex >= (int)zoomConfig.overlays.size());
+    const EyeZoomOverlayConfig* activeOverlay = nullptr;
+    GLuint activeOverlayTextureId = 0;
+    int activeOverlayTextureWidth = 0;
+    int activeOverlayTextureHeight = 0;
+    if (zoomConfig.activeOverlayIndex >= 0 && zoomConfig.activeOverlayIndex < (int)zoomConfig.overlays.size()) {
+        activeOverlay = &zoomConfig.overlays[zoomConfig.activeOverlayIndex];
+        std::lock_guard<std::mutex> lock(g_userImagesMutex);
+        auto it = g_userImages.find("ezoverlay_" + activeOverlay->name);
+        if (it != g_userImages.end() && it->second.textureId != 0) {
+            UserImageInstance& inst = it->second;
+            activeOverlayTextureId = ResolveAnimatedTextureId(inst);
+            activeOverlayTextureWidth = inst.width;
+            activeOverlayTextureHeight = inst.height;
+        }
+    }
+
+    const bool useDefaultOverlay = activeOverlay == nullptr || activeOverlayTextureId == 0 || activeOverlayTextureWidth <= 0 ||
+                                    activeOverlayTextureHeight <= 0;
     if (useDefaultOverlay) {
         float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
         int labelsPerSide = zoomConfig.cloneWidth / 2;
@@ -5004,6 +5024,55 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             glBufferSubData(GL_ARRAY_BUFFER, 0, oddVerts.size() * sizeof(float), oddVerts.data());
             glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(oddVerts.size() / 4));
         }
+    } else {
+        int overlayDisplayW = zoomOutputWidth;
+        int overlayDisplayH = zoomOutputHeight;
+        switch (activeOverlay->displayMode) {
+            case EyeZoomOverlayDisplayMode::Manual:
+                overlayDisplayW = (std::max)(1, activeOverlay->manualWidth);
+                overlayDisplayH = (std::max)(1, activeOverlay->manualHeight);
+                break;
+            case EyeZoomOverlayDisplayMode::Fit: {
+                const float fitScaleX = static_cast<float>(zoomOutputWidth) / activeOverlayTextureWidth;
+                const float fitScaleY = static_cast<float>(zoomOutputHeight) / activeOverlayTextureHeight;
+                const float fitScale = (std::min)(fitScaleX, fitScaleY);
+                overlayDisplayW = (std::max)(1, static_cast<int>(activeOverlayTextureWidth * fitScale));
+                overlayDisplayH = (std::max)(1, static_cast<int>(activeOverlayTextureHeight * fitScale));
+                break;
+            }
+            case EyeZoomOverlayDisplayMode::Stretch:
+            default:
+                overlayDisplayW = (std::max)(1, zoomOutputWidth);
+                overlayDisplayH = (std::max)(1, zoomOutputHeight);
+                break;
+        }
+
+        overlayDisplayW = (std::min)(overlayDisplayW, fullW);
+        overlayDisplayH = (std::min)(overlayDisplayH, fullH);
+
+        const int overlayX = zoomX + (zoomOutputWidth - overlayDisplayW) / 2;
+        const int overlayY = zoomY + (zoomOutputHeight - overlayDisplayH) / 2;
+        const int overlayY_gl = fullH - overlayY - overlayDisplayH;
+
+        const float nx1 = (static_cast<float>(overlayX) / fullW) * 2.0f - 1.0f;
+        const float ny1 = (static_cast<float>(overlayY_gl) / fullH) * 2.0f - 1.0f;
+        const float nx2 = (static_cast<float>(overlayX + overlayDisplayW) / fullW) * 2.0f - 1.0f;
+        const float ny2 = (static_cast<float>(overlayY_gl + overlayDisplayH) / fullH) * 2.0f - 1.0f;
+        const float effectiveOverlayOpacity = (std::max)(0.0f, (std::min)(1.0f, activeOverlay->opacity * overlayOpacityScale));
+
+        glUseProgram(g_imageRenderProgram);
+        BindTextureDirect(GL_TEXTURE_2D, activeOverlayTextureId);
+        glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
+        glUniform1f(g_imageRenderShaderLocs.opacity, effectiveOverlayOpacity);
+
+        float overlayVerts[] = {
+            nx1, ny1, 0.0f, 0.0f, nx2, ny1, 1.0f, 0.0f, nx2, ny2, 1.0f, 1.0f,
+            nx1, ny1, 0.0f, 0.0f, nx2, ny2, 1.0f, 1.0f, nx1, ny2, 0.0f, 1.0f,
+        };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(overlayVerts), overlayVerts);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glUseProgram(g_solidColorProgram);
     }
 
     float centerX = zoomX + zoomOutputWidth / 2.0f;

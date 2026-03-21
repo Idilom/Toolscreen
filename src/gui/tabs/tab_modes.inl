@@ -527,6 +527,9 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                         if (ImGui::InputText("Name##ezov", &ov.name)) {
                             if (!HasDuplicateEyeZoomOverlayName(ov.name, ovi)) {
                                 g_configIsDirty = true;
+                                if (!ov.path.empty()) {
+                                    LoadImageAsync(DecodedImageData::UserImage, "ezoverlay_" + ov.name, ov.path, g_toolscreenPath);
+                                }
                             } else {
                                 ov.name = oldName;
                             }
