@@ -2630,7 +2630,7 @@ InputHandlerResult HandleCustomCharNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam,
     if (uMsg != WM_TOOLSCREEN_CHAR_NO_REBIND) { return { false, 0 }; }
     PROFILE_SCOPE("HandleCustomCharNoRebind");
 
-    HandleCharLogging(WM_CHAR, wParam, lParam);
+    //HandleCharLogging(WM_CHAR, wParam, lParam);
 
     if (g_showGui.load()) {
         ImGuiInputQueue_EnqueueWin32Message(hWnd, WM_CHAR, wParam, lParam);
@@ -2884,7 +2884,7 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleKeyRebindsToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
-    HandleCharLogging(uMsg, wParam, lParam);
+    //HandleCharLogging(uMsg, wParam, lParam);
 
     result = HandleAltF4(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
