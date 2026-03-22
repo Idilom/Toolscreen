@@ -94,8 +94,6 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
     ImGui::SameLine();
     HelpMarker("Disables the configure toast prompt (toast1) shown in windowed mode.");*/
 
-    ImGui::Spacing();
-    ImGui::SeparatorText(trc("settings.mirrors"));
     bool driverInstalled = IsVirtualCameraDriverInstalled();
     bool inUseByOBS = driverInstalled && IsVirtualCameraInUseByOBS();
     ImGui::BeginDisabled(!driverInstalled || inUseByOBS);
