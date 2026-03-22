@@ -63,6 +63,7 @@ static std::atomic<int> s_cachedScreenHeight{ 0 };
 static std::atomic<bool> s_screenMetricsDirty{ true };
 static std::atomic<bool> s_screenMetricsRecalcRequested{ false };
 static std::atomic<ULONGLONG> s_lastScreenMetricsRefreshMs{ 0 };
+static std::atomic<ULONGLONG> s_lastLogicThreadScreenMetricsProbeMs{ 0 };
 static std::atomic<bool> s_startupMetricsResyncPending{ true };
 
 static void ComputeScreenMetricsForGameWindow(int& outW, int& outH) {
@@ -274,6 +275,14 @@ void UpdateActiveMirrorConfigs() {
 
 void UpdateCachedScreenMetrics() {
     PROFILE_SCOPE_CAT("LT Screen Metrics", "Logic Thread");
+
+    constexpr ULONGLONG kLogicThreadScreenMetricsProbeMs = 100;
+    const ULONGLONG nowMs = GetTickCount64();
+    const ULONGLONG lastProbeMs = s_lastLogicThreadScreenMetricsProbeMs.load(std::memory_order_relaxed);
+    if ((nowMs - lastProbeMs) >= kLogicThreadScreenMetricsProbeMs) {
+        s_lastLogicThreadScreenMetricsProbeMs.store(nowMs, std::memory_order_relaxed);
+        s_screenMetricsDirty.store(true, std::memory_order_relaxed);
+    }
 
     const bool startupPending = s_startupMetricsResyncPending.load(std::memory_order_relaxed);
     bool startupClientReady = false;

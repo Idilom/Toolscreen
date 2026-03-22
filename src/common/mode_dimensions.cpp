@@ -15,8 +15,11 @@ void RecalculateModeDimensions() {
 
     for (auto& mode : g_config.modes) {
         if (mode.id == "Fullscreen") {
-            if (mode.width < 1) mode.width = screenW;
-            if (mode.height < 1) mode.height = screenH;
+            // Fullscreen is always defined by the live game-window client size.
+            // Keep width/height in sync so all consumers see the latest dimensions,
+            // not just the stretch rect.
+            mode.width = screenW;
+            mode.height = screenH;
 
             mode.useRelativeSize = true;
             mode.relativeWidth = 1.0f;

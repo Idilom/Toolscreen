@@ -302,7 +302,7 @@ output = { relativeTo = 'centerViewport', relativeX = 0.0, relativeY = 0.0, scal
 
 [[mode]]
 border = { color = [ 255, 255, 255 ], enabled = false, radius = 0, width = 4 }
-height = 1440
+height = 'screenHeight'
 id = 'Fullscreen'
 imageIds = [ 'Ninjabrain Bot' ]
 mirrorGroupIds = []
@@ -313,7 +313,7 @@ modeSensitivityY = 1.0
 sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = true, height = 1440, width = 2560, x = 0, y = 0 }
-width = 2560
+width = 'screenWidth'
 browserOverlayIds = []
 windowOverlayIds = []
 
