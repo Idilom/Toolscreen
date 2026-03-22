@@ -471,6 +471,10 @@ struct EyeZoomTextLabel {
     float centerY;
     float boxWidth;
     float boxHeight;
+    float clipMinX;
+    float clipMinY;
+    float clipMaxX;
+    float clipMaxY;
     bool autoFontSize;
     Color color;
 };
@@ -806,9 +810,10 @@ static ImFont* g_overlayTextFont = nullptr;
 static float g_overlayTextFontSize = 24.0f;
 
 static void CacheEyeZoomTextLabel(int number, float centerX, float centerY, float boxWidth, float boxHeight, bool autoFontSize,
-                                  const Color& color) {
+                                  const Color& color, float clipMinX, float clipMinY, float clipMaxX, float clipMaxY) {
     std::lock_guard<std::mutex> lock(s_eyezoomTextMutex);
-    s_eyezoomTextLabels.push_back({ number, centerX, centerY, boxWidth, boxHeight, autoFontSize, color });
+    s_eyezoomTextLabels.push_back({ number, centerX, centerY, boxWidth, boxHeight, clipMinX, clipMinY, clipMaxX, clipMaxY,
+                                    autoFontSize, color });
 }
 
 void DrawOverlayBorder(float nx1, float ny1, float nx2, float ny2, float borderWidth, float borderHeight, bool isDragging,
@@ -2754,7 +2759,14 @@ static void RenderCachedEyeZoomTextLabels() {
         ImVec2 pos(label.centerX - textSize.x * 0.5f, label.centerY - textSize.y * 0.5f);
         ImU32 color = IM_COL32(static_cast<int>(label.color.r * 255.0f), static_cast<int>(label.color.g * 255.0f),
                                static_cast<int>(label.color.b * 255.0f), static_cast<int>(label.color.a * 255.0f));
+        const bool hasClipRect = label.clipMaxX > label.clipMinX && label.clipMaxY > label.clipMinY;
+        if (hasClipRect) {
+            drawList->PushClipRect(ImVec2(label.clipMinX, label.clipMinY), ImVec2(label.clipMaxX, label.clipMaxY), true);
+        }
         drawList->AddText(font, fontSize, pos, color, text.c_str());
+        if (hasClipRect) {
+            drawList->PopClipRect();
+        }
     }
 }
 
@@ -4863,7 +4875,8 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
             request.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
             request.showPerformanceOverlay = false;
             request.showProfiler = false;
-            request.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed);
+            request.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
+                                  (request.isTransitioningFromEyeZoom && !request.skipAnimation);
             request.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
             request.eyeZoomAnimatedViewportX = skipAnimation ? -1 : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
             request.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
@@ -4987,24 +5000,44 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     int zoomX = 0;
     int zoomY = 0;
 
+    int finalZoomOutputWidth = 0;
+    int finalZoomOutputHeight = 0;
+    int finalZoomX = 0;
+    int finalZoomY = 0;
+
     if (zoomConfig.useCustomSizePosition) {
         zoomOutputWidth = zoomConfig.zoomAreaWidth;
         zoomOutputHeight = zoomConfig.zoomAreaHeight;
         zoomX = zoomConfig.positionX;
         zoomY = zoomConfig.positionY;
+        finalZoomOutputWidth = zoomOutputWidth;
+        finalZoomOutputHeight = zoomOutputHeight;
+        finalZoomX = zoomX;
+        finalZoomY = zoomY;
     } else {
         int autoHorizontalMargin = 0;
         if (targetViewportX > 0) autoHorizontalMargin = targetViewportX / 10;
-
-        zoomOutputWidth = viewportX - (2 * autoHorizontalMargin);
         int autoVerticalMargin = fullH / 8;
-        zoomOutputHeight = fullH - (2 * autoVerticalMargin);
+        finalZoomOutputWidth = targetViewportX - (2 * autoHorizontalMargin);
+        finalZoomOutputHeight = fullH - (2 * autoVerticalMargin);
+        finalZoomX = autoHorizontalMargin;
+        finalZoomY = (fullH - finalZoomOutputHeight) / 2;
 
-        zoomX = autoHorizontalMargin;
-        zoomY = (fullH - zoomOutputHeight) / 2;
+        zoomOutputWidth = finalZoomOutputWidth;
+        zoomOutputHeight = finalZoomOutputHeight;
+        zoomY = finalZoomY;
+
+        if (animatedViewportX >= 0 && targetViewportX > 0) {
+            const float slideProgress =
+                (std::max)(0.0f, (std::min)(1.0f, static_cast<float>(viewportX) / static_cast<float>(targetViewportX)));
+            zoomX = -zoomOutputWidth + static_cast<int>((finalZoomX + zoomOutputWidth) * slideProgress);
+        } else {
+            zoomX = finalZoomX;
+        }
     }
 
     if (zoomOutputWidth > fullW) zoomOutputWidth = fullW;
+    if (finalZoomOutputWidth > fullW) finalZoomOutputWidth = fullW;
 
     if (zoomOutputWidth <= 20) {
         LogEyeZoomDebugThrottled("layout_skip",
@@ -5013,15 +5046,28 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
                                      std::to_string(viewportX));
         return;
     }
+    if (finalZoomOutputWidth < 1) { finalZoomOutputWidth = zoomOutputWidth; }
 
     if (zoomOutputHeight > fullH) zoomOutputHeight = fullH;
+    if (finalZoomOutputHeight > fullH) finalZoomOutputHeight = fullH;
 
     if (zoomOutputHeight < 1) { zoomOutputHeight = 1; }
+    if (finalZoomOutputHeight < 1) { finalZoomOutputHeight = zoomOutputHeight; }
 
     int maxZoomX = (std::max)(0, fullW - zoomOutputWidth);
     int maxZoomY = (std::max)(0, fullH - zoomOutputHeight);
-    zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
+    const bool allowEyeZoomSlideOffscreenLeft = !zoomConfig.useCustomSizePosition && animatedViewportX >= 0 && targetViewportX > 0;
+    if (allowEyeZoomSlideOffscreenLeft) {
+        zoomX = (std::min)(zoomX, maxZoomX);
+    } else {
+        zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
+    }
     zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
+
+    int maxFinalZoomX = (std::max)(0, fullW - finalZoomOutputWidth);
+    int maxFinalZoomY = (std::max)(0, fullH - finalZoomOutputHeight);
+    finalZoomX = (std::max)(0, (std::min)(finalZoomX, maxFinalZoomX));
+    finalZoomY = (std::max)(0, (std::min)(finalZoomY, maxFinalZoomY));
 
     int zoomY_gl = fullH - zoomY - zoomOutputHeight;
 
@@ -5191,11 +5237,32 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     Color textColor = zoomConfig.textColor;
     textColor.a = textAlpha;
 
+    int overlayLayoutX = zoomX;
+    int overlayLayoutY = zoomY;
+    int overlayLayoutWidth = zoomOutputWidth;
+    int overlayLayoutHeight = zoomOutputHeight;
+    if (!zoomConfig.useCustomSizePosition && animatedViewportX >= 0 && targetViewportX > 0) {
+        const float overlaySlideProgress =
+            (std::max)(0.0f, (std::min)(1.0f, static_cast<float>(viewportX) / static_cast<float>(targetViewportX)));
+        overlayLayoutWidth = finalZoomOutputWidth;
+        overlayLayoutHeight = finalZoomOutputHeight;
+        overlayLayoutX = -overlayLayoutWidth + static_cast<int>((finalZoomX + overlayLayoutWidth) * overlaySlideProgress);
+        overlayLayoutY = finalZoomY;
+    }
+
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(g_solidColorProgram);
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+
+    GLboolean prevScissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+    GLint prevScissorBox[4] = { 0, 0, 0, 0 };
+    if (prevScissorEnabled) {
+        glGetIntegerv(GL_SCISSOR_BOX, prevScissorBox);
+    }
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
 
     const EyeZoomOverlayConfig* activeOverlay = nullptr;
     GLuint activeOverlayTextureId = 0;
@@ -5216,12 +5283,12 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     const bool useDefaultOverlay = activeOverlay == nullptr || activeOverlayTextureId == 0 || activeOverlayTextureWidth <= 0 ||
                                     activeOverlayTextureHeight <= 0;
     if (useDefaultOverlay) {
-        float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
+        float pixelWidthOnScreen = overlayLayoutWidth / (float)zoomConfig.cloneWidth;
         int labelsPerSide = zoomConfig.cloneWidth / 2;
         int overlayLabelsPerSide = zoomConfig.overlayWidth;
         if (overlayLabelsPerSide < 0) overlayLabelsPerSide = labelsPerSide;
         if (overlayLabelsPerSide > labelsPerSide) overlayLabelsPerSide = labelsPerSide;
-        float centerY = zoomY + zoomOutputHeight / 2.0f;
+        float centerY = overlayLayoutY + overlayLayoutHeight / 2.0f;
 
         float boxHeight;
         if (zoomConfig.linkRectToFont) {
@@ -5238,7 +5305,7 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             if (xOffset == 0) continue;
 
             int boxIndex = xOffset + labelsPerSide - (xOffset > 0 ? 1 : 0);
-            float boxLeft = zoomX + (boxIndex * pixelWidthOnScreen);
+            float boxLeft = overlayLayoutX + (boxIndex * pixelWidthOnScreen);
             float boxRight = boxLeft + pixelWidthOnScreen;
             float boxBottom = centerY - boxHeight / 2.0f;
             float boxTop = centerY + boxHeight / 2.0f;
@@ -5259,7 +5326,8 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             float numberCenterX = boxLeft + pixelWidthOnScreen / 2.0f;
             float numberCenterY = centerY;
             CacheEyeZoomTextLabel(displayNumber, numberCenterX, numberCenterY, pixelWidthOnScreen, boxHeight,
-                                  zoomConfig.autoFontSize, textColor);
+                                  zoomConfig.autoFontSize, textColor, static_cast<float>(zoomX), static_cast<float>(zoomY),
+                                  static_cast<float>(zoomX + zoomOutputWidth), static_cast<float>(zoomY + zoomOutputHeight));
         }
 
         if (!evenVerts.empty()) {
@@ -5277,16 +5345,16 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(oddVerts.size() / 4));
         }
     } else {
-        int overlayDisplayW = zoomOutputWidth;
-        int overlayDisplayH = zoomOutputHeight;
+        int overlayDisplayW = overlayLayoutWidth;
+        int overlayDisplayH = overlayLayoutHeight;
         switch (activeOverlay->displayMode) {
             case EyeZoomOverlayDisplayMode::Manual:
                 overlayDisplayW = (std::max)(1, activeOverlay->manualWidth);
                 overlayDisplayH = (std::max)(1, activeOverlay->manualHeight);
                 break;
             case EyeZoomOverlayDisplayMode::Fit: {
-                const float fitScaleX = static_cast<float>(zoomOutputWidth) / activeOverlayTextureWidth;
-                const float fitScaleY = static_cast<float>(zoomOutputHeight) / activeOverlayTextureHeight;
+                const float fitScaleX = static_cast<float>(overlayLayoutWidth) / activeOverlayTextureWidth;
+                const float fitScaleY = static_cast<float>(overlayLayoutHeight) / activeOverlayTextureHeight;
                 const float fitScale = (std::min)(fitScaleX, fitScaleY);
                 overlayDisplayW = (std::max)(1, static_cast<int>(activeOverlayTextureWidth * fitScale));
                 overlayDisplayH = (std::max)(1, static_cast<int>(activeOverlayTextureHeight * fitScale));
@@ -5294,16 +5362,16 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             }
             case EyeZoomOverlayDisplayMode::Stretch:
             default:
-                overlayDisplayW = (std::max)(1, zoomOutputWidth);
-                overlayDisplayH = (std::max)(1, zoomOutputHeight);
+                overlayDisplayW = (std::max)(1, overlayLayoutWidth);
+                overlayDisplayH = (std::max)(1, overlayLayoutHeight);
                 break;
         }
 
         overlayDisplayW = (std::min)(overlayDisplayW, fullW);
         overlayDisplayH = (std::min)(overlayDisplayH, fullH);
 
-        const int overlayX = zoomX + (zoomOutputWidth - overlayDisplayW) / 2;
-        const int overlayY = zoomY + (zoomOutputHeight - overlayDisplayH) / 2;
+        const int overlayX = overlayLayoutX + (overlayLayoutWidth - overlayDisplayW) / 2;
+        const int overlayY = overlayLayoutY + (overlayLayoutHeight - overlayDisplayH) / 2;
         const int overlayY_gl = fullH - overlayY - overlayDisplayH;
 
         const float nx1 = (static_cast<float>(overlayX) / fullW) * 2.0f - 1.0f;
@@ -5327,7 +5395,7 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         glUseProgram(g_solidColorProgram);
     }
 
-    float centerX = zoomX + zoomOutputWidth / 2.0f;
+    float centerX = overlayLayoutX + overlayLayoutWidth / 2.0f;
     float centerLineWidth = 2.0f;
     float lineLeft = centerX - centerLineWidth / 2.0f;
     float lineRight = centerX + centerLineWidth / 2.0f;
@@ -5348,6 +5416,12 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     };
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(centerLineVerts), centerLineVerts);
     glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    if (prevScissorEnabled) {
+        glScissor(prevScissorBox[0], prevScissorBox[1], prevScissorBox[2], prevScissorBox[3]);
+    } else {
+        glDisable(GL_SCISSOR_TEST);
+    }
 
     glDisable(GL_BLEND);
     glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
@@ -6397,7 +6471,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         target.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
         target.showPerformanceOverlay = g_showPerformanceOverlay.load(std::memory_order_relaxed);
         target.showProfiler = g_showProfiler.load(std::memory_order_relaxed);
-        target.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed);
+        target.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
+                     (target.isTransitioningFromEyeZoom && !target.skipAnimation);
         target.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
         target.eyeZoomAnimatedViewportX = skipAnimation ? -1 : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
         target.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
@@ -6942,10 +7017,22 @@ void StartModeTransition(const std::string& fromModeId, const std::string& toMod
     g_modeTransition.active = true;
     g_modeTransition.startTime = std::chrono::steady_clock::now();
 
+    bool transitioningToEyeZoom = EqualsIgnoreCase(toModeId, "EyeZoom");
+    bool transitioningFromEyeZoom = EqualsIgnoreCase(fromModeId, "EyeZoom");
+    auto transitionSnap = GetConfigSnapshot();
+    const ModeConfig* sourceMode = transitionSnap ? GetModeFromSnapshot(*transitionSnap, fromModeId) : nullptr;
+    const bool preserveEyeZoomSlideOutDuration =
+        transitioningFromEyeZoom && !transitioningToEyeZoom && transitionSnap && transitionSnap->eyezoom.slideMirrorsIn;
+
     bool allCutToFullscreen = transitioningToFullscreen && toMode.gameTransition == GameTransitionType::Cut;
     bool allCutWithFirstFrameProtection = isAllCutTransition && !transitioningToFullscreen;
     if (allCutToFullscreen || allCutWithFirstFrameProtection) {
-        g_modeTransition.duration = 0.001f;
+        if (preserveEyeZoomSlideOutDuration) {
+            const int sourceDurationMs = sourceMode ? sourceMode->transitionDurationMs : toMode.transitionDurationMs;
+            g_modeTransition.duration = (std::max)(0.001f, sourceDurationMs / 1000.0f);
+        } else {
+            g_modeTransition.duration = 0.001f;
+        }
     } else {
         g_modeTransition.duration = toMode.transitionDurationMs / 1000.0f;
     }
@@ -6960,13 +7047,9 @@ void StartModeTransition(const std::string& fromModeId, const std::string& toMod
     g_modeTransition.bounceIntensity = toMode.bounceIntensity;
     g_modeTransition.bounceDurationMs = toMode.bounceDurationMs;
 
-    bool transitioningToEyeZoom = EqualsIgnoreCase(toModeId, "EyeZoom");
-    bool transitioningFromEyeZoom = EqualsIgnoreCase(fromModeId, "EyeZoom");
-
     if (transitioningFromEyeZoom && !transitioningToEyeZoom) {
         // Transitioning FROM EyeZoom - look up EyeZoom's skip settings (use snapshot for thread safety)
-        auto transSnap = GetConfigSnapshot();
-        const ModeConfig* eyeZoomMode = transSnap ? GetModeFromSnapshot(*transSnap, "EyeZoom") : nullptr;
+        const ModeConfig* eyeZoomMode = transitionSnap ? GetModeFromSnapshot(*transitionSnap, "EyeZoom") : nullptr;
         if (eyeZoomMode) {
             g_modeTransition.skipAnimateX = eyeZoomMode->skipAnimateX;
             g_modeTransition.skipAnimateY = eyeZoomMode->skipAnimateY;
@@ -6989,8 +7072,7 @@ void StartModeTransition(const std::string& fromModeId, const std::string& toMod
     g_modeTransition.toY = toY;
 
     // Use snapshot for thread-safe lookup of fromMode (called from multiple threads)
-    auto nativeSnap = GetConfigSnapshot();
-    const ModeConfig* fromModePtr = nativeSnap ? GetModeFromSnapshot(*nativeSnap, fromModeId) : nullptr;
+    const ModeConfig* fromModePtr = transitionSnap ? GetModeFromSnapshot(*transitionSnap, fromModeId) : nullptr;
     if (fromModePtr) {
         g_modeTransition.fromNativeWidth = fromModePtr->width;
         g_modeTransition.fromNativeHeight = fromModePtr->height;
