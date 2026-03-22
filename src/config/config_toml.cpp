@@ -8,6 +8,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 
 template <typename T> T GetOr(const toml::table& tbl, const std::string& key, T defaultValue) {
     if (auto node = tbl.get(key)) {
@@ -31,6 +32,26 @@ const toml::table* GetTable(const toml::table& tbl, const std::string& key) {
 const toml::array* GetArray(const toml::table& tbl, const std::string& key) {
     if (auto node = tbl.get(key)) { return node->as_array(); }
     return nullptr;
+}
+
+std::optional<double> GetNumericValue(const toml::node* node) {
+    if (!node) {
+        return std::nullopt;
+    }
+
+    if (node->is_integer()) {
+        return static_cast<double>(node->as_integer()->get());
+    }
+
+    if (node->is_floating_point()) {
+        return node->as_floating_point()->get();
+    }
+
+    return std::nullopt;
+}
+
+std::optional<double> GetNumericValue(const toml::table& tbl, const std::string& key) {
+    return GetNumericValue(tbl.get(key));
 }
 
 static int ClampMirrorCaptureDimension(int value) {
@@ -965,6 +986,9 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
 void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
     cfg.id = GetStringOr(tbl, "id", "");
 
+    cfg.width = ConfigDefaults::MODE_WIDTH;
+    cfg.height = ConfigDefaults::MODE_HEIGHT;
+
     cfg.useRelativeSize = false;
     cfg.relativeWidth = -1.0f;
     cfg.relativeHeight = -1.0f;
@@ -972,46 +996,43 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
     bool widthIsPercentage = false;
     bool heightIsPercentage = false;
 
-    if (auto widthNode = tbl.get("width")) {
-        if (widthNode->is_floating_point()) {
-            double widthVal = widthNode->as_floating_point()->get();
-            if (widthVal >= 0.0 && widthVal <= 1.0) {
-                cfg.relativeWidth = static_cast<float>(widthVal);
-                widthIsPercentage = true;
-            } else {
-                cfg.width = static_cast<int>(widthVal);
+    int cachedScreenWidth = GetCachedWindowWidth();
+    int cachedScreenHeight = GetCachedWindowHeight();
+
+    if (auto widthVal = GetNumericValue(tbl, "width")) {
+        if (*widthVal >= 0.0 && *widthVal <= 1.0) {
+            cfg.relativeWidth = static_cast<float>(*widthVal);
+            widthIsPercentage = true;
+
+            if (cachedScreenWidth > 0) {
+                cfg.width = (std::max)(1, static_cast<int>(std::lround(cfg.relativeWidth * static_cast<float>(cachedScreenWidth))));
             }
-        } else if (widthNode->is_integer()) {
-            cfg.width = static_cast<int>(widthNode->as_integer()->get());
         } else {
-            cfg.width = ConfigDefaults::MODE_WIDTH;
+            cfg.width = static_cast<int>(*widthVal);
         }
-    } else {
-        cfg.width = ConfigDefaults::MODE_WIDTH;
     }
 
-    if (auto heightNode = tbl.get("height")) {
-        if (heightNode->is_floating_point()) {
-            double heightVal = heightNode->as_floating_point()->get();
-            if (heightVal >= 0.0 && heightVal <= 1.0) {
-                cfg.relativeHeight = static_cast<float>(heightVal);
-                heightIsPercentage = true;
-            } else {
-                cfg.height = static_cast<int>(heightVal);
+    if (auto heightVal = GetNumericValue(tbl, "height")) {
+        if (*heightVal >= 0.0 && *heightVal <= 1.0) {
+            cfg.relativeHeight = static_cast<float>(*heightVal);
+            heightIsPercentage = true;
+
+            if (cachedScreenHeight > 0) {
+                cfg.height = (std::max)(1, static_cast<int>(std::lround(cfg.relativeHeight * static_cast<float>(cachedScreenHeight))));
             }
-        } else if (heightNode->is_integer()) {
-            cfg.height = static_cast<int>(heightNode->as_integer()->get());
         } else {
-            cfg.height = ConfigDefaults::MODE_HEIGHT;
+            cfg.height = static_cast<int>(*heightVal);
         }
-    } else {
-        cfg.height = ConfigDefaults::MODE_HEIGHT;
     }
 
     if (tbl.contains("useRelativeSize") || tbl.contains("relativeWidth") || tbl.contains("relativeHeight")) {
         cfg.useRelativeSize = GetOr(tbl, "useRelativeSize", false);
-        cfg.relativeWidth = GetOr(tbl, "relativeWidth", cfg.relativeWidth);
-        cfg.relativeHeight = GetOr(tbl, "relativeHeight", cfg.relativeHeight);
+        if (auto relativeWidth = GetNumericValue(tbl, "relativeWidth")) {
+            cfg.relativeWidth = static_cast<float>(*relativeWidth);
+        }
+        if (auto relativeHeight = GetNumericValue(tbl, "relativeHeight")) {
+            cfg.relativeHeight = static_cast<float>(*relativeHeight);
+        }
     } else if (widthIsPercentage || heightIsPercentage) {
         cfg.useRelativeSize = true;
     }
@@ -1020,6 +1041,13 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
     const bool hasRelativeHeight = cfg.relativeHeight >= 0.0f && cfg.relativeHeight <= 1.0f;
     if (hasRelativeWidth || hasRelativeHeight) {
         cfg.useRelativeSize = true;
+    }
+
+    if (hasRelativeWidth && cfg.width < 1 && cachedScreenWidth > 0) {
+        cfg.width = (std::max)(1, static_cast<int>(std::lround(cfg.relativeWidth * static_cast<float>(cachedScreenWidth))));
+    }
+    if (hasRelativeHeight && cfg.height < 1 && cachedScreenHeight > 0) {
+        cfg.height = (std::max)(1, static_cast<int>(std::lround(cfg.relativeHeight * static_cast<float>(cachedScreenHeight))));
     }
 
     cfg.manualWidth = (cfg.width > 0) ? cfg.width : ConfigDefaults::MODE_WIDTH;

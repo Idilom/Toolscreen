@@ -36,11 +36,17 @@ void RecalculateModeDimensions() {
             int newWidth = static_cast<int>(std::lround(mode.relativeWidth * static_cast<float>(screenW)));
             if (newWidth < 1) newWidth = 1;
             mode.width = newWidth;
+            if (mode.manualWidth < 1) {
+                mode.manualWidth = newWidth;
+            }
         }
         if (heightIsRelative) {
             int newHeight = static_cast<int>(std::lround(mode.relativeHeight * static_cast<float>(screenH)));
             if (newHeight < 1) newHeight = 1;
             mode.height = newHeight;
+            if (mode.manualHeight < 1) {
+                mode.manualHeight = newHeight;
+            }
         }
 
         if (mode.id == "Thin" && mode.width < 330) { mode.width = 330; }
