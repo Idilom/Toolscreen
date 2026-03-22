@@ -1666,7 +1666,11 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                         };
 
                         auto typesShiftValueFor = [&](const KeyRebind* rb, DWORD originalVk) -> std::string {
-                            return typesShiftValueForDisplay(rb, originalVk);
+                            const std::string shiftValue = typesShiftValueForDisplay(rb, originalVk);
+                            if (!hasShiftLayerOverride(rb, originalVk)) {
+                                return tr("inputs.types_shift_inherits_format", shiftValue.c_str());
+                            }
+                            return shiftValue;
                         };
 
                         auto triggersValueFor = [&](const KeyRebind* rb, DWORD originalVk) -> std::string {
