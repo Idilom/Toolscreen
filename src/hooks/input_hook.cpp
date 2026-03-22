@@ -379,7 +379,7 @@ static void SyncWindowMetricsFromMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LP
                 const int monitorH = haveMonitorRect ? (monitorRect.bottom - monitorRect.top) : 0;
                 const bool previousSizeFilledMonitor = haveMonitorRect && prevW >= (monitorW - kFullscreenTolPx) && prevH >= (monitorH - kFullscreenTolPx);
                 const bool currentSizeIsWindowed = haveMonitorRect && (clientW < (monitorW - kFullscreenTolPx) || clientH < (monitorH - kFullscreenTolPx));
-                if (previousSizeFilledMonitor && currentSizeIsWindowed) {
+                if (g_config.restoreWindowedModeOnFullscreenExit && previousSizeFilledMonitor && currentSizeIsWindowed) {
                     if (CenterWindowedRestoreOnCurrentMonitor(hWnd, "input_hook:fullscreen_exit_restore")) { return; }
                 }
 

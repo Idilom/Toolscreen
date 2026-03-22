@@ -1854,6 +1854,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("keyRepeatStartDelay", config.keyRepeatStartDelay);
     out.insert("keyRepeatDelay", config.keyRepeatDelay);
     out.insert("basicModeEnabled", config.basicModeEnabled);
+    out.insert("restoreWindowedModeOnFullscreenExit", config.restoreWindowedModeOnFullscreenExit);
     out.insert("disableFullscreenPrompt", config.disableFullscreenPrompt);
     out.insert("disableConfigurePrompt", config.disableConfigurePrompt);
 
@@ -1979,6 +1980,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.keyRepeatStartDelay = GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY);
     config.keyRepeatDelay = GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY);
     config.basicModeEnabled = GetOr(tbl, "basicModeEnabled", ConfigDefaults::CONFIG_BASIC_MODE_ENABLED);
+    config.restoreWindowedModeOnFullscreenExit =
+        GetOr(tbl, "restoreWindowedModeOnFullscreenExit", ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT);
     config.disableFullscreenPrompt = GetOr(tbl, "disableFullscreenPrompt", ConfigDefaults::CONFIG_DISABLE_FULLSCREEN_PROMPT);
     config.disableConfigurePrompt = GetOr(tbl, "disableConfigurePrompt", ConfigDefaults::CONFIG_DISABLE_CONFIGURE_PROMPT);
 
@@ -2146,6 +2149,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                  "keyRepeatStartDelay",
                                                  "keyRepeatDelay",
                                                  "basicModeEnabled",
+                                                 "restoreWindowedModeOnFullscreenExit",
                                                  "disableFullscreenPrompt",
                                                  "disableConfigurePrompt",
                                                  "guiHotkey",

@@ -510,6 +510,7 @@ struct Config {
     int keyRepeatStartDelay = 0;
     int keyRepeatDelay = 0;
     bool basicModeEnabled = false;
+    bool restoreWindowedModeOnFullscreenExit = ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT;
     bool disableFullscreenPrompt = false;
     bool disableConfigurePrompt = false;
 };
