@@ -25,8 +25,6 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
 
     SliderCtrlClickTip();
 
-    ImGui::SeparatorText(trc("settings.performance"));
-
     ImGui::Spacing();
     ImGui::SeparatorText(trc("settings.capture_streaming"));
     if (ImGui::Checkbox(trc("settings.hide_animations_in_game"), &g_config.hideAnimationsInGame)) { g_configIsDirty = true; }
