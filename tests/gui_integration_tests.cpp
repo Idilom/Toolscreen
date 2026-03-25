@@ -68,6 +68,8 @@ void EnsureProcessDpiAwareness() {
     (void)configured;
 }
 
+static bool g_hasModernGL = false;
+
 void Expect(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
@@ -155,6 +157,11 @@ class DummyWindow {
         Expect(glewStatus == GLEW_OK,
                "Failed to initialize GLEW for GUI integration tests: " + std::string(reinterpret_cast<const char*>(glewGetErrorString(glewStatus))));
 
+        const char* glVersionStr = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+        m_glMajor = 0;
+        if (glVersionStr) { m_glMajor = glVersionStr[0] - '0'; }
+        g_hasModernGL = m_glMajor >= 3;
+
         RefreshClientSize();
         ShowWindow(m_hwnd, visible ? SW_SHOW : SW_HIDE);
         if (visible) {
@@ -191,6 +198,8 @@ class DummyWindow {
     HWND hwnd() const { return m_hwnd; }
 
     bool isOpen() const { return m_isOpen; }
+
+    bool hasModernGL() const { return m_glMajor >= 3; }
 
     void SetTitle(const std::string& title) {
         if (m_hwnd != nullptr) {
@@ -313,6 +322,7 @@ class DummyWindow {
     int m_width = 0;
     int m_height = 0;
     bool m_isOpen = true;
+    int m_glMajor = 0;
 };
 
 std::filesystem::path PrepareCaseDirectory(std::string_view caseName) {
@@ -363,6 +373,7 @@ void ResetGlobalTestState(const std::filesystem::path& root) {
 }
 
 void RenderSettingsFrame(DummyWindow& window, const char* topLevelTabLabel, const char* inputsSubTabLabel = nullptr) {
+    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
     ScopedTabSelection scopedSelection(topLevelTabLabel, inputsSubTabLabel);
     Expect(window.BeginFrame(), "GUI integration test window closed unexpectedly.");
     RenderSettingsGUI();
@@ -379,6 +390,7 @@ void RenderInteractiveSettingsFrame(DummyWindow& window) {
 }
 
 void RenderConfigErrorFrame(DummyWindow& window, bool presentFrame = false) {
+    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
     Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
     HandleConfigLoadFailed(nullptr, nullptr);
 
@@ -795,6 +807,7 @@ void ExpectMirrorRenderMatchesExpectedPlacement(const MirrorConfig& mirror, cons
 }
 
 void InitializeMirrorRenderTestResources() {
+    if (!g_hasModernGL) return;
     ResetOverlayRenderTestResources();
     for (const auto& mirror : g_config.mirrors) {
         CreateMirrorGPUResources(mirror);
@@ -802,6 +815,7 @@ void InitializeMirrorRenderTestResources() {
 }
 
 void ResetOverlayRenderTestResources() {
+    if (!g_hasModernGL) return;
     InvalidateConfigLookupCaches();
     g_windowOverlaysVisible.store(true, std::memory_order_release);
     g_browserOverlaysVisible.store(true, std::memory_order_release);
@@ -813,6 +827,7 @@ void ResetOverlayRenderTestResources() {
 }
 
 void RenderModeOverlayFrame(DummyWindow& window, const Config& config, const ModeConfig& mode, GLuint gameTextureId = 0) {
+    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
     Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
 
     GLState state{};
@@ -829,6 +844,7 @@ template <typename AssertFn>
 void RenderModeOverlayFrameToSimulatedSurface(DummyWindow& window, const Config& config, const ModeConfig& mode,
                                               const SimulatedOverlayGeometry& geometry, GLuint gameTextureId,
                                               AssertFn&& assertFn) {
+    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
     Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
 
     ScopedFramebufferSurface surface(geometry.fullW, geometry.fullH);
@@ -851,6 +867,7 @@ template <typename AssertFn>
 void RenderModeOverlayFrameWithGeometry(DummyWindow& window, const Config& config, const ModeConfig& mode,
                                         const SimulatedOverlayGeometry& geometry, GLuint gameTextureId,
                                         AssertFn&& assertFn) {
+    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
     Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
 
     const SurfaceSize surface = GetWindowClientSize(window.hwnd());
@@ -3043,6 +3060,7 @@ void RunSettingsGuiBasicTest(TestRunMode runMode = TestRunMode::Automated) {
 
 void RunModeMirrorRenderScreenAnchorsTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
 
     const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_screen_anchors");
     ResetGlobalTestState(root);
@@ -3141,6 +3159,7 @@ void RunModeMirrorRenderScreenAnchorsTest(TestRunMode runMode = TestRunMode::Aut
 
 void RunModeMirrorRenderViewportAnchorsTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
 
     const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_viewport_anchors");
     ResetGlobalTestState(root);
@@ -3217,6 +3236,7 @@ void RunModeMirrorRenderViewportAnchorsTest(TestRunMode runMode = TestRunMode::A
 
 void RunModeMirrorRenderScreenAnchorSizeMatrixTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
 
     const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_screen_anchor_size_matrix");
     ResetGlobalTestState(root);
@@ -3338,6 +3358,7 @@ void RunModeMirrorRenderScreenAnchorSizeMatrixTest(TestRunMode runMode = TestRun
 
 void RunModeMirrorRenderViewportAnchorSizeMatrixTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
 
     const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_viewport_anchor_size_matrix");
     ResetGlobalTestState(root);
@@ -3457,6 +3478,7 @@ void RunModeMirrorRenderViewportAnchorSizeMatrixTest(TestRunMode runMode = TestR
 
 void RunModeMirrorGroupRenderTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
 
     const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_group_render");
     ResetGlobalTestState(root);
@@ -3547,6 +3569,7 @@ void RunModeMirrorGroupRenderTest(TestRunMode runMode = TestRunMode::Automated) 
 
 void RunModeWindowOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
 
     const std::filesystem::path root = PrepareCaseDirectory("mode_window_overlay_render");
     ResetGlobalTestState(root);
@@ -3608,6 +3631,7 @@ void RunModeWindowOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated
 
 void RunModeBrowserOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
 
     const std::filesystem::path root = PrepareCaseDirectory("mode_browser_overlay_render");
     ResetGlobalTestState(root);
