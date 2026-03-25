@@ -2042,6 +2042,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
 
 void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.configVersion = GetOr(tbl, "configVersion", ConfigDefaults::DEFAULT_CONFIG_VERSION);
+    const int originalConfigVersion = config.configVersion;
     config.disableHookChaining = GetOr(tbl, "disableHookChaining", ConfigDefaults::CONFIG_DISABLE_HOOK_CHAINING);
     config.defaultMode = GetStringOr(tbl, "defaultMode", ConfigDefaults::CONFIG_DEFAULT_MODE);
     config.fontPath = GetStringOr(tbl, "fontPath", ConfigDefaults::CONFIG_FONT_PATH);
