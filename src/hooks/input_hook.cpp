@@ -85,6 +85,10 @@ static std::mutex s_lowLevelSuppressedKeysMutex;
 static std::unordered_map<DWORD, DeferredAltTabRebindState> s_deferredAltTabRebindStates;
 static bool s_systemAltTabPassthroughActive = false;
 
+static bool SendMenuMaskKeyTap();
+static bool HotkeyUsesWindowsKey(const std::vector<DWORD>& keys);
+static bool ShouldMaskWindowsKeyForHotkey(const std::vector<DWORD>& keys, bool isKeyDown, bool isAutoRepeatKeyDown);
+
 static UINT GetScanCodeWithExtendedFlagFromLParam(LPARAM lParam) {
     UINT scanCodeWithFlags = static_cast<UINT>((lParam >> 16) & 0xFF);
     if ((lParam & (1LL << 24)) != 0) {
@@ -633,6 +637,9 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
     PROFILE_SCOPE("HandleGuiToggle");
 
+    const bool isAutoRepeatKeyDown =
+        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
+
     DWORD vkCode = 0;
     bool isEscape = false;
     switch (uMsg) {
@@ -662,6 +669,10 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     if (!isEscape && !CheckHotkeyMatch(g_config.guiHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
+
+    if (!isEscape && ShouldMaskWindowsKeyForHotkey(g_config.guiHotkey, true, isAutoRepeatKeyDown)) {
+        (void)SendMenuMaskKeyTap();
+    }
 
     if (g_showGui.load(std::memory_order_acquire) && !isEscape) {
         switch (uMsg) {
@@ -791,6 +802,9 @@ InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
     }
     PROFILE_SCOPE("HandleBorderlessToggle");
 
+    const bool isAutoRepeatKeyDown =
+        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
+
     if (g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
 
     if (g_config.borderlessHotkey.empty()) { return { false, 0 }; }
@@ -825,6 +839,10 @@ InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
     if (!CheckHotkeyMatch(g_config.borderlessHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
 
+    if (ShouldMaskWindowsKeyForHotkey(g_config.borderlessHotkey, true, isAutoRepeatKeyDown)) {
+        (void)SendMenuMaskKeyTap();
+    }
+
     static std::atomic<int64_t> s_lastToggleMs{ 0 };
     auto now = std::chrono::steady_clock::now();
     int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -849,6 +867,9 @@ InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam
         return { false, 0 };
     }
     PROFILE_SCOPE("HandleImageOverlaysToggle");
+
+    const bool isAutoRepeatKeyDown =
+        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
 
     if (g_config.imageOverlaysHotkey.empty()) { return { false, 0 }; }
 
@@ -882,6 +903,10 @@ InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam
 
     if (!CheckHotkeyMatch(g_config.imageOverlaysHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
 
+    if (ShouldMaskWindowsKeyForHotkey(g_config.imageOverlaysHotkey, true, isAutoRepeatKeyDown)) {
+        (void)SendMenuMaskKeyTap();
+    }
+
     static std::atomic<int64_t> s_lastToggleMs{ 0 };
     auto now = std::chrono::steady_clock::now();
     int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -908,6 +933,9 @@ InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wPara
         return { false, 0 };
     }
     PROFILE_SCOPE("HandleWindowOverlaysToggle");
+
+    const bool isAutoRepeatKeyDown =
+        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
 
     if (g_config.windowOverlaysHotkey.empty()) { return { false, 0 }; }
 
@@ -941,6 +969,10 @@ InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wPara
 
     if (!CheckHotkeyMatch(g_config.windowOverlaysHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
 
+    if (ShouldMaskWindowsKeyForHotkey(g_config.windowOverlaysHotkey, true, isAutoRepeatKeyDown)) {
+        (void)SendMenuMaskKeyTap();
+    }
+
     static std::atomic<int64_t> s_lastToggleMs{ 0 };
     auto now = std::chrono::steady_clock::now();
     int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -971,6 +1003,9 @@ InputHandlerResult HandleKeyRebindsToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
         return { false, 0 };
     }
     PROFILE_SCOPE("HandleKeyRebindsToggle");
+
+    const bool isAutoRepeatKeyDown =
+        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
 
     if (g_config.keyRebinds.toggleHotkey.empty()) { return { false, 0 }; }
 
@@ -1003,6 +1038,10 @@ InputHandlerResult HandleKeyRebindsToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
     }
 
     if (!CheckHotkeyMatch(g_config.keyRebinds.toggleHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
+
+    if (ShouldMaskWindowsKeyForHotkey(g_config.keyRebinds.toggleHotkey, true, isAutoRepeatKeyDown)) {
+        (void)SendMenuMaskKeyTap();
+    }
 
     static std::atomic<int64_t> s_lastToggleMs{ 0 };
     auto now = std::chrono::steady_clock::now();
@@ -1452,6 +1491,10 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                 bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
                 std::string hotkeyId = GetKeyComboString(alt.keys);
 
+                if (ShouldMaskWindowsKeyForHotkey(alt.keys, isKeyDown, isAutoRepeatKeyDown)) {
+                    (void)SendMenuMaskKeyTap();
+                }
+
                 if (hotkey.triggerOnHold) { return handleHoldMode(alt.mode, hotkeyId, blockKey); }
 
                 // Handle trigger-on-release invalidation tracking
@@ -1524,6 +1567,10 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
             if (matched || matchedViaRebind) {
                 bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
                 std::string hotkeyId = GetKeyComboString(hotkey.keys);
+
+                if (ShouldMaskWindowsKeyForHotkey(hotkey.keys, isKeyDown, isAutoRepeatKeyDown)) {
+                    (void)SendMenuMaskKeyTap();
+                }
 
                 if (hotkey.triggerOnHold) {
                     if (currentSecMode.empty()) { currentSecMode = GetHotkeySecondaryMode(hotkeyIdx); }
@@ -1632,6 +1679,10 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
             if (matched || matchedViaRebind) {
                 bool blockKey = matchedViaRebind;
                 std::string hotkeyId = "sens_" + GetKeyComboString(sensHotkey.keys);
+
+                if (ShouldMaskWindowsKeyForHotkey(sensHotkey.keys, isKeyDown, isAutoRepeatKeyDown)) {
+                    (void)SendMenuMaskKeyTap();
+                }
 
                 auto now = std::chrono::steady_clock::now();
                 bool debounced = false;
@@ -2064,6 +2115,14 @@ static bool SendMenuMaskKeyTap() {
     const bool downSent = SendSynthKeyByVirtualKey(kToolscreenMenuMaskVk, true, kToolscreenMenuMaskExtraInfo);
     const bool upSent = SendSynthKeyByVirtualKey(kToolscreenMenuMaskVk, false, kToolscreenMenuMaskExtraInfo);
     return downSent && upSent;
+}
+
+static bool HotkeyUsesWindowsKey(const std::vector<DWORD>& keys) {
+    return std::find(keys.begin(), keys.end(), VK_LWIN) != keys.end() || std::find(keys.begin(), keys.end(), VK_RWIN) != keys.end();
+}
+
+static bool ShouldMaskWindowsKeyForHotkey(const std::vector<DWORD>& keys, bool isKeyDown, bool isAutoRepeatKeyDown) {
+    return isKeyDown && !isAutoRepeatKeyDown && HotkeyUsesWindowsKey(keys);
 }
 
 static bool IsMenuActivationModifierVk(DWORD vk) {
