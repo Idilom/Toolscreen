@@ -650,6 +650,8 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     mode-mirror-group-render
     mode-window-overlay-render
     mode-browser-overlay-render
+    mode-image-overlay-render-png
+    mode-image-overlay-render-mpeg
     config-error-gui
     settings-gui-basic
     settings-gui-advanced

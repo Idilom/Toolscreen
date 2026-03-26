@@ -1,6 +1,7 @@
 #include "gui_internal.h"
 
 #include "common/i18n.h"
+#include "common/video_media.h"
 #include "common/utils.h"
 #include "third_party/stb_image.h"
 
@@ -221,9 +222,16 @@ std::string ValidateImageFile(const std::string& path, const std::wstring& tools
     int w = 0;
     int h = 0;
     int c = 0;
-    if (stbi_info(path_utf8.c_str(), &w, &h, &c) == 0) {
+    if (DetectVisualMediaKindFromPath(path_utf8) == VisualMediaKind::VideoMpeg1) {
+        VideoProbeResult probe;
+        if (!ProbeMpegVideoFile(path_utf8, probe)) {
+            return probe.error.empty() ? "Invalid MPEG-1 video" : probe.error;
+        }
+        w = probe.width;
+        h = probe.height;
+    } else if (stbi_info(path_utf8.c_str(), &w, &h, &c) == 0) {
         const char* reason = stbi_failure_reason();
-        return std::string("Invalid image: ") + (reason ? reason : "unknown format");
+        return std::string("Invalid visual media: ") + (reason ? reason : DescribeSupportedVisualMediaFormats());
     }
 
     if (w <= 0 || h <= 0) { return "Invalid image dimensions"; }
@@ -252,7 +260,7 @@ ImagePickerResult OpenImagePickerAndValidate(HWND ownerHwnd, const std::wstring&
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile) / sizeof(WCHAR);
     ofn.lpstrFilter =
-        L"Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.gif)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif\0PNG Files (*.png)\0*.png\0All Files (*.*)\0*.*\0";
+        L"Visual Media Files (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.mpg;*.mpeg)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.mpg;*.mpeg\0Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.gif)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif\0Video Files (*.mpg;*.mpeg)\0*.mpg;*.mpeg\0All Files (*.*)\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;

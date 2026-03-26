@@ -107,6 +107,17 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
     }
 
     ImGui::Spacing();
+    ImGui::SetNextItemWidth(300);
+    int videoCacheBudgetMiB = g_config.debug.videoCacheBudgetMiB;
+    if (ImGui::SliderInt(trc("settings.video_cache_budget_mib"), &videoCacheBudgetMiB, 0, 2048,
+                         videoCacheBudgetMiB == 0 ? trc("label.disabled") : "%d MiB")) {
+        g_config.debug.videoCacheBudgetMiB = videoCacheBudgetMiB;
+        g_configIsDirty = true;
+    }
+    ImGui::SameLine();
+    HelpMarker(trc("settings.tooltip.video_cache_budget_mib"));
+
+    ImGui::Spacing();
 
     static bool s_debugUnlocked = false;
     static char s_passcodeInput[16] = "";
@@ -144,6 +155,114 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
             ImGui::EndPopup();
         }
     } else {
+        struct MpegVideoTextureDebugStats {
+            size_t uploadedVramBytes = 0;
+            size_t uploadedClipCount = 0;
+            size_t uploadedTextureCount = 0;
+        };
+
+        auto collectMpegVideoTextureDebugStats = []() {
+            MpegVideoTextureDebugStats stats;
+
+            auto tryMultiply = [](size_t left, size_t right, size_t& out) {
+                if (left == 0 || right == 0) {
+                    out = 0;
+                    return true;
+                }
+                if (left > (std::numeric_limits<size_t>::max)() / right) {
+                    return false;
+                }
+                out = left * right;
+                return true;
+            };
+
+            auto tryComputeRgbaBytes = [&tryMultiply](int width, int height, size_t& outBytes) {
+                if (width <= 0 || height <= 0) {
+                    return false;
+                }
+
+                size_t pixelCount = 0;
+                if (!tryMultiply(static_cast<size_t>(width), static_cast<size_t>(height), pixelCount)) {
+                    return false;
+                }
+                return tryMultiply(pixelCount, 4, outBytes);
+            };
+
+            auto computeTextureBytes = [&tryComputeRgbaBytes](int width, int height) {
+                if (width <= 0 || height <= 0) {
+                    return static_cast<size_t>(0);
+                }
+
+                size_t textureBytes = 0;
+                if (!tryComputeRgbaBytes(width, height, textureBytes)) {
+                    return static_cast<size_t>(0);
+                }
+                return textureBytes;
+            };
+
+            auto computeInstanceTextureBytes = [&computeTextureBytes](const auto& inst) {
+                size_t totalBytes = 0;
+                if (inst.isAnimated && !inst.frameTextures.empty()) {
+                    if (!inst.frameTextureHeights.empty()) {
+                        for (int textureHeight : inst.frameTextureHeights) {
+                            totalBytes += computeTextureBytes(inst.width, textureHeight);
+                        }
+                        return totalBytes;
+                    }
+
+                    const int textureHeight = inst.textureStorageHeight > 0 ? inst.textureStorageHeight : inst.height;
+                    return computeTextureBytes(inst.width, textureHeight) * inst.frameTextures.size();
+                }
+
+                if (inst.textureId == 0) {
+                    return static_cast<size_t>(0);
+                }
+
+                const int textureHeight = inst.textureStorageHeight > 0 ? inst.textureStorageHeight : inst.height;
+                return computeTextureBytes(inst.width, textureHeight);
+            };
+
+            {
+                std::lock_guard<std::mutex> lock(g_backgroundTexturesMutex);
+                for (const auto& [id, inst] : g_backgroundTextures) {
+                    (void)id;
+                    if (!inst.isVideo) {
+                        continue;
+                    }
+
+                    const size_t textureCount = inst.isAnimated ? inst.frameTextures.size() : (inst.textureId != 0 ? 1u : 0u);
+                    if (textureCount == 0) {
+                        continue;
+                    }
+
+                    stats.uploadedClipCount += 1;
+                    stats.uploadedTextureCount += textureCount;
+                    stats.uploadedVramBytes += computeInstanceTextureBytes(inst);
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(g_userImagesMutex);
+                for (const auto& [id, inst] : g_userImages) {
+                    (void)id;
+                    if (!inst.isVideo) {
+                        continue;
+                    }
+
+                    const size_t textureCount = inst.isAnimated ? inst.frameTextures.size() : (inst.textureId != 0 ? 1u : 0u);
+                    if (textureCount == 0) {
+                        continue;
+                    }
+
+                    stats.uploadedClipCount += 1;
+                    stats.uploadedTextureCount += textureCount;
+                    stats.uploadedVramBytes += computeInstanceTextureBytes(inst);
+                }
+            }
+
+            return stats;
+        };
+
         ImGui::SeparatorText(trc("settings.debug_options"));
         drawMirrorColorspaceSetting();
         ImGui::Spacing();
@@ -177,6 +296,20 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
         if (ImGui::Checkbox(trc("settings.show_texture_grid"), &g_config.debug.showTextureGrid)) { g_configIsDirty = true; }
         ImGui::SameLine();
         HelpMarker(trc("settings.tooltip.show_texture_grid"));
+
+        ImGui::Spacing();
+        ImGui::SeparatorText(trc("settings.debug_mpeg_video_memory"));
+        const MpegVideoTextureDebugStats mpegVideoStats = collectMpegVideoTextureDebugStats();
+        if (mpegVideoStats.uploadedClipCount == 0) {
+            ImGui::TextDisabled(trc("settings.debug_mpeg_video_memory_empty"));
+        } else {
+            ImGui::Text("%s %zu", trc("settings.debug_mpeg_video_memory_uploaded_clips"), mpegVideoStats.uploadedClipCount);
+            ImGui::Text("%s %zu", trc("settings.debug_mpeg_video_memory_uploaded_textures"), mpegVideoStats.uploadedTextureCount);
+            ImGui::Text("%s %.2f MiB (%llu bytes)", trc("settings.debug_mpeg_video_memory_vram"),
+                        static_cast<double>(mpegVideoStats.uploadedVramBytes) / (1024.0 * 1024.0),
+                        static_cast<unsigned long long>(mpegVideoStats.uploadedVramBytes));
+            ImGui::TextDisabled(trc("settings.debug_mpeg_video_memory_note"));
+        }
 
         ImGui::Spacing();
         if (ImGui::CollapsingHeader(trc("settings.advanced_logging"))) {

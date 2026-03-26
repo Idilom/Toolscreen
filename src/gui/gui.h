@@ -15,6 +15,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "common/video_media.h"
 #include "config/config_defaults.h"
 #include "imgui.h"
 #include "version.h"
@@ -33,6 +34,7 @@ struct DecodedImageData {
     unsigned char* data = nullptr;
 
     bool isAnimated = false;
+    bool isVideo = false;
     int frameCount = 0;
     int frameHeight = 0;
     std::vector<int> frameDelays;
@@ -383,6 +385,7 @@ struct DebugGlobalConfig {
     bool showTextureGrid = false;
     bool delayRenderingUntilFinished = false;
     bool virtualCameraEnabled = false;        // Output to OBS Virtual Camera driver
+    int videoCacheBudgetMiB = ConfigDefaults::DEBUG_GLOBAL_VIDEO_CACHE_BUDGET_MIB;
 
     bool logModeSwitch = false;
     bool logAnimation = false;

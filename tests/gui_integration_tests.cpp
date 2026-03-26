@@ -473,6 +473,28 @@ void ExpectFramebufferPixelColorNear(int screenX, int screenY, int surfaceHeight
     ExpectColorNear(ReadFramebufferPixelColor(screenX, screenY, surfaceHeight), expected, message, epsilon);
 }
 
+void ExpectFramebufferPixelChannelDominance(int screenX, int screenY, int surfaceHeight, int dominantChannel,
+                                            float minDominant, float minMargin, const std::string& message) {
+    glFinish();
+
+    const Color actual = ReadFramebufferPixelColor(screenX, screenY, surfaceHeight);
+    const float channels[3] = { actual.r, actual.g, actual.b };
+    Expect(dominantChannel >= 0 && dominantChannel < 3, message + " dominant channel index was invalid.");
+    Expect(actual.a >= 0.95f, message + " alpha was lower than expected.");
+    Expect(channels[dominantChannel] >= minDominant,
+           message + " dominant channel was too low. got " + std::to_string(channels[dominantChannel]));
+
+    for (int i = 0; i < 3; ++i) {
+        if (i == dominantChannel) {
+            continue;
+        }
+
+        Expect(channels[dominantChannel] >= channels[i] + minMargin,
+               message + " dominant channel margin was too small. dominant=" +
+                   std::to_string(channels[dominantChannel]) + ", other=" + std::to_string(channels[i]));
+    }
+}
+
 void ExpectFramebufferNeighborhoodContainsColor(int screenX, int screenY, int radius, int surfaceWidth, int surfaceHeight,
                                                 const Color& expected, const std::string& message,
                                                 float epsilon = 0.02f) {
@@ -607,6 +629,149 @@ struct ExpectedMirrorRect {
 
 constexpr Color kExpectedMirrorRenderGreen{ 0.0f, 1.0f, 0.0f, 1.0f };
 constexpr Color kExpectedRenderSurfaceClear{ 0.08f, 0.08f, 0.10f, 1.0f };
+constexpr Color kExpectedPngFixtureColor{ 32.0f / 255.0f, 192.0f / 255.0f, 96.0f / 255.0f, 1.0f };
+
+constexpr std::string_view kEmbeddedPngFixtureBase64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGOU3xfPwMDA"
+    "wgAGAA7IAULTTL/NAAAAAElFTkSuQmCC";
+
+constexpr std::string_view kEmbeddedMpegFixtureBase64 =
+    "AAABuiEAAQABwzNnAAABuwAJwzNnACH/4ODmAAAB4AQ0MQADe7ERAANfkQAAAbMBABAT///gGAAAAbgACABAAAABAAAP//gA"
+    "AAEBE/IUpS+Zv3CAAAABswEAEBP//+AYAAABuAAIAMAAAAEAAA//+AAAAQET8hSlL5m/cIAAAAGzAQAQE///4BgAAAG4AAgB"
+    "QAAAAQAAD//4AAABARPyFKUvmb9wgAAAAbMBABAT///gGAAAAbgACAHAAAABAAAP//gAAAEBE/IUpS+Zv3CAAAABswEAEBP/"
+    "/+AYAAABuAAIAkAAAAEAAA//+AAAAQET8hSlL5m/cIAAAAGzAQAQE///4BgAAAG4AAgCwAAAAQAAD//4AAABARPyFKUvmb9w"
+    "gAAAAbMBABAT///gGAAAAbgACANAAAABAAAP//gAAAEBE/IUpS+Zv3CAAAABswEAEBP//+AYAAABuAAIA8AAAAEAAA//+AAA"
+    "AQET8hSlL5m/cIAAAAGzAQAQE///4BgAAAG4AAgEQAAAAQAAD//4AAABARPyFKUvmb9wgAAAAbMBABAT///gGAAAAbgACATA"
+    "AAABAAAP//gAAAEBE/IUpS+Zv3CAAAABswEAEBP//+AYAAABuAAIBUAAAAEAAA//+AAAAQET8hSlL5m/cIAAAAGzAQAQE///"
+    "4BgAAAG4AAgFwAAAAQAAD//4AAABARPyFKUvmb9wgAAAAbMBABAT///gGAAAAbgACAZAAAABAAAP//gAAAEBE/IUpS+Zv3CA"
+    "AAABswEAEBP//+AYAAABuAAIBsAAAAEAAA//+AAAAQET+UUpS/cLzYAAAAGzAQAQE///4BgAAAG4AAgHQAAAAQAAD//4AAAB"
+    "ARP5RSlL9wvNgAAAAbMBABAT///gGAAAAbgACAfAAAABAAAP//gAAAEBE/lFKUv3C82AAAABswEAEBP//+AYAAABuAAICEAA"
+    "AAEAAA//+AAAAQET+UUpS/cLzYAAAAGzAQAQE///4BgAAAG4AAgIwAAAAQAAD//4AAABARP5RSlL9wvNgAAAAbMBABAT///g"
+    "GAAAAbgACAlAAAABAAAP//gAAAEBE/lFKUv3C82AAAABswEAEBP//+AYAAABuAAICcAAAAEAAA//+AAAAQET+UUpS/cLzYAA"
+    "AAGzAQAQE///4BgAAAG4AAgKQAAAAQAAD//4AAABARP5RSlL9wvNgAAAAbMBABAT///gGAAAAbgACArAAAABAAAP//gAAAEB"
+    "E/lFKUv3C82AAAABswEAEBP//+AYAAABuAAIC0AAAAEAAA//+AAAAQET+UUpS/cLzYAAAAGzAQAQE///4BgAAAG4AAgLwAAA"
+    "AQAAD//4AAABARP5RSlL9wvNgAAAAbMBABAT///gGAAAAbgACAxAAAABAAAP//gAAAEBE/lFKUv3C82AAAABswEAEBP//+AY"
+    "AAABuAAIIEAAAAEAAA//+AAAAQET+UUpS/cLzYAAAAG+A6UP////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////"
+    "//////////////////////////////////////////8=";
+
+int DecodeBase64Value(char ch) {
+    if (ch >= 'A' && ch <= 'Z') {
+        return ch - 'A';
+    }
+    if (ch >= 'a' && ch <= 'z') {
+        return ch - 'a' + 26;
+    }
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0' + 52;
+    }
+    if (ch == '+') {
+        return 62;
+    }
+    if (ch == '/') {
+        return 63;
+    }
+    return -1;
+}
+
+std::vector<unsigned char> DecodeBase64(std::string_view encoded) {
+    std::vector<unsigned char> decoded;
+    decoded.reserve((encoded.size() * 3u) / 4u);
+
+    unsigned int accumulator = 0;
+    int bitCount = -8;
+    for (char ch : encoded) {
+        if (ch == '=') {
+            break;
+        }
+
+        const int value = DecodeBase64Value(ch);
+        if (value < 0) {
+            continue;
+        }
+
+        accumulator = (accumulator << 6) | static_cast<unsigned int>(value);
+        bitCount += 6;
+        if (bitCount >= 0) {
+            decoded.push_back(static_cast<unsigned char>((accumulator >> bitCount) & 0xFFu));
+            bitCount -= 8;
+        }
+    }
+
+    return decoded;
+}
+
+std::filesystem::path WriteEmbeddedFixtureToDisk(const std::filesystem::path& root, const std::filesystem::path& relativePath,
+                                                 std::string_view base64Payload) {
+    const std::filesystem::path fixturePath = root / relativePath;
+    std::error_code error;
+    std::filesystem::create_directories(fixturePath.parent_path(), error);
+    Expect(!error, "Failed to create fixture directory: " + Narrow(fixturePath.parent_path().wstring()));
+
+    const std::vector<unsigned char> decodedBytes = DecodeBase64(base64Payload);
+    Expect(!decodedBytes.empty(), "Embedded fixture payload decoded to zero bytes for: " + relativePath.generic_string());
+
+    std::ofstream out(fixturePath, std::ios::binary | std::ios::trunc);
+    Expect(out.is_open(), "Failed to open embedded fixture path for writing: " + Narrow(fixturePath.wstring()));
+    out.write(reinterpret_cast<const char*>(decodedBytes.data()), static_cast<std::streamsize>(decodedBytes.size()));
+    out.close();
+    Expect(std::filesystem::exists(fixturePath), "Failed to write embedded fixture file: " + Narrow(fixturePath.wstring()));
+    return fixturePath;
+}
+
+bool WaitForUserImageTextureUpload(const std::string& imageName, int timeoutMs = 2000) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        ProcessPendingDecodedImages();
+        {
+            std::lock_guard<std::mutex> lock(g_userImagesMutex);
+            auto it = g_userImages.find(imageName);
+            if (it != g_userImages.end() && it->second.textureId != 0) {
+                return true;
+            }
+        }
+        Sleep(10);
+    }
+
+    return false;
+}
+
+ImageConfig MakeTopLeftImageRenderTestConfig(std::string_view name, std::string path, int x, int y, float scale) {
+    ImageConfig image;
+    image.name = std::string(name);
+    image.path = std::move(path);
+    image.x = x;
+    image.y = y;
+    image.scale = scale;
+    image.relativeSizing = true;
+    image.relativeTo = "topLeftScreen";
+    image.opacity = 1.0f;
+    image.onlyOnMyScreen = false;
+    image.pixelatedScaling = true;
+    image.background.enabled = false;
+    image.border.enabled = false;
+    return image;
+}
+
+void ResetOverlayRenderTestResources();
+
+void LoadImageFixtureForRenderTest(DummyWindow& window, const ImageConfig& image) {
+    Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly while preparing image fixture upload.");
+    ResetOverlayRenderTestResources();
+    LoadImageAsync(DecodedImageData::Type::UserImage, image.name, image.path, g_toolscreenPath);
+    Expect(WaitForUserImageTextureUpload(image.name), "Timed out waiting for image fixture upload to reach the GPU.");
+}
 
 bool EndsWith(std::string_view value, std::string_view suffix) {
     return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
@@ -1081,6 +1246,7 @@ void PopulateRichConfigFixture() {
     g_config.debug.showTextureGrid = true;
     g_config.debug.delayRenderingUntilFinished = true;
     g_config.debug.virtualCameraEnabled = true;
+    g_config.debug.videoCacheBudgetMiB = 384;
     g_config.debug.logModeSwitch = true;
     g_config.debug.logAnimation = true;
     g_config.debug.logHotkey = true;
@@ -1480,6 +1646,7 @@ void VerifyRichDebugSettings() {
     Expect(g_config.debug.showTextureGrid, "Expected debug.showTextureGrid to roundtrip.");
     Expect(g_config.debug.delayRenderingUntilFinished, "Expected debug.delayRenderingUntilFinished to roundtrip.");
     Expect(g_config.debug.virtualCameraEnabled, "Expected debug.virtualCameraEnabled to roundtrip.");
+    Expect(g_config.debug.videoCacheBudgetMiB == 384, "Expected debug.videoCacheBudgetMiB to roundtrip.");
     Expect(g_config.debug.logModeSwitch, "Expected debug.logModeSwitch to roundtrip.");
     Expect(g_config.debug.logAnimation, "Expected debug.logAnimation to roundtrip.");
     Expect(g_config.debug.logHotkey, "Expected debug.logHotkey to roundtrip.");
@@ -3694,6 +3861,128 @@ void RunModeBrowserOverlayRenderTest(TestRunMode runMode = TestRunMode::Automate
     CleanupShaders();
 }
 
+void RunModeImageOverlayRenderPngTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_image_overlay_render_png");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Image Overlay Render PNG Mode";
+    constexpr char kImageName[] = "PNG Overlay Render";
+    constexpr char kMirrorName[] = "PNG Overlay Mirror";
+    constexpr int kImageX = 84;
+    constexpr int kImageY = 72;
+
+    const std::filesystem::path relativeFixturePath = std::filesystem::path("fixtures") / "render-fixture.png";
+    WriteEmbeddedFixtureToDisk(root, relativeFixturePath, kEmbeddedPngFixtureBase64);
+
+    ImageConfig image = MakeTopLeftImageRenderTestConfig(kImageName, relativeFixturePath.generic_string(), kImageX, kImageY, 20.0f);
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.mirrorIds = { kMirrorName };
+    mode.imageIds = { kImageName };
+
+    MirrorConfig mirror = MakeMirrorRenderTestConfig(kMirrorName, 1, 1, "bottomRightScreen", 0, 0, 1.0f);
+
+    g_config.defaultMode = kModeId;
+    g_config.mirrors = { mirror };
+    g_config.images = { image };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    LoadImageFixtureForRenderTest(window, image);
+    ScopedTexture2D sourceTexture(1, 1, MakeSolidRgbaPixels(1, 1, 0, 0, 0));
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
+        if (runMode == TestRunMode::Automated) {
+            ExpectFramebufferPixelColorNear(kImageX + 10, kImageY + 10, GetCachedWindowHeight(), kExpectedPngFixtureColor,
+                                            "Expected the PNG image overlay fixture to render its decoded texture color.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-image-overlay-render-png", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeImageOverlayRenderMpegTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_image_overlay_render_mpeg");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Image Overlay Render MPEG Mode";
+    constexpr char kImageName[] = "MPEG Overlay Render";
+    constexpr char kMirrorName[] = "MPEG Overlay Mirror";
+    constexpr int kImageX = 156;
+    constexpr int kImageY = 118;
+
+    const std::filesystem::path relativeFixturePath = std::filesystem::path("fixtures") / "render-fixture.mpg";
+    WriteEmbeddedFixtureToDisk(root, relativeFixturePath, kEmbeddedMpegFixtureBase64);
+
+    ImageConfig image = MakeTopLeftImageRenderTestConfig(kImageName, relativeFixturePath.generic_string(), kImageX, kImageY, 12.0f);
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.mirrorIds = { kMirrorName };
+    mode.imageIds = { kImageName };
+
+    MirrorConfig mirror = MakeMirrorRenderTestConfig(kMirrorName, 1, 1, "bottomRightScreen", 0, 0, 1.0f);
+
+    g_config.defaultMode = kModeId;
+    g_config.mirrors = { mirror };
+    g_config.images = { image };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    LoadImageFixtureForRenderTest(window, image);
+    ScopedTexture2D sourceTexture(1, 1, MakeSolidRgbaPixels(1, 1, 0, 0, 0));
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
+        if (runMode == TestRunMode::Automated) {
+            ExpectFramebufferPixelChannelDominance(kImageX + 8, kImageY + 8, GetCachedWindowHeight(), 0, 0.35f, 0.10f,
+                                                   "Expected the first MPEG fixture frame to remain red-dominant.");
+
+            Sleep(650);
+
+            RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
+            ExpectFramebufferPixelChannelDominance(kImageX + 8, kImageY + 8, GetCachedWindowHeight(), 2, 0.35f, 0.10f,
+                                                   "Expected the MPEG fixture playback to advance to a blue-dominant frame.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-image-overlay-render-mpeg", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
 void RunSettingsGuiAdvancedTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     const std::filesystem::path root = PrepareCaseDirectory("settings_gui_advanced");
@@ -3917,6 +4206,8 @@ const auto& GetTestCaseDefinitions() {
         {"mode-mirror-group-render", &RunModeMirrorGroupRenderTest},
         {"mode-window-overlay-render", &RunModeWindowOverlayRenderTest},
         {"mode-browser-overlay-render", &RunModeBrowserOverlayRenderTest},
+        {"mode-image-overlay-render-png", &RunModeImageOverlayRenderPngTest},
+        {"mode-image-overlay-render-mpeg", &RunModeImageOverlayRenderMpegTest},
         {"config-error-gui", &RunConfigErrorGuiTest},
         {"settings-gui-basic", &RunSettingsGuiBasicTest},
         {"settings-gui-advanced", &RunSettingsGuiAdvancedTest},

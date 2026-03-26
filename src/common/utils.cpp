@@ -1,4 +1,5 @@
 #include "utils.h"
+#include "common/video_media.h"
 #include "gui/gui.h"
 #include "runtime/logic_thread.h"
 #include "render/mirror_thread.h"
@@ -62,6 +63,14 @@ bool TryComputeImageByteCount(int width, int height, int channels, size_t& outBy
 std::string FormatByteCount(size_t bytes) {
     const size_t mib = 1024ull * 1024ull;
     return std::to_string(bytes) + " bytes (" + std::to_string(bytes / mib) + " MiB)";
+}
+
+size_t GetConfiguredVideoCacheBudgetBytes(int budgetMiB) {
+    if (budgetMiB <= 0) {
+        return 0;
+    }
+
+    return static_cast<size_t>(budgetMiB) * 1024ull * 1024ull;
 }
 } // namespace
 
@@ -1413,7 +1422,10 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
         return;
     }
 
-    std::thread([type, id, path, toolscreenPath]() {
+    const int videoCacheBudgetMiB = g_config.debug.videoCacheBudgetMiB;
+    const size_t videoCacheBudgetBytes = GetConfiguredVideoCacheBudgetBytes(videoCacheBudgetMiB);
+
+    std::thread([type, id, path, toolscreenPath, videoCacheBudgetMiB, videoCacheBudgetBytes]() {
         _set_se_translator(SEHTranslator);
 
         try {
@@ -1430,19 +1442,54 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                 }
                 std::string path_utf8 = WideToUtf8(final_path);
 
-                bool isGif = false;
-                if (path.size() >= 4) {
-                    std::string ext = path.substr(path.size() - 4);
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    isGif = (ext == ".gif");
+                const VisualMediaKind mediaKind = DetectVisualMediaKindFromPath(path);
+                const bool isGif = mediaKind == VisualMediaKind::AnimatedGif;
+                const bool isVideo = mediaKind == VisualMediaKind::VideoMpeg1;
+                if (mediaKind == VisualMediaKind::Unsupported) {
+                    LogCategory("image_monitor",
+                                "Skipping unsupported visual media for '" + id + "' from '" + path + "'. " +
+                                    DescribeSupportedVisualMediaFormats());
+                    return;
                 }
 
                 int w, h, c;
                 unsigned char* data = nullptr;
                 int frameCount = 0;
                 int* delays = nullptr;
+                std::vector<int> decodedFrameDelays;
 
-                if (isGif) {
+                if (isVideo) {
+                    CachedMpegVideoResult cachedVideo;
+                    if (videoCacheBudgetBytes == 0) {
+                        LogCategory("image_monitor",
+                                    "Skipping MPEG-1 video '" + id + "' from '" + path +
+                                        "' because debug.videoCacheBudgetMiB is set to 0 and live streaming playback is disabled.");
+                        return;
+                    }
+
+                    if (DecodeCachedMpegVideoFile(path_utf8, videoCacheBudgetBytes, cachedVideo)) {
+                        w = cachedVideo.width;
+                        h = cachedVideo.height;
+                        c = 4;
+                        frameCount = cachedVideo.frameCount;
+                        decodedFrameDelays = std::move(cachedVideo.frameDelaysMs);
+
+                        if (!cachedVideo.rgbaFrames.empty()) {
+                            const size_t byteCount = cachedVideo.rgbaFrames.size();
+                            data = static_cast<unsigned char*>(malloc(byteCount));
+                            if (data) {
+                                memcpy(data, cachedVideo.rgbaFrames.data(), byteCount);
+                            }
+                        }
+                    } else {
+                        LogCategory("image_monitor",
+                                    "Skipping MPEG-1 video '" + id + "' from '" + path + "' because it could not be cached within the configured budget of " +
+                                        std::to_string(videoCacheBudgetMiB) + " MiB: " + cachedVideo.error);
+                        return;
+                    }
+                }
+
+                if (!isVideo && isGif) {
                     FILE* f = nullptr;
                     errno_t err = fopen_s(&f, path_utf8.c_str(), "rb");
                     if (err == 0 && f) {
@@ -1490,7 +1537,7 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                         frameCount = 0;
                         data = stbi_load(path_utf8.c_str(), &w, &h, &c, 4);
                     }
-                } else {
+                } else if (!isVideo) {
                     data = stbi_load(path_utf8.c_str(), &w, &h, &c, 4);
                 }
 
@@ -1526,7 +1573,7 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                         if (delays) stbi_image_free(delays);
                         return;
                     }
-                    if (decodedBytes > kMaxDecodedImageBytes) {
+                    if (!isVideo && decodedBytes > kMaxDecodedImageBytes) {
                         LogCategory("image_monitor",
                                     "Skipping decoded image '" + id + "' from '" + path + "' because estimated pixel storage " +
                                         FormatByteCount(decodedBytes) + " exceeds guard limit of " +
@@ -1542,18 +1589,28 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                     decoded.width = w;
                     decoded.channels = 4;
                     decoded.data = data;
+                    decoded.isVideo = isVideo;
 
                     if (frameCount > 1) {
                         decoded.isAnimated = true;
                         decoded.frameCount = frameCount;
                         decoded.height = decodedHeight;
                         decoded.frameHeight = h;
-                        for (int i = 0; i < frameCount; i++) {
-                            int delayMs = (delays && delays[i] > 0) ? delays[i] : 100;
-                            decoded.frameDelays.push_back(delayMs);
+                        if (!decodedFrameDelays.empty()) {
+                            decoded.frameDelays = decodedFrameDelays;
+                        } else {
+                            for (int i = 0; i < frameCount; i++) {
+                                int delayMs = (delays && delays[i] > 0) ? delays[i] : 100;
+                                decoded.frameDelays.push_back(delayMs);
+                            }
                         }
-                        Log("Loaded animated GIF '" + id + "' with " + std::to_string(frameCount) +
-                            " frames, frame size: " + std::to_string(w) + "x" + std::to_string(h));
+                        if (isVideo) {
+                            Log("Loaded cached MPEG-1 video '" + id + "' with " + std::to_string(frameCount) +
+                                " frames, frame size: " + std::to_string(w) + "x" + std::to_string(h));
+                        } else {
+                            Log("Loaded animated GIF '" + id + "' with " + std::to_string(frameCount) +
+                                " frames, frame size: " + std::to_string(w) + "x" + std::to_string(h));
+                        }
                     } else {
                         decoded.isAnimated = false;
                         decoded.frameCount = 1;
@@ -1565,15 +1622,20 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
 
                     std::lock_guard<std::mutex> lock(g_decodedImagesMutex);
                     g_decodedImagesQueue.push_back(decoded);
-                    LogCategory("image_monitor", "Successfully decoded image for '" + id + "' from '" + path +
+                    LogCategory("image_monitor", "Successfully decoded visual media for '" + id + "' from '" + path +
                                                    "' on background thread: " + std::to_string(decoded.width) + "x" +
                                                    std::to_string(decoded.height) + ", frameCount=" +
                                                    std::to_string(decoded.frameCount) + ", queueSize=" +
                                                    std::to_string(g_decodedImagesQueue.size()) + ", bytes=" +
                                                    FormatByteCount(decodedBytes) + ".");
                 } else {
-                    Log("ERROR: Failed to decode image '" + path + "' for ID '" + id +
-                        "'. Reason: " + (stbi_failure_reason() ? stbi_failure_reason() : "unknown error"));
+                    std::string reason = "unknown error";
+                    if (isVideo) {
+                        reason = "MPEG-1 video could not be decoded into the configured cache budget";
+                    } else if (stbi_failure_reason()) {
+                        reason = stbi_failure_reason();
+                    }
+                    Log("ERROR: Failed to decode visual media '" + path + "' for ID '" + id + "'. Reason: " + reason);
                     if (data) stbi_image_free(data);
                     if (delays) stbi_image_free(delays);
                 }

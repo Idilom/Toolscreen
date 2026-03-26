@@ -1455,6 +1455,7 @@ void DebugGlobalConfigToToml(const DebugGlobalConfig& cfg, toml::table& out) {
     out.insert("showTextureGrid", cfg.showTextureGrid);
     out.insert("delayRenderingUntilFinished", cfg.delayRenderingUntilFinished);
     out.insert("virtualCameraEnabled", cfg.virtualCameraEnabled);
+    out.insert("videoCacheBudgetMiB", cfg.videoCacheBudgetMiB);
 
     out.insert("logModeSwitch", cfg.logModeSwitch);
     out.insert("logAnimation", cfg.logAnimation);
@@ -1480,6 +1481,7 @@ void DebugGlobalConfigFromToml(const toml::table& tbl, DebugGlobalConfig& cfg) {
     cfg.delayRenderingUntilFinished =
         GetOr(tbl, "delayRenderingUntilFinished", ConfigDefaults::DEBUG_GLOBAL_DELAY_RENDERING_UNTIL_FINISHED);
     cfg.virtualCameraEnabled = GetOr(tbl, "virtualCameraEnabled", false);
+    cfg.videoCacheBudgetMiB = GetOr(tbl, "videoCacheBudgetMiB", ConfigDefaults::DEBUG_GLOBAL_VIDEO_CACHE_BUDGET_MIB);
 
     cfg.logModeSwitch = GetOr(tbl, "logModeSwitch", ConfigDefaults::DEBUG_GLOBAL_LOG_MODE_SWITCH);
     cfg.logAnimation = GetOr(tbl, "logAnimation", ConfigDefaults::DEBUG_GLOBAL_LOG_ANIMATION);

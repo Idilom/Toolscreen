@@ -244,6 +244,9 @@ struct UserImageInstance {
     GLuint textureId = 0;
     int width = 0;
     int height = 0;
+    int textureStorageHeight = 0;
+    int frameCount = 1;
+    int framesPerTexture = 1;
     bool isFullyTransparent = false;
 
     // Render-thread-only texture sampling state cache.
@@ -251,8 +254,12 @@ struct UserImageInstance {
     bool lastPixelatedScaling = false;
 
     bool isAnimated = false;
+    bool isVideo = false;
     std::vector<GLuint> frameTextures;
+    std::vector<int> frameTextureHeights;
     std::vector<int> frameDelays;
+    std::vector<uint64_t> frameEndTimesMs;
+    uint64_t totalAnimationDurationMs = 0;
     size_t currentFrame = 0;
     std::chrono::steady_clock::time_point lastFrameTime;
 

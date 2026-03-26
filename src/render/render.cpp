@@ -1667,25 +1667,24 @@ void CleanupShaders() {
 }
 
 static void CollectAllGPUImageTexturesForDeletionUnsafe(std::vector<GLuint>& texturesToDelete) {
-    for (auto const& [id, inst] : g_backgroundTextures) {
-        if (inst.isAnimated) {
-            for (GLuint tex : inst.frameTextures) {
-                if (tex != 0) texturesToDelete.push_back(tex);
-            }
-        } else if (inst.textureId != 0) {
+    auto collectTextureIdsForDeletion = [&texturesToDelete](const auto& inst) {
+        if (inst.textureId != 0) {
             texturesToDelete.push_back(inst.textureId);
         }
+        for (GLuint tex : inst.frameTextures) {
+            if (tex != 0 && tex != inst.textureId) {
+                texturesToDelete.push_back(tex);
+            }
+        }
+    };
+
+    for (auto const& [id, inst] : g_backgroundTextures) {
+        collectTextureIdsForDeletion(inst);
     }
     g_backgroundTextures.clear();
 
     for (auto const& [id, inst] : g_userImages) {
-        if (inst.isAnimated) {
-            for (GLuint tex : inst.frameTextures) {
-                if (tex != 0) texturesToDelete.push_back(tex);
-            }
-        } else if (inst.textureId != 0) {
-            texturesToDelete.push_back(inst.textureId);
-        }
+        collectTextureIdsForDeletion(inst);
     }
     g_userImages.clear();
 }
@@ -1710,6 +1709,69 @@ void DiscardAllGPUImages() {
     std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
 
     DiscardAllGPUImagesLocked();
+}
+
+void DiscardUnusedUserImageCaches() {
+    std::unordered_set<std::string> allowedImageIds;
+    allowedImageIds.reserve(g_config.images.size() + g_config.eyezoom.overlays.size());
+    for (const auto& img : g_config.images) {
+        allowedImageIds.insert(img.name);
+    }
+    for (const auto& overlay : g_config.eyezoom.overlays) {
+        allowedImageIds.insert("ezoverlay_" + overlay.name);
+    }
+
+    std::vector<GLuint> texturesToDelete;
+    size_t removedGpuEntries = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_userImagesMutex);
+        for (auto it = g_userImages.begin(); it != g_userImages.end();) {
+            if (allowedImageIds.find(it->first) != allowedImageIds.end()) {
+                ++it;
+                continue;
+            }
+
+            if (it->second.textureId != 0) {
+                texturesToDelete.push_back(it->second.textureId);
+            }
+            for (GLuint tex : it->second.frameTextures) {
+                if (tex != 0 && tex != it->second.textureId) {
+                    texturesToDelete.push_back(tex);
+                }
+            }
+            it = g_userImages.erase(it);
+            removedGpuEntries += 1;
+        }
+    }
+
+    size_t removedPendingDecodes = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_decodedImagesMutex);
+        for (auto it = g_decodedImagesQueue.begin(); it != g_decodedImagesQueue.end();) {
+            if (it->type != DecodedImageData::Type::UserImage || allowedImageIds.find(it->id) != allowedImageIds.end()) {
+                ++it;
+                continue;
+            }
+
+            if (it->data) {
+                stbi_image_free(it->data);
+                it->data = nullptr;
+            }
+            it = g_decodedImagesQueue.erase(it);
+            removedPendingDecodes += 1;
+        }
+    }
+
+    if (!texturesToDelete.empty()) {
+        std::lock_guard<std::mutex> lock(g_texturesToDeleteMutex);
+        g_texturesToDelete.insert(g_texturesToDelete.end(), texturesToDelete.begin(), texturesToDelete.end());
+        g_hasTexturesToDelete.store(true, std::memory_order_release);
+    }
+
+    if (removedGpuEntries > 0 || removedPendingDecodes > 0) {
+        LogCategory("image_monitor", "Pruned deleted user image caches: gpuEntries=" + std::to_string(removedGpuEntries) +
+                                         ", pendingDecodes=" + std::to_string(removedPendingDecodes) + ".");
+    }
 }
 
 struct PixelStoreStateGuard {
@@ -2177,6 +2239,9 @@ void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
     UploadDecodedImageToGPU_Internal(imgData);
 }
 
+template <typename TextureInstance>
+static void InitializeAnimatedTexturePlayback(TextureInstance& inst, size_t frameCount);
+
 void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
     PROFILE_SCOPE_CAT("GPU Image Upload", "GPU Operations");
 
@@ -2186,7 +2251,7 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
         LogCategory("image_monitor", "Skipping GPU upload for image '" + imgData.id + "' due to invalid decoded image data: " + decodedReason + ".");
         return;
     }
-    if (decodedBytes > kMaxDecodedImageUploadBytes) {
+    if (!imgData.isVideo && decodedBytes > kMaxDecodedImageUploadBytes) {
         LogCategory("image_monitor",
                     "Skipping GPU upload for image '" + imgData.id + "' because decoded storage " + FormatByteCount(decodedBytes) +
                         " exceeds guard limit of " + FormatByteCount(kMaxDecodedImageUploadBytes) + ".");
@@ -2204,12 +2269,13 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
         if (it != g_backgroundTextures.end()) {
             BackgroundTextureInstance& oldInst = it->second;
             std::lock_guard<std::mutex> lock(g_texturesToDeleteMutex);
-            if (oldInst.isAnimated) {
-                for (GLuint tex : oldInst.frameTextures) {
-                    if (tex != 0) g_texturesToDelete.push_back(tex);
-                }
-            } else if (oldInst.textureId != 0) {
+            if (oldInst.textureId != 0) {
                 g_texturesToDelete.push_back(oldInst.textureId);
+            }
+            for (GLuint tex : oldInst.frameTextures) {
+                if (tex != 0 && tex != oldInst.textureId) {
+                    g_texturesToDelete.push_back(tex);
+                }
             }
             g_hasTexturesToDelete.store(true, std::memory_order_release);
             g_backgroundTextures.erase(it);
@@ -2217,18 +2283,37 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
 
         if (imgData.data) {
             BackgroundTextureInstance inst;
+            inst.width = imgData.width;
+            inst.height = imgData.frameHeight;
+            inst.textureStorageHeight = imgData.height;
+            inst.frameCount = (imgData.isAnimated && imgData.frameCount > 1) ? imgData.frameCount : 1;
+            inst.isVideo = imgData.isVideo;
 
             if (imgData.isAnimated && imgData.frameCount > 1) {
                 inst.isAnimated = true;
                 inst.frameDelays = imgData.frameDelays;
-                inst.currentFrame = 0;
-                inst.lastFrameTime = std::chrono::steady_clock::now();
+                InitializeAnimatedTexturePlayback(inst, static_cast<size_t>(inst.frameCount));
 
-                int frameHeight = imgData.frameHeight;
-                for (int i = 0; i < imgData.frameCount; i++) {
-                    GLuint t;
-                    glGenTextures(1, &t);
-                    BindTextureDirect(GL_TEXTURE_2D, t);
+                GLint maxTextureSize = 0;
+                glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+                const int frameHeight = imgData.frameHeight;
+                if (maxTextureSize > 0 && (imgData.width > maxTextureSize || frameHeight > maxTextureSize)) {
+                    LogCategory("image_monitor", "Skipping animated background atlas upload for '" + imgData.id +
+                                                     "' because frame dimensions exceed GL_MAX_TEXTURE_SIZE=" +
+                                                     std::to_string(maxTextureSize) + ": " + std::to_string(imgData.width) + "x" +
+                                                     std::to_string(frameHeight) + ".");
+                    return;
+                }
+                const int framesPerTexture = (std::max)(1, maxTextureSize > 0 ? (maxTextureSize / (std::max)(1, frameHeight)) : imgData.frameCount);
+                inst.framesPerTexture = framesPerTexture;
+                inst.textureStorageHeight = (std::min)(imgData.height, frameHeight * framesPerTexture);
+
+                for (int frameStart = 0; frameStart < imgData.frameCount; frameStart += framesPerTexture) {
+                    const int framesThisTexture = (std::min)(framesPerTexture, imgData.frameCount - frameStart);
+                    const int pageHeight = frameHeight * framesThisTexture;
+                    GLuint texture = 0;
+                    glGenTextures(1, &texture);
+                    BindTextureDirect(GL_TEXTURE_2D, texture);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -2238,16 +2323,19 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
                     glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
                     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
-                    unsigned char* frameData = imgData.data + (i * frameHeight * imgData.width * 4);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, imgData.width, frameHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, frameData);
-                    glGenerateMipmap(GL_TEXTURE_2D);
-
-                    inst.frameTextures.push_back(t);
+                    unsigned char* pageData = imgData.data + (static_cast<size_t>(frameStart) * frameHeight * imgData.width * 4ull);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, imgData.width, pageHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, pageData);
+                    inst.frameTextures.push_back(texture);
+                    inst.frameTextureHeights.push_back(pageHeight);
                 }
-                inst.textureId = inst.frameTextures[0];
+
+                if (!inst.frameTextures.empty()) {
+                    inst.textureId = inst.frameTextures.front();
+                }
 
                 g_backgroundTextures[imgData.id] = inst;
-                Log("Uploaded animated background for '" + imgData.id + "' to GPU (" + std::to_string(imgData.frameCount) + " frames).");
+                Log("Uploaded animated background atlas for '" + imgData.id + "' to GPU (" + std::to_string(imgData.frameCount) +
+                    " frames across " + std::to_string(inst.frameTextures.size()) + " texture page(s)).");
             } else {
                 inst.isAnimated = false;
 
@@ -2264,7 +2352,6 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, imgData.width, imgData.frameHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, imgData.data);
-                glGenerateMipmap(GL_TEXTURE_2D);
 
                 inst.textureId = t;
                 g_backgroundTextures[imgData.id] = inst;
@@ -2288,12 +2375,13 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
         }
         if (hadOldInst) {
             std::lock_guard<std::mutex> lock(g_texturesToDeleteMutex);
-            if (oldInst.isAnimated) {
-                for (GLuint tex : oldInst.frameTextures) {
-                    if (tex != 0) g_texturesToDelete.push_back(tex);
-                }
-            } else if (oldInst.textureId != 0) {
+            if (oldInst.textureId != 0) {
                 g_texturesToDelete.push_back(oldInst.textureId);
+            }
+            for (GLuint tex : oldInst.frameTextures) {
+                if (tex != 0 && tex != oldInst.textureId) {
+                    g_texturesToDelete.push_back(tex);
+                }
             }
         }
         if (hadOldInst) { g_hasTexturesToDelete.store(true, std::memory_order_release); }
@@ -2302,6 +2390,9 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
             UserImageInstance inst;
             inst.width = imgData.width;
             inst.height = imgData.frameHeight;
+            inst.textureStorageHeight = imgData.height;
+            inst.frameCount = (imgData.isAnimated && imgData.frameCount > 1) ? imgData.frameCount : 1;
+            inst.isVideo = imgData.isVideo;
 
             inst.isFullyTransparent = true;
             const size_t totalPixels = static_cast<size_t>(imgData.width) * static_cast<size_t>(imgData.height);
@@ -2315,14 +2406,28 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
             if (imgData.isAnimated && imgData.frameCount > 1) {
                 inst.isAnimated = true;
                 inst.frameDelays = imgData.frameDelays;
-                inst.currentFrame = 0;
-                inst.lastFrameTime = std::chrono::steady_clock::now();
+                InitializeAnimatedTexturePlayback(inst, static_cast<size_t>(inst.frameCount));
 
-                int frameHeight = imgData.frameHeight;
-                for (int i = 0; i < imgData.frameCount; i++) {
-                    GLuint t;
-                    glGenTextures(1, &t);
-                    BindTextureDirect(GL_TEXTURE_2D, t);
+                GLint maxTextureSize = 0;
+                glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+                const int frameHeight = imgData.frameHeight;
+                if (maxTextureSize > 0 && (imgData.width > maxTextureSize || frameHeight > maxTextureSize)) {
+                    LogCategory("image_monitor", "Skipping animated user image atlas upload for '" + imgData.id +
+                                                     "' because frame dimensions exceed GL_MAX_TEXTURE_SIZE=" +
+                                                     std::to_string(maxTextureSize) + ": " + std::to_string(imgData.width) + "x" +
+                                                     std::to_string(frameHeight) + ".");
+                    return;
+                }
+                const int framesPerTexture = (std::max)(1, maxTextureSize > 0 ? (maxTextureSize / (std::max)(1, frameHeight)) : imgData.frameCount);
+                inst.framesPerTexture = framesPerTexture;
+                inst.textureStorageHeight = (std::min)(imgData.height, frameHeight * framesPerTexture);
+
+                for (int frameStart = 0; frameStart < imgData.frameCount; frameStart += framesPerTexture) {
+                    const int framesThisTexture = (std::min)(framesPerTexture, imgData.frameCount - frameStart);
+                    const int pageHeight = frameHeight * framesThisTexture;
+                    GLuint texture = 0;
+                    glGenTextures(1, &texture);
+                    BindTextureDirect(GL_TEXTURE_2D, texture);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -2332,19 +2437,25 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
                     glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
                     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
-                    unsigned char* frameData = imgData.data + (i * frameHeight * imgData.width * 4);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, imgData.width, frameHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, frameData);
-                    glGenerateMipmap(GL_TEXTURE_2D);
-
-                    inst.frameTextures.push_back(t);
+                    unsigned char* pageData = imgData.data + (static_cast<size_t>(frameStart) * frameHeight * imgData.width * 4ull);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, imgData.width, pageHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, pageData);
+                    inst.frameTextures.push_back(texture);
+                    inst.frameTextureHeights.push_back(pageHeight);
                 }
-                inst.textureId = inst.frameTextures[0];
+
+                if (!inst.frameTextures.empty()) {
+                    inst.textureId = inst.frameTextures.front();
+                }
+
+                const size_t pageCount = inst.frameTextures.size();
 
                 {
                     std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
                     g_userImages[imgData.id] = std::move(inst);
                 }
-                LogCategory("image_monitor", "Uploaded animated user image '" + imgData.id + "' to GPU (" + std::to_string(imgData.frameCount) + " frames).");
+                LogCategory("image_monitor", "Uploaded animated user image atlas '" + imgData.id + "' to GPU (" +
+                                                 std::to_string(imgData.frameCount) + " frames across " +
+                                                 std::to_string(pageCount) + " texture page(s)).");
             } else {
                 inst.isAnimated = false;
 
@@ -2360,7 +2471,6 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, imgData.width, imgData.frameHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, imgData.data);
-                glGenerateMipmap(GL_TEXTURE_2D);
 
                 {
                     std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
@@ -2649,28 +2759,91 @@ static int GetAnimatedTextureDelayMs(const std::vector<int>& frameDelays, size_t
 }
 
 template <typename TextureInstance>
-static GLuint ResolveAnimatedTextureId(TextureInstance& inst) {
-    if (!inst.isAnimated || inst.frameTextures.empty()) {
-        return inst.textureId;
+static void InitializeAnimatedTexturePlayback(TextureInstance& inst, size_t frameCount) {
+    inst.frameEndTimesMs.clear();
+    inst.frameEndTimesMs.reserve(frameCount);
+
+    uint64_t totalDurationMs = 0;
+    for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
+        totalDurationMs += static_cast<uint64_t>(GetAnimatedTextureDelayMs(inst.frameDelays, frameIndex));
+        inst.frameEndTimesMs.push_back(totalDurationMs);
     }
 
-    if (inst.currentFrame >= inst.frameTextures.size()) {
-        inst.currentFrame = 0;
+    inst.totalAnimationDurationMs = totalDurationMs;
+    inst.currentFrame = 0;
+    inst.lastFrameTime = std::chrono::steady_clock::now();
+}
+
+template <typename TextureInstance>
+struct AnimatedTextureResolveResult {
+    GLuint textureId = 0;
+    float sourceRect[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+};
+
+template <typename TextureInstance>
+static AnimatedTextureResolveResult<TextureInstance> ResolveAnimatedTexture(TextureInstance& inst) {
+    AnimatedTextureResolveResult<TextureInstance> result;
+    result.textureId = inst.textureId;
+
+    if (!inst.isAnimated) {
+        return result;
     }
 
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - inst.lastFrameTime).count();
-    int delay = GetAnimatedTextureDelayMs(inst.frameDelays, inst.currentFrame);
-
-    while (elapsed >= delay) {
-        elapsed -= delay;
-        inst.currentFrame = (inst.currentFrame + 1) % inst.frameTextures.size();
-        delay = GetAnimatedTextureDelayMs(inst.frameDelays, inst.currentFrame);
+    const size_t frameCount = inst.frameCount > 1 ? static_cast<size_t>(inst.frameCount)
+                                                  : (!inst.frameTextures.empty() ? inst.frameTextures.size() : 1u);
+    if (frameCount <= 1) {
+        return result;
     }
 
-    inst.textureId = inst.frameTextures[inst.currentFrame];
-    inst.lastFrameTime = now - std::chrono::milliseconds(elapsed);
-    return inst.textureId;
+    if (inst.frameEndTimesMs.size() != frameCount || inst.totalAnimationDurationMs == 0) {
+        InitializeAnimatedTexturePlayback(inst, frameCount);
+    }
+
+    if (inst.lastFrameTime.time_since_epoch().count() == 0) {
+        inst.lastFrameTime = std::chrono::steady_clock::now();
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - inst.lastFrameTime).count();
+    const uint64_t cyclePositionMs = inst.totalAnimationDurationMs > 0
+                                         ? static_cast<uint64_t>((std::max)(int64_t{ 0 }, elapsedMs)) % inst.totalAnimationDurationMs
+                                         : 0;
+    auto frameIt = std::upper_bound(inst.frameEndTimesMs.begin(), inst.frameEndTimesMs.end(), cyclePositionMs);
+    size_t resolvedFrame = static_cast<size_t>(std::distance(inst.frameEndTimesMs.begin(), frameIt));
+    if (resolvedFrame >= frameCount) {
+        resolvedFrame = frameCount - 1;
+    }
+    inst.currentFrame = resolvedFrame;
+
+    if (!inst.frameTextures.empty()) {
+        const size_t framesPerTexture = static_cast<size_t>((std::max)(1, inst.framesPerTexture));
+        const size_t pageIndex = (std::min)(resolvedFrame / framesPerTexture, inst.frameTextures.size() - 1);
+        const size_t frameIndexWithinPage = resolvedFrame - pageIndex * framesPerTexture;
+        inst.textureId = inst.frameTextures[pageIndex];
+        result.textureId = inst.textureId;
+
+        int pageHeight = inst.textureStorageHeight > 0 ? inst.textureStorageHeight : inst.height;
+        if (pageIndex < inst.frameTextureHeights.size() && inst.frameTextureHeights[pageIndex] > 0) {
+            pageHeight = inst.frameTextureHeights[pageIndex];
+        }
+        const int frameHeight = inst.height > 0 ? inst.height : pageHeight;
+        if (pageHeight > 0 && frameHeight > 0) {
+            const float frameScale = static_cast<float>(frameHeight) / static_cast<float>(pageHeight);
+            result.sourceRect[1] = frameScale * static_cast<float>(frameIndexWithinPage);
+            result.sourceRect[3] = frameScale;
+        }
+        return result;
+    }
+
+    const int storageHeight = inst.textureStorageHeight > 0 ? inst.textureStorageHeight : inst.height;
+    const int frameHeight = inst.height > 0 ? inst.height : storageHeight;
+    if (storageHeight > 0 && frameHeight > 0) {
+        const float frameScale = static_cast<float>(frameHeight) / static_cast<float>(storageHeight);
+        result.sourceRect[1] = frameScale * static_cast<float>(resolvedFrame);
+        result.sourceRect[3] = frameScale;
+    }
+
+    return result;
 }
 
 struct TextureSampleabilityCacheEntry {
@@ -3429,15 +3602,18 @@ static void RenderImagesDirect(const std::vector<ImageConfig>& activeImages, int
         int texWidth = 0;
         int texHeight = 0;
         bool isFullyTransparent = false;
+        float animatedSourceRect[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
         {
             std::lock_guard<std::mutex> lock(g_userImagesMutex);
             auto it = g_userImages.find(conf.name);
             if (it == g_userImages.end() || it->second.textureId == 0) continue;
             UserImageInstance& inst = it->second;
-            texId = ResolveAnimatedTextureId(inst);
+            const auto animatedTexture = ResolveAnimatedTexture(inst);
+            texId = animatedTexture.textureId;
             texWidth = inst.width;
             texHeight = inst.height;
             isFullyTransparent = inst.isFullyTransparent;
+            memcpy(animatedSourceRect, animatedTexture.sourceRect, sizeof(animatedSourceRect));
 
             if (!inst.filterInitialized || inst.lastPixelatedScaling != conf.pixelatedScaling) {
                 const GLint minFilter = conf.pixelatedScaling ? GL_NEAREST : GL_LINEAR;
@@ -3539,11 +3715,11 @@ static void RenderImagesDirect(const std::vector<ImageConfig>& activeImages, int
         glUniform1f(g_imageRenderShaderLocs.opacity, effectiveOpacity);
 
         const float invW = (texWidth > 0) ? (1.0f / texWidth) : 0.0f;
-        const float invH = (texHeight > 0) ? (1.0f / texHeight) : 0.0f;
+    const float invFrameH = (texHeight > 0) ? (1.0f / texHeight) : 0.0f;
         float tu1 = conf.crop_left * invW;
         float tu2 = (texWidth - conf.crop_right) * invW;
-        float tv1 = conf.crop_bottom * invH;
-        float tv2 = (texHeight - conf.crop_top) * invH;
+    float tv1 = animatedSourceRect[1] + conf.crop_bottom * invFrameH * animatedSourceRect[3];
+    float tv2 = animatedSourceRect[1] + (texHeight - conf.crop_top) * invFrameH * animatedSourceRect[3];
         float verts[] = { nx1, ny1, tu1, tv1, nx2, ny1, tu2, tv1, nx2, ny2, tu2, tv2,
                           nx1, ny1, tu1, tv1, nx2, ny2, tu2, tv2, nx1, ny2, tu1, tv2 };
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
@@ -4622,13 +4798,25 @@ void CaptureSameThreadVirtualCameraBackbufferFrame(int sourceW, int sourceH, boo
     slot->height = outH;
 }
 
-static GLuint ResolveModeBackgroundTextureId(const std::string& modeId) {
+static GLuint ResolveModeBackgroundTextureId(const std::string& modeId, float outSourceRect[4] = nullptr) {
     std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
     auto bgTexIt = g_backgroundTextures.find(modeId);
-    if (bgTexIt == g_backgroundTextures.end()) { return 0; }
+    if (bgTexIt == g_backgroundTextures.end()) {
+        if (outSourceRect) {
+            outSourceRect[0] = 0.0f;
+            outSourceRect[1] = 0.0f;
+            outSourceRect[2] = 1.0f;
+            outSourceRect[3] = 1.0f;
+        }
+        return 0;
+    }
 
     BackgroundTextureInstance& bgInst = bgTexIt->second;
-    return ResolveAnimatedTextureId(bgInst);
+    const auto animatedTexture = ResolveAnimatedTexture(bgInst);
+    if (outSourceRect) {
+        memcpy(outSourceRect, animatedTexture.sourceRect, sizeof(animatedTexture.sourceRect));
+    }
+    return animatedTexture.textureId;
 }
 
 static void DrawFullscreenSolidColor(const Color& color) {
@@ -4678,11 +4866,24 @@ static void DrawFullscreenGradient(const BackgroundConfig& bg) {
 }
 
 static void DrawFullscreenPassthroughTexture(GLuint textureId, float opacity) {
+    const float sourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
     if (textureId == 0) { return; }
 
     glUseProgram(g_passthroughProgram);
     BindTextureDirect(GL_TEXTURE_2D, textureId);
-    glUniform4f(g_passthroughShaderLocs.sourceRect, 0.0f, 0.0f, 1.0f, 1.0f);
+    glUniform4f(g_passthroughShaderLocs.sourceRect, sourceRect[0], sourceRect[1], sourceRect[2], sourceRect[3]);
+    glUniform1f(g_passthroughShaderLocs.opacity, opacity);
+    glBindVertexArray(g_fullscreenQuadVAO);
+    glDisable(GL_BLEND);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+static void DrawFullscreenPassthroughTexture(GLuint textureId, const float sourceRect[4], float opacity) {
+    if (textureId == 0) { return; }
+
+    glUseProgram(g_passthroughProgram);
+    BindTextureDirect(GL_TEXTURE_2D, textureId);
+    glUniform4f(g_passthroughShaderLocs.sourceRect, sourceRect[0], sourceRect[1], sourceRect[2], sourceRect[3]);
     glUniform1f(g_passthroughShaderLocs.opacity, opacity);
     glBindVertexArray(g_fullscreenQuadVAO);
     glDisable(GL_BLEND);
@@ -4694,9 +4895,10 @@ static void RenderSameThreadObsBackground(const ModeConfig* modeToRender, int fu
 
     const BackgroundConfig& bg = modeToRender->background;
     if (bg.selectedMode == "image") {
-        const GLuint backgroundTexture = ResolveModeBackgroundTextureId(modeToRender->id);
+        float sourceRect[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+        const GLuint backgroundTexture = ResolveModeBackgroundTextureId(modeToRender->id, sourceRect);
         if (backgroundTexture != 0) {
-            DrawFullscreenPassthroughTexture(backgroundTexture, 1.0f);
+            DrawFullscreenPassthroughTexture(backgroundTexture, sourceRect, 1.0f);
             return;
         }
     }
@@ -4709,11 +4911,12 @@ static void RenderSameThreadObsBackground(const ModeConfig* modeToRender, int fu
     DrawFullscreenSolidColor(bg.color);
 }
 
-static void RenderSameThreadObsBackgroundConfig(const BackgroundConfig& bg, GLuint backgroundTexture, int fullW, int fullH) {
+static void RenderSameThreadObsBackgroundConfig(const BackgroundConfig& bg, GLuint backgroundTexture, const float sourceRect[4], int fullW,
+                                               int fullH) {
     if (fullW <= 0 || fullH <= 0) { return; }
 
     if (bg.selectedMode == "image" && backgroundTexture != 0) {
-        DrawFullscreenPassthroughTexture(backgroundTexture, 1.0f);
+        DrawFullscreenPassthroughTexture(backgroundTexture, sourceRect, 1.0f);
         return;
     }
 
@@ -4838,23 +5041,24 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
     }
 
     GLuint obsBackgroundTexture = 0;
+    float obsBackgroundSourceRect[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
     {
         PROFILE_SCOPE_CAT("Resolve OBS Background Texture", "OBS");
         if (useFromBackground) {
             if (fromBackground.selectedMode == "image") {
-                obsBackgroundTexture = ResolveModeBackgroundTextureId(fromModeId);
+                obsBackgroundTexture = ResolveModeBackgroundTextureId(fromModeId, obsBackgroundSourceRect);
             }
         } else if (modeToRender->background.selectedMode == "image") {
-            obsBackgroundTexture = ResolveModeBackgroundTextureId(modeToRender->id);
+            obsBackgroundTexture = ResolveModeBackgroundTextureId(modeToRender->id, obsBackgroundSourceRect);
         }
     }
 
     {
         PROFILE_SCOPE_CAT("Render OBS Background", "OBS");
         if (useFromBackground) {
-            RenderSameThreadObsBackgroundConfig(fromBackground, obsBackgroundTexture, fullW, fullH);
+            RenderSameThreadObsBackgroundConfig(fromBackground, obsBackgroundTexture, obsBackgroundSourceRect, fullW, fullH);
         } else {
-            RenderSameThreadObsBackgroundConfig(modeToRender->background, obsBackgroundTexture, fullW, fullH);
+            RenderSameThreadObsBackgroundConfig(modeToRender->background, obsBackgroundTexture, obsBackgroundSourceRect, fullW, fullH);
         }
     }
 
@@ -5344,15 +5548,18 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     GLuint activeOverlayTextureId = 0;
     int activeOverlayTextureWidth = 0;
     int activeOverlayTextureHeight = 0;
+    float activeOverlaySourceRect[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
     if (zoomConfig.activeOverlayIndex >= 0 && zoomConfig.activeOverlayIndex < (int)zoomConfig.overlays.size()) {
         activeOverlay = &zoomConfig.overlays[zoomConfig.activeOverlayIndex];
         std::lock_guard<std::mutex> lock(g_userImagesMutex);
         auto it = g_userImages.find("ezoverlay_" + activeOverlay->name);
         if (it != g_userImages.end() && it->second.textureId != 0) {
             UserImageInstance& inst = it->second;
-            activeOverlayTextureId = ResolveAnimatedTextureId(inst);
+            const auto animatedTexture = ResolveAnimatedTexture(inst);
+            activeOverlayTextureId = animatedTexture.textureId;
             activeOverlayTextureWidth = inst.width;
             activeOverlayTextureHeight = inst.height;
+            memcpy(activeOverlaySourceRect, animatedTexture.sourceRect, sizeof(activeOverlaySourceRect));
         }
     }
 
@@ -5474,8 +5681,12 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         glUniform1f(g_imageRenderShaderLocs.opacity, effectiveOverlayOpacity);
 
         float overlayVerts[] = {
-            nx1, ny1, 0.0f, 0.0f, nx2, ny1, 1.0f, 0.0f, nx2, ny2, 1.0f, 1.0f,
-            nx1, ny1, 0.0f, 0.0f, nx2, ny2, 1.0f, 1.0f, nx1, ny2, 0.0f, 1.0f,
+            nx1, ny1, activeOverlaySourceRect[0], activeOverlaySourceRect[1],
+            nx2, ny1, activeOverlaySourceRect[0] + activeOverlaySourceRect[2], activeOverlaySourceRect[1],
+            nx2, ny2, activeOverlaySourceRect[0] + activeOverlaySourceRect[2], activeOverlaySourceRect[1] + activeOverlaySourceRect[3],
+            nx1, ny1, activeOverlaySourceRect[0], activeOverlaySourceRect[1],
+            nx2, ny2, activeOverlaySourceRect[0] + activeOverlaySourceRect[2], activeOverlaySourceRect[1] + activeOverlaySourceRect[3],
+            nx1, ny2, activeOverlaySourceRect[0], activeOverlaySourceRect[1] + activeOverlaySourceRect[3],
         };
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(overlayVerts), overlayVerts);
         glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -5641,6 +5852,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         BackgroundConfig fromBackground;
         BorderConfig fromBorder;
         GLuint fromBgTex = 0;
+        float fromBgSourceRect[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
         bool useFromBackground = false;
 
         if (isAnimating && !fromModeId.empty()) {
@@ -5658,35 +5870,45 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                 auto fromBgTexIt = g_backgroundTextures.find(fromModeId);
                 if (fromBgTexIt != g_backgroundTextures.end()) {
                     BackgroundTextureInstance& bgInst = fromBgTexIt->second;
-                    fromBgTex = ResolveAnimatedTextureId(bgInst);
+                    const auto animatedTexture = ResolveAnimatedTexture(bgInst);
+                    fromBgTex = animatedTexture.textureId;
+                    memcpy(fromBgSourceRect, animatedTexture.sourceRect, sizeof(fromBgSourceRect));
                 }
             }
         }
 
         GLuint bgTex = 0;
+        float bgSourceRect[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
         {
             PROFILE_SCOPE_CAT("Background Texture Lookup", "Rendering");
             std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
             auto bgTexIt = g_backgroundTextures.find(modeToRender->id);
             if (bgTexIt != g_backgroundTextures.end()) {
                 BackgroundTextureInstance& bgInst = bgTexIt->second;
-                bgTex = ResolveAnimatedTextureId(bgInst);
+                const auto animatedTexture = ResolveAnimatedTexture(bgInst);
+                bgTex = animatedTexture.textureId;
+                memcpy(bgSourceRect, animatedTexture.sourceRect, sizeof(bgSourceRect));
             }
         }
 
-        auto drawTexturedRegion = [&](int rx, int ry_gl, int rw, int rh, GLuint texId, float opacity) {
+        auto drawTexturedRegion = [&](int rx, int ry_gl, int rw, int rh, const float sourceRect[4]) {
             if (rw <= 0 || rh <= 0) return;
             glScissor(rx, ry_gl, rw, rh);
 
-            float u1 = static_cast<float>(rx) / fullW;
-            float u2 = static_cast<float>(rx + rw) / fullW;
-            float v1 = static_cast<float>(ry_gl) / fullH;
-            float v2 = static_cast<float>(ry_gl + rh) / fullH;
+            float baseU1 = static_cast<float>(rx) / fullW;
+            float baseU2 = static_cast<float>(rx + rw) / fullW;
+            float baseV1 = static_cast<float>(ry_gl) / fullH;
+            float baseV2 = static_cast<float>(ry_gl + rh) / fullH;
 
-            float nx1 = u1 * 2.0f - 1.0f;
-            float nx2 = u2 * 2.0f - 1.0f;
-            float ny1 = v1 * 2.0f - 1.0f;
-            float ny2 = v2 * 2.0f - 1.0f;
+            float u1 = sourceRect[0] + baseU1 * sourceRect[2];
+            float u2 = sourceRect[0] + baseU2 * sourceRect[2];
+            float v1 = sourceRect[1] + baseV1 * sourceRect[3];
+            float v2 = sourceRect[1] + baseV2 * sourceRect[3];
+
+            float nx1 = baseU1 * 2.0f - 1.0f;
+            float nx2 = baseU2 * 2.0f - 1.0f;
+            float ny1 = baseV1 * 2.0f - 1.0f;
+            float ny2 = baseV2 * 2.0f - 1.0f;
 
             float quad[] = { nx1, ny1, u1, v1, nx2, ny1, u2, v1, nx2, ny2, u2, v2, nx1, ny1, u1, v1, nx2, ny2, u2, v2, nx1, ny2, u1, v2 };
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quad), quad);
@@ -5726,7 +5948,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             glDrawArrays(GL_TRIANGLES, 0, 6);
         };
 
-        auto renderBackgroundImage = [&](GLuint texId, float opacity) {
+        auto renderBackgroundImage = [&](GLuint texId, const float sourceRect[4], float opacity) {
             if (texId == 0) return;
 
             PROFILE_SCOPE_CAT("Scissor Background Image", "Rendering");
@@ -5754,10 +5976,10 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             int vpBottom_gl = finalY_gl + letterboxExtendY;
             int vpTop_gl = finalY_gl + finalH - letterboxExtendY;
 
-            drawTexturedRegion(0, 0, fullW, vpBottom_gl, texId, opacity);
-            drawTexturedRegion(0, vpTop_gl, fullW, fullH - vpTop_gl, texId, opacity);
-            drawTexturedRegion(0, vpBottom_gl, vpLeft, vpTop_gl - vpBottom_gl, texId, opacity);
-            drawTexturedRegion(vpRight, vpBottom_gl, fullW - vpRight, vpTop_gl - vpBottom_gl, texId, opacity);
+            drawTexturedRegion(0, 0, fullW, vpBottom_gl, sourceRect);
+            drawTexturedRegion(0, vpTop_gl, fullW, fullH - vpTop_gl, sourceRect);
+            drawTexturedRegion(0, vpBottom_gl, vpLeft, vpTop_gl - vpBottom_gl, sourceRect);
+            drawTexturedRegion(vpRight, vpBottom_gl, fullW - vpRight, vpTop_gl - vpBottom_gl, sourceRect);
 
             glDisable(GL_SCISSOR_TEST);
 
@@ -5850,7 +6072,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         if (useFromBackground) {
             PROFILE_SCOPE_CAT("Render From Background", "Rendering");
             if (fromBackground.selectedMode == "image" && fromBgTex != 0) {
-                renderBackgroundImage(fromBgTex, 1.0f);
+                renderBackgroundImage(fromBgTex, fromBgSourceRect, 1.0f);
             } else if (fromBackground.selectedMode == "gradient" && fromBackground.gradientStops.size() >= 2) {
                 renderBackgroundGradient(fromBackground, 1.0f);
             } else {
@@ -5861,7 +6083,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         if (!useFromBackground) {
             PROFILE_SCOPE_CAT("Render To Background", "Rendering");
             if (modeToRender->background.selectedMode == "image" && bgTex != 0) {
-                renderBackgroundImage(bgTex, 1.0f);
+                renderBackgroundImage(bgTex, bgSourceRect, 1.0f);
             } else if (modeToRender->background.selectedMode == "gradient" && modeToRender->background.gradientStops.size() >= 2) {
                 renderBackgroundGradient(modeToRender->background, 1.0f);
             } else {
