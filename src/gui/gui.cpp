@@ -589,6 +589,7 @@ void RenderSettingsGUI() {
 
     if (windowVisible && windowOpen) {
 
+        float headerRightStartX = 0;
         {
             static std::chrono::steady_clock::time_point s_lastScreenshotTime{};
             auto now = std::chrono::steady_clock::now();
@@ -596,6 +597,9 @@ void RenderSettingsGUI() {
 
             const char* buttonLabel = showCopied ? trc("button.screenshot.copied") : trc("button.screenshot");
             float buttonWidth = ImGui::CalcTextSize(buttonLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+            float iconSize = ImGui::GetFrameHeight();
+            float margin = ImGui::GetStyle().ItemSpacing.x;
+            headerRightStartX = ImGui::GetWindowContentRegionMax().x - buttonWidth - iconSize * 2 - margin * 2;
 
             ImVec2 savedCursor = ImGui::GetCursorPos();
 
@@ -608,48 +612,7 @@ void RenderSettingsGUI() {
                     s_languageLastCtx = currentCtx;
                 }
 
-                auto ensureLanguageTextureLoaded = [&]() {
-                    if (s_languageTexture != 0) return;
-
-                    HMODULE hModule = NULL;
-                    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                       (LPCWSTR)&g_showGui, &hModule);
-                    if (!hModule) return;
-
-                    HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_LANGUAGE_PNG), RT_RCDATA);
-                    if (!hResource) return;
-
-                    HGLOBAL hData = LoadResource(hModule, hResource);
-                    if (!hData) return;
-
-                    DWORD dataSize = SizeofResource(hModule, hResource);
-                    const unsigned char* rawData = (const unsigned char*)LockResource(hData);
-                    if (!rawData || dataSize == 0) return;
-
-                    stbi_set_flip_vertically_on_load_thread(0);
-                    int w = 0, h = 0, channels = 0;
-                    unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
-                    if (!pixels || w <= 0 || h <= 0) {
-                        if (pixels) stbi_image_free(pixels);
-                        return;
-                    }
-
-                    glGenTextures(1, &s_languageTexture);
-                    glBindTexture(GL_TEXTURE_2D, s_languageTexture);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-                    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-                    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-                    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-                    glBindTexture(GL_TEXTURE_2D, 0);
-                    stbi_image_free(pixels);
-                };
-
-                ensureLanguageTextureLoaded();
+                LoadEmbeddedResourceTexture(s_languageTexture, IDR_LANGUAGE_PNG);
 
                 if (s_languageTexture != 0) {
                     float iconSize = ImGui::GetFrameHeight();
@@ -695,48 +658,7 @@ void RenderSettingsGUI() {
                     s_discordLastCtx = currentCtx;
                 }
 
-                auto ensureDiscordTextureLoaded = [&]() {
-                    if (s_discordTexture != 0) return;
-
-                    HMODULE hModule = NULL;
-                    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                       (LPCWSTR)&g_showGui, &hModule);
-                    if (!hModule) return;
-
-                    HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_DISCORD_PNG), RT_RCDATA);
-                    if (!hResource) return;
-
-                    HGLOBAL hData = LoadResource(hModule, hResource);
-                    if (!hData) return;
-
-                    DWORD dataSize = SizeofResource(hModule, hResource);
-                    const unsigned char* rawData = (const unsigned char*)LockResource(hData);
-                    if (!rawData || dataSize == 0) return;
-
-                    stbi_set_flip_vertically_on_load_thread(0);
-                    int w = 0, h = 0, channels = 0;
-                    unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
-                    if (!pixels || w <= 0 || h <= 0) {
-                        if (pixels) stbi_image_free(pixels);
-                        return;
-                    }
-
-                    glGenTextures(1, &s_discordTexture);
-                    BindTextureDirect(GL_TEXTURE_2D, s_discordTexture);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-                    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-                    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-                    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-                    BindTextureDirect(GL_TEXTURE_2D, 0);
-                    stbi_image_free(pixels);
-                };
-
-                ensureDiscordTextureLoaded();
+                LoadEmbeddedResourceTexture(s_discordTexture, IDR_DISCORD_PNG);
 
                 if (s_discordTexture != 0) {
                     float iconSize = ImGui::GetFrameHeight();
@@ -777,6 +699,187 @@ void RenderSettingsGUI() {
             if (ImGui::RadioButton(trc("config_mode.advanced"), isAdvanced)) {
                 g_config.basicModeEnabled = false;
                 g_configIsDirty = true;
+            }
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+
+        {
+            static std::string s_renameBuffer;
+            static std::string s_newProfileName;
+
+            static GLuint s_iconAdd = 0, s_iconDuplicate = 0, s_iconRename = 0, s_iconDelete = 0;
+            static HGLRC s_iconLastCtx = NULL;
+            {
+                HGLRC ctx = wglGetCurrentContext();
+                if (ctx != s_iconLastCtx) { s_iconAdd = s_iconDuplicate = s_iconRename = s_iconDelete = 0; s_iconLastCtx = ctx; }
+            }
+            LoadEmbeddedResourceTexture(s_iconAdd, IDR_ICON_ADD, GL_NEAREST);
+            LoadEmbeddedResourceTexture(s_iconDuplicate, IDR_ICON_DUPLICATE, GL_NEAREST);
+            LoadEmbeddedResourceTexture(s_iconRename, IDR_ICON_RENAME, GL_NEAREST);
+            LoadEmbeddedResourceTexture(s_iconDelete, IDR_ICON_DELETE, GL_NEAREST);
+
+            float iconSz = ImGui::GetFrameHeight() * 0.75f;
+            auto iconBtnStyle = []() {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.1f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.2f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2, 2));
+            };
+            auto iconBtnStylePop = []() {
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(3);
+            };
+
+            float profileButtonsWidth = (iconSz + 6) * 4 + ImGui::GetStyle().ItemSpacing.x * 4;
+            float labelWidth = ImGui::CalcTextSize(trc("profiles.label")).x + ImGui::GetStyle().ItemSpacing.x;
+            float availableForCombo = headerRightStartX - ImGui::GetCursorPosX() - labelWidth - profileButtonsWidth;
+            if (availableForCombo < 60) availableForCombo = 60;
+
+            ImGui::TextUnformatted(trc("profiles.label"));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth((std::min)(150.0f, availableForCombo));
+            float* activeColor = nullptr;
+            for (auto& pm : g_profilesConfig.profiles) {
+                if (pm.name == g_profilesConfig.activeProfile) { activeColor = pm.color; break; }
+            }
+            if (activeColor) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(activeColor[0], activeColor[1], activeColor[2], 1.0f));
+            if (ImGui::BeginCombo("##profileSelector", g_profilesConfig.activeProfile.c_str())) {
+                if (activeColor) ImGui::PopStyleColor();
+                for (const auto& pm : g_profilesConfig.profiles) {
+                    bool selected = (pm.name == g_profilesConfig.activeProfile);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(pm.color[0], pm.color[1], pm.color[2], 1.0f));
+                    if (ImGui::Selectable(pm.name.c_str(), selected)) {
+                        if (pm.name != g_profilesConfig.activeProfile) {
+                            SwitchProfile(pm.name);
+                        }
+                    }
+                    ImGui::PopStyleColor();
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            } else {
+                if (activeColor) ImGui::PopStyleColor();
+            }
+
+            if (s_iconAdd != 0) {
+                ImGui::SameLine();
+                iconBtnStyle();
+                if (ImGui::ImageButton("##profileNew", (ImTextureID)(intptr_t)s_iconAdd, ImVec2(iconSz, iconSz))) {
+                    s_newProfileName = "New Profile";
+                    ImGui::OpenPopup(trc("profiles.new_popup"));
+                }
+                iconBtnStylePop();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", trc("profiles.tooltip.new"));
+            }
+
+            if (s_iconDuplicate != 0) {
+                ImGui::SameLine();
+                iconBtnStyle();
+                if (ImGui::ImageButton("##profileDup", (ImTextureID)(intptr_t)s_iconDuplicate, ImVec2(iconSz, iconSz))) {
+                    std::string base = g_profilesConfig.activeProfile + " " + tr("profiles.copy_suffix");
+                    std::string newName = base;
+                    for (int i = 2; !DuplicateProfile(g_profilesConfig.activeProfile, newName); i++) {
+                        newName = base + " " + std::to_string(i);
+                        if (i > 99) break;
+                    }
+                }
+                iconBtnStylePop();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", trc("profiles.tooltip.duplicate"));
+            }
+
+            if (s_iconRename != 0) {
+                ImGui::SameLine();
+                iconBtnStyle();
+                if (ImGui::ImageButton("##profileRen", (ImTextureID)(intptr_t)s_iconRename, ImVec2(iconSz, iconSz))) {
+                    s_renameBuffer = g_profilesConfig.activeProfile;
+                    ImGui::OpenPopup(trc("profiles.rename_popup"));
+                }
+                iconBtnStylePop();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", trc("profiles.tooltip.rename"));
+            }
+
+            if (s_iconDelete != 0) {
+                ImGui::SameLine();
+                ImGui::BeginDisabled(g_profilesConfig.profiles.size() <= 1);
+                iconBtnStyle();
+                if (ImGui::ImageButton("##profileDel", (ImTextureID)(intptr_t)s_iconDelete, ImVec2(iconSz, iconSz))) {
+                    ImGui::OpenPopup(trc("profiles.delete_popup"));
+                }
+                iconBtnStylePop();
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", trc("profiles.tooltip.delete"));
+            }
+
+            if (ImGui::BeginPopup(trc("profiles.new_popup"))) {
+                ImGui::InputText("##newProfileName", &s_newProfileName);
+                bool nameValid = IsValidProfileName(s_newProfileName);
+                if (!s_newProfileName.empty() && !nameValid)
+                    ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", trc("profiles.invalid_name"));
+                ImGui::BeginDisabled(!nameValid);
+                if (ImGui::Button(trc("button.ok"), ImVec2(80, 0))) {
+                    if (CreateNewProfile(s_newProfileName)) {
+                        SwitchProfile(s_newProfileName);
+                    }
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button(trc("button.cancel"), ImVec2(80, 0))) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+
+            if (ImGui::BeginPopup(trc("profiles.rename_popup"))) {
+                ImGui::InputText("##renameProfileName", &s_renameBuffer);
+                bool renameValid = IsValidProfileName(s_renameBuffer) && s_renameBuffer != g_profilesConfig.activeProfile;
+                if (!s_renameBuffer.empty() && !IsValidProfileName(s_renameBuffer))
+                    ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", trc("profiles.invalid_name"));
+                for (auto& pm : g_profilesConfig.profiles) {
+                    if (pm.name == g_profilesConfig.activeProfile) {
+                        ImGui::ColorEdit3(trc("profiles.color"), pm.color, ImGuiColorEditFlags_NoInputs);
+                        break;
+                    }
+                }
+                ImGui::BeginDisabled(!renameValid);
+                if (ImGui::Button(trc("button.ok"), ImVec2(80, 0))) {
+                    RenameProfile(g_profilesConfig.activeProfile, s_renameBuffer);
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button(trc("button.cancel"), ImVec2(80, 0))) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+
+            if (ImGui::BeginPopup(trc("profiles.delete_popup"))) {
+                std::string toDelete = g_profilesConfig.activeProfile;
+                std::string switchTo;
+                for (const auto& pm : g_profilesConfig.profiles) {
+                    if (pm.name != toDelete) { switchTo = pm.name; break; }
+                }
+                ImGui::Text("%s", tr("profiles.confirm_delete", toDelete).c_str());
+                if (!switchTo.empty())
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", tr("profiles.switch_to", switchTo).c_str());
+                if (ImGui::Button(trc("button.ok"), ImVec2(80, 0))) {
+                    if (!switchTo.empty()) {
+                        SwitchProfile(switchTo);
+                        DeleteProfile(toDelete);
+                    } else {
+                        Log("DeleteProfile: no fallback profile found");
+                    }
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(trc("button.cancel"), ImVec2(80, 0))) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
         }
 

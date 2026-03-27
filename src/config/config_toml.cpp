@@ -362,40 +362,74 @@ static int ClampMirrorCaptureDimension(int value) {
     return std::clamp(value, ConfigDefaults::MIRROR_CAPTURE_MIN_DIMENSION, ConfigDefaults::MIRROR_CAPTURE_MAX_DIMENSION);
 }
 
-void WriteTableOrdered(std::ostream& out, const toml::table& tbl, const std::vector<std::string>& orderedKeys) {
+static void WriteInlineTable(std::ostream& out, const toml::table& tbl, int depth = 0) {
+    if (depth > 8) { out << "{ }"; return; }
+    out << "{ ";
+    bool first = true;
+    for (const auto& [k, v] : tbl) {
+        if (!first) out << ", ";
+        first = false;
+        out << k.str() << " = ";
+        if (v.is_table()) {
+            WriteInlineTable(out, *v.as_table(), depth + 1);
+        } else if (v.is_array()) {
+            out << *v.as_array();
+        } else {
+            v.visit([&out](auto&& val) { out << val; });
+        }
+    }
+    out << " }";
+}
+
+static void WriteNode(std::ostream& out, const std::string& key, const toml::node& node, bool insideArrayElement) {
+    if (node.is_table()) {
+        const toml::table* subtbl = node.as_table();
+        if (!subtbl) return;
+        if (insideArrayElement) {
+            out << key << " = ";
+            WriteInlineTable(out, *subtbl);
+            out << "\n";
+        } else {
+            out << "[" << key << "]\n";
+            for (const auto& [subKey, subNode] : *subtbl) {
+                std::string subKeyStr(subKey.str());
+                if (subNode.is_table()) {
+                    WriteNode(out, key + "." + subKeyStr, subNode, false);
+                } else {
+                    out << subKeyStr << " = ";
+                    if (subNode.is_array()) {
+                        out << *subNode.as_array();
+                    } else {
+                        subNode.visit([&out](auto&& val) { out << val; });
+                    }
+                    out << "\n";
+                }
+            }
+        }
+    } else if (node.is_array()) {
+        const toml::array* arr = node.as_array();
+        if (arr) out << key << " = " << *arr << "\n";
+    } else {
+        out << key << " = ";
+        node.visit([&out](auto&& val) { out << val; });
+        out << "\n";
+    }
+}
+
+void WriteTableOrdered(std::ostream& out, const toml::table& tbl, const std::vector<std::string>& orderedKeys,
+                       bool insideArrayElement = false) {
     for (const auto& key : orderedKeys) {
         if (tbl.contains(key)) {
             const toml::node* nodePtr = tbl.get(key);
             if (!nodePtr) continue;
-
-            if (nodePtr->is_table()) {
-                const toml::table* subtbl = nodePtr->as_table();
-                if (subtbl) out << key << " = " << *subtbl << "\n";
-            } else if (nodePtr->is_array()) {
-                const toml::array* arr = nodePtr->as_array();
-                if (arr) out << key << " = " << *arr << "\n";
-            } else {
-                out << key << " = ";
-                nodePtr->visit([&out](auto&& val) { out << val; });
-                out << "\n";
-            }
+            WriteNode(out, key, *nodePtr, insideArrayElement);
         }
     }
 
     for (const auto& [key, node] : tbl) {
         std::string keyStr(key.str());
         if (std::find(orderedKeys.begin(), orderedKeys.end(), keyStr) == orderedKeys.end()) {
-            if (node.is_table()) {
-                const toml::table* subtbl = node.as_table();
-                if (subtbl) out << keyStr << " = " << *subtbl << "\n";
-            } else if (node.is_array()) {
-                const toml::array* arr = node.as_array();
-                if (arr) out << keyStr << " = " << *arr << "\n";
-            } else {
-                out << keyStr << " = ";
-                node.visit([&out](auto&& val) { out << val; });
-                out << "\n";
-            }
+            WriteNode(out, keyStr, node, insideArrayElement);
         }
     }
 }
@@ -2344,7 +2378,10 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                         "reloadOnUpdate",
                                                         "reloadInterval",
                                                         "border" };
-        std::vector<std::string> hotkeyKeys = { "keys", "mainMode", "secondaryMode", "altSecondaryModes", "conditions", "debounce" };
+        std::vector<std::string> hotkeyKeys = { "keys", "mainMode", "secondaryMode", "altSecondaryModes",
+                                                       "conditions", "debounce",
+                                                       "allowExitToFullscreenRegardlessOfGameState",
+                                                       "blockKeyFromGame", "triggerOnHold", "triggerOnRelease" };
 
         auto getKeyOrder = [&](const std::string& arrayKey) -> const std::vector<std::string>* {
             if (arrayKey == "mode") return &modeKeys;
@@ -2371,9 +2408,10 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                             const toml::table* elemTbl = elem.as_table();
                             if (elemTbl) {
                                 if (itemKeyOrder) {
-                                    WriteTableOrdered(file, *elemTbl, *itemKeyOrder);
+                                    WriteTableOrdered(file, *elemTbl, *itemKeyOrder, true);
                                 } else {
-                                    file << *elemTbl;
+                                    static const std::vector<std::string> emptyOrder;
+                                    WriteTableOrdered(file, *elemTbl, emptyOrder, true);
                                 }
                             }
                         }
@@ -2381,9 +2419,8 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                         file << key << " = " << *arr << "\n";
                     }
                 } else if (nodePtr->is_table()) {
-                    file << "\n[" << key << "]\n";
-                    const toml::table* subtbl = nodePtr->as_table();
-                    if (subtbl) file << *subtbl;
+                    file << "\n";
+                    WriteNode(file, key, *nodePtr, false);
                 } else {
                     file << key << " = ";
                     nodePtr->visit([&file](auto&& val) { file << val; });

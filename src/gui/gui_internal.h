@@ -47,6 +47,7 @@ extern ExclusionBindState s_exclusionToBind;
 extern AltBindState s_altHotkeyToBind;
 
 float ComputeGuiScaleFactorFromCachedWindowSize();
+void LoadEmbeddedResourceTexture(GLuint& tex, int resourceId, int filterMode = 0x2601);
 bool EnsureSupporterTierTexture(const SupporterRoleEntry& role, GLuint& outTextureId, int& outWidth, int& outHeight);
 void ClearSupporterTierTextureCache();
 

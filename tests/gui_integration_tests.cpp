@@ -4141,6 +4141,190 @@ void RunSettingsTabMiscDefaultTest(TestRunMode runMode = TestRunMode::Automated)
     RunDefaultSettingsTabCase("settings_tab_misc_default", tr("tabs.misc"), std::string(), false, runMode);
 }
 
+// --- Profile Tests ---
+
+void ResetProfileTestState(std::string_view caseName) {
+    const std::filesystem::path root = PrepareCaseDirectory(caseName);
+    ResetGlobalTestState(root);
+    g_profilesConfig = ProfilesConfig();
+    LoadConfig();
+    ExpectConfigLoadSucceeded(std::string(caseName) + " initial load");
+}
+
+void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Automated) {
+    ResetProfileTestState("profile_apply_fields_roundtrip");
+
+    g_config.defaultMode = "TestMode";
+    g_config.mouseSensitivity = 3.5f;
+    g_config.windowsMouseSpeed = 7;
+    g_config.autoBorderless = true;
+    g_config.hideAnimationsInGame = true;
+
+    ModeConfig mode;
+    mode.id = "TestMode";
+    mode.width = 800;
+    mode.height = 600;
+    g_config.modes.push_back(mode);
+
+    MirrorConfig mirror;
+    mirror.name = "TestMirror";
+    g_config.mirrors.push_back(mirror);
+
+    Config dst;
+    ApplyProfileFields(g_config, dst);
+
+    Expect(dst.defaultMode == "TestMode", "defaultMode should roundtrip via ApplyProfileFields.");
+    Expect(std::abs(dst.mouseSensitivity - 3.5f) < 0.01f, "mouseSensitivity should roundtrip.");
+    Expect(dst.windowsMouseSpeed == 7, "windowsMouseSpeed should roundtrip.");
+    Expect(dst.autoBorderless == true, "autoBorderless should roundtrip.");
+    Expect(dst.hideAnimationsInGame == true, "hideAnimationsInGame should roundtrip.");
+    Expect(dst.modes.size() == g_config.modes.size(), "modes should roundtrip.");
+    Expect(dst.mirrors.size() == g_config.mirrors.size(), "mirrors should roundtrip.");
+
+    Expect(dst.basicModeEnabled == Config().basicModeEnabled, "Non-profile field 'basicModeEnabled' should not be copied.");
+}
+
+void RunProfilesConfigRoundtripTest(TestRunMode runMode = TestRunMode::Automated) {
+    ResetProfileTestState("profiles_config_roundtrip");
+
+    g_profilesConfig.activeProfile = "Custom";
+    g_profilesConfig.profiles.clear();
+    ProfileMetadata pm1;
+    pm1.name = "Default";
+    pm1.color[0] = 0.1f; pm1.color[1] = 0.2f; pm1.color[2] = 0.3f;
+    g_profilesConfig.profiles.push_back(pm1);
+    ProfileMetadata pm2;
+    pm2.name = "Custom";
+    pm2.color[0] = 0.9f; pm2.color[1] = 0.8f; pm2.color[2] = 0.7f;
+    g_profilesConfig.profiles.push_back(pm2);
+
+    SaveProfilesConfig();
+
+    ProfilesConfig backup = g_profilesConfig;
+    g_profilesConfig = ProfilesConfig();
+
+    bool loaded = LoadProfilesConfig();
+    Expect(loaded, "LoadProfilesConfig should succeed after SaveProfilesConfig.");
+    Expect(g_profilesConfig.activeProfile == "Custom", "activeProfile should roundtrip.");
+    Expect(g_profilesConfig.profiles.size() == 2, "profiles count should roundtrip.");
+    Expect(g_profilesConfig.profiles[0].name == "Default", "First profile name should roundtrip.");
+    Expect(std::abs(g_profilesConfig.profiles[0].color[0] - 0.1f) < 0.01f, "First profile color[0] should roundtrip.");
+    Expect(g_profilesConfig.profiles[1].name == "Custom", "Second profile name should roundtrip.");
+    Expect(std::abs(g_profilesConfig.profiles[1].color[2] - 0.7f) < 0.01f, "Second profile color[2] should roundtrip.");
+}
+
+void RunProfileNameValidationTest(TestRunMode runMode = TestRunMode::Automated) {
+    Expect(!IsValidProfileName(""), "Empty name should be invalid.");
+    Expect(!IsValidProfileName("a/b"), "Name with / should be invalid.");
+    Expect(!IsValidProfileName("a\\b"), "Name with \\ should be invalid.");
+    Expect(!IsValidProfileName("a:b"), "Name with : should be invalid.");
+    Expect(!IsValidProfileName("a*b"), "Name with * should be invalid.");
+    Expect(!IsValidProfileName("a?b"), "Name with ? should be invalid.");
+    Expect(!IsValidProfileName("CON"), "Windows reserved name should be invalid.");
+    Expect(!IsValidProfileName("nul"), "Windows reserved name (lowercase) should be invalid.");
+    Expect(!IsValidProfileName(".."), "Double dot should be invalid.");
+    Expect(!IsValidProfileName("a..b"), "Name containing .. should be invalid.");
+    Expect(!IsValidProfileName(" leading"), "Leading space should be invalid.");
+    Expect(!IsValidProfileName("trailing "), "Trailing space should be invalid.");
+    Expect(!IsValidProfileName("trailing."), "Trailing dot should be invalid.");
+    Expect(IsValidProfileName("Default"), "Normal name should be valid.");
+    Expect(IsValidProfileName("My Profile 2"), "Name with spaces and digits should be valid.");
+    Expect(IsValidProfileName("PvP-Config"), "Name with hyphen should be valid.");
+}
+
+void RunProfileCreateDuplicateDeleteTest(TestRunMode runMode = TestRunMode::Automated) {
+    ResetProfileTestState("profile_create_dup_delete");
+
+    Expect(g_profilesConfig.profiles.size() == 1, "Should start with 1 profile after LoadConfig migration.");
+    Expect(g_profilesConfig.profiles[0].name == kDefaultProfileName, "First profile should be Default.");
+
+    bool created = CreateNewProfile("Second");
+    Expect(created, "CreateNewProfile should succeed.");
+    Expect(g_profilesConfig.profiles.size() == 2, "Should have 2 profiles after create.");
+
+    bool dupCreated = CreateNewProfile("Second");
+    Expect(!dupCreated, "CreateNewProfile with duplicate name should fail.");
+    Expect(g_profilesConfig.profiles.size() == 2, "Profile count should not change on duplicate create.");
+
+    bool duped = DuplicateProfile("Second", "Third");
+    Expect(duped, "DuplicateProfile should succeed.");
+    Expect(g_profilesConfig.profiles.size() == 3, "Should have 3 profiles after duplicate.");
+
+    bool dupDuped = DuplicateProfile("Second", "Third");
+    Expect(!dupDuped, "DuplicateProfile with existing dest name should fail.");
+
+    g_profilesConfig.activeProfile = "Second";
+    DeleteProfile(kDefaultProfileName);
+    Expect(g_profilesConfig.profiles.size() == 2, "Should have 2 profiles after delete (not active).");
+
+    bool invalidCreated = CreateNewProfile("a/b");
+    Expect(!invalidCreated, "CreateNewProfile with invalid name should fail.");
+}
+
+void RunProfileMigrateTest(TestRunMode runMode = TestRunMode::Automated) {
+    const std::filesystem::path root = PrepareCaseDirectory("profile_migrate");
+    ResetGlobalTestState(root);
+    g_profilesConfig = ProfilesConfig();
+
+    g_config.defaultMode = "MigrateTest";
+    g_config.mouseSensitivity = 5.0f;
+
+    bool migrated = MigrateToProfiles();
+    Expect(migrated, "MigrateToProfiles should succeed on first call.");
+    Expect(g_profilesConfig.profiles.size() == 1, "Should have 1 profile after migration.");
+    Expect(g_profilesConfig.activeProfile == kDefaultProfileName, "Active profile should be Default.");
+
+    std::wstring profilePath = g_toolscreenPath + L"\\profiles\\" + Utf8ToWide(std::string(kDefaultProfileName)) + L".toml";
+    Expect(std::filesystem::exists(profilePath), "Default profile file should exist on disk.");
+
+    bool migratedAgain = MigrateToProfiles();
+    Expect(!migratedAgain, "MigrateToProfiles should return false if profiles dir already exists.");
+}
+
+void RunProfileDeleteGuardsTest(TestRunMode runMode = TestRunMode::Automated) {
+    ResetProfileTestState("profile_delete_guards");
+
+    MigrateToProfiles();
+    LoadProfilesConfig();
+
+    Expect(g_profilesConfig.profiles.size() == 1, "Should start with 1 profile.");
+    DeleteProfile(kDefaultProfileName);
+    Expect(g_profilesConfig.profiles.size() == 1, "Should not delete last profile.");
+
+    CreateNewProfile("Other");
+    g_profilesConfig.activeProfile = kDefaultProfileName;
+    DeleteProfile(kDefaultProfileName);
+    Expect(g_profilesConfig.profiles.size() == 2, "Should not delete active profile.");
+
+    DeleteProfile("Other");
+    Expect(g_profilesConfig.profiles.size() == 1, "Should delete non-active profile.");
+}
+
+void RunProfileRenameTest(TestRunMode runMode = TestRunMode::Automated) {
+    ResetProfileTestState("profile_rename");
+
+    MigrateToProfiles();
+    LoadProfilesConfig();
+    CreateNewProfile("OldName");
+
+    g_profilesConfig.activeProfile = "OldName";
+    bool renamed = RenameProfile("OldName", "NewName");
+    Expect(renamed, "RenameProfile should succeed.");
+    Expect(g_profilesConfig.activeProfile == "NewName", "Active profile should be updated after rename.");
+
+    bool found = false;
+    for (const auto& pm : g_profilesConfig.profiles) {
+        if (pm.name == "NewName") { found = true; break; }
+    }
+    Expect(found, "Renamed profile should exist in metadata.");
+
+    bool dupRename = RenameProfile("NewName", kDefaultProfileName);
+    Expect(!dupRename, "Rename to existing name should fail.");
+
+    bool invalidRename = RenameProfile("NewName", "a/b");
+    Expect(!invalidRename, "Rename to invalid name should fail.");
+}
+
 struct TestCaseDefinition {
     const char* name;
     void (*run)(TestRunMode runMode);
@@ -4239,6 +4423,13 @@ const auto& GetTestCaseDefinitions() {
         {"settings-tab-appearance-populated", &RunSettingsTabAppearancePopulatedTest},
         {"settings-tab-misc-populated", &RunSettingsTabMiscPopulatedTest},
         {"settings-tab-supporters-populated", &RunSettingsTabSupportersPopulatedTest},
+        {"profile-apply-fields-roundtrip", &RunProfileApplyFieldsRoundtripTest},
+        {"profile-profiles-config-roundtrip", &RunProfilesConfigRoundtripTest},
+        {"profile-name-validation", &RunProfileNameValidationTest},
+        {"profile-create-duplicate-delete", &RunProfileCreateDuplicateDeleteTest},
+        {"profile-migrate", &RunProfileMigrateTest},
+        {"profile-delete-guards", &RunProfileDeleteGuardsTest},
+        {"profile-rename", &RunProfileRenameTest},
     };
 
     return testCases;

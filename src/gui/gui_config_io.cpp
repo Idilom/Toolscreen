@@ -214,13 +214,27 @@ void SaveConfig() {
         toml::table tbl;
         ConfigToToml(g_config, tbl);
 
+        static const std::vector<std::string> profileKeys = {
+            "configVersion", "defaultMode", "mouseSensitivity", "windowsMouseSpeed",
+            "hideAnimationsInGame", "autoBorderless", "borderlessHotkey",
+            "imageOverlaysHotkey", "windowOverlaysHotkey",
+            "eyezoom", "cursors", "keyRebinds",
+            "mode", "mirror", "mirrorGroup", "image",
+            "windowOverlay", "browserOverlay", "hotkey", "sensitivityHotkey"
+        };
+        toml::table profileTbl;
+        for (const auto& key : profileKeys) {
+            if (auto node = tbl.get(key)) profileTbl.insert(key, *node);
+        }
+        std::wstring profilePath = g_toolscreenPath + L"\\profiles\\" + Utf8ToWide(g_profilesConfig.activeProfile) + L".toml";
+
         PublishConfigSnapshot();
 
         g_configIsDirty = false;
         s_lastSaveTime = currentTime;
         s_isConfigSaving = true;
 
-        std::thread([configPath, tbl = std::move(tbl)]() {
+        std::thread([configPath, tbl = std::move(tbl), profilePath, profileTbl = std::move(profileTbl)]() {
             _set_se_translator(SEHTranslator);
             try {
                 try {
@@ -233,6 +247,17 @@ void SaveConfig() {
                     }
                 } catch (const std::exception& e) {
                     Log("ERROR: Failed to write config file: " + std::string(e.what()));
+                }
+                try {
+                    std::ofstream po(std::filesystem::path(profilePath), std::ios::binary | std::ios::trunc);
+                    if (po.is_open()) {
+                        po << profileTbl;
+                        po.close();
+                    }
+                } catch (const std::exception& e) {
+                    Log("ERROR: Failed to write profile file: " + std::string(e.what()));
+                } catch (...) {
+                    Log("ERROR: Failed to write profile file: unknown exception");
                 }
             } catch (const SE_Exception& e) {
                 LogException("ConfigSaveThread (SEH)", e.getCode(), e.getInfo());
@@ -287,6 +312,8 @@ void SaveConfigImmediate() {
         }
         o << tbl;
         o.close();
+
+        SaveProfile(g_profilesConfig.activeProfile);
 
         Log("Configuration saved to file (immediate).");
         g_configIsDirty = false;
@@ -461,6 +488,12 @@ void LoadConfig() {
         tbl = std::move(result).table();
 #endif
         ConfigFromToml(tbl, g_config);
+
+        MigrateToProfiles();
+        LoadProfilesConfig();
+        if (!LoadProfile(g_profilesConfig.activeProfile)) {
+            Log("WARNING: Failed to load active profile '" + g_profilesConfig.activeProfile + "', using base config");
+        }
         Log("Loaded config from TOML file.");
 
         int screenWidth = GetCachedWindowWidth();

@@ -796,6 +796,13 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     settings-tab-appearance-populated
     settings-tab-misc-populated
     settings-tab-supporters-populated
+    profile-apply-fields-roundtrip
+    profile-profiles-config-roundtrip
+    profile-name-validation
+    profile-create-duplicate-delete
+    profile-migrate
+    profile-delete-guards
+    profile-rename
 )
 
 foreach(test_case IN LISTS TOOLSCREEN_GUI_INTEGRATION_TEST_CASES)
