@@ -31,6 +31,7 @@ if(NOT WIN32)
 endif()
 
 option(TOOLSCREEN_ENABLE_JAR_PACKAGING "Enable the EasyInjectBundled jar packaging target." ON)
+set(TOOLSCREEN_PACKAGING_DLL_PATH "" CACHE FILEPATH "Optional override DLL path used for jar and EXE packaging inputs")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -418,6 +419,11 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     set(DOWNLOADER_EXE_NAME "toolscreen-downloader.exe")
     set(DOWNLOADER_EXE_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${DOWNLOADER_EXE_NAME}")
 
+    set(TOOLSCREEN_PACKAGING_DLL_SOURCE "$<TARGET_FILE:${PROJECT_NAME}>")
+    if(TOOLSCREEN_PACKAGING_DLL_PATH)
+        set(TOOLSCREEN_PACKAGING_DLL_SOURCE "${TOOLSCREEN_PACKAGING_DLL_PATH}")
+    endif()
+
     file(GENERATE
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/copy_toolscreen_downloader_jar_$<CONFIG>.cmake"
         CONTENT "set(NEW_DOWNLOADER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\nset(TYPO_DOWNLOADER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\nset(LEGACY_INSTALLER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\nset(DOWNLOADER_JAR_OUTPUT \"${DOWNLOADER_JAR_OUTPUT}\")\nif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\nelseif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\nelseif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\nelse()\n  message(FATAL_ERROR \"Expected downloader jar at '${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}', typo downloader jar at '${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar', or legacy installer jar at '${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${DOWNLOADER_JAR_SOURCE}\" \"\${DOWNLOADER_JAR_OUTPUT}\" RESULT_VARIABLE COPY_RESULT)\nif(NOT COPY_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to copy downloader jar from '\${DOWNLOADER_JAR_SOURCE}' to '\${DOWNLOADER_JAR_OUTPUT}'\")\nendif()\n"
@@ -426,7 +432,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     add_custom_target(jar ALL
         COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/custom-dlls"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PROJECT_NAME}>" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
         COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
         COMMAND "${TOOLSCREEN_MAVEN_EXECUTABLE}" -f "${easyinjectbundled_SOURCE_DIR}/pom.xml" clean package -q
                 -Dbrand.name=Toolscreen
@@ -465,7 +471,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
 
     add_custom_target(toolscreen_prepare_easyinject_exe_inputs
         COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PROJECT_NAME}>" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
         COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
         DEPENDS ${PROJECT_NAME}
         COMMENT "Preparing EasyInject exe packaging inputs"

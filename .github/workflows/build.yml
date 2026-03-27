@@ -33,8 +33,14 @@ jobs:
           Install-Module -Name SignPath -Scope CurrentUser -Force -Repository PSGallery
 
       - name: Configure build preset
-        shell: cmd
-        run: cmake --preset vs2022-x64
+        shell: pwsh
+        run: |
+          if ($env:SIGNPATH_API_TOKEN -and $env:GITHUB_EVENT_NAME -ne 'pull_request') {
+            $signedDllPath = (Join-Path (Get-Location) 'out/build/bin/Release/Toolscreen.signed-package-input.dll')
+            cmake --preset vs2022-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath"
+          } else {
+            cmake --preset vs2022-x64
+          }
 
       - name: Build unsigned DLL
         shell: cmd
@@ -53,7 +59,7 @@ jobs:
         shell: pwsh
         run: |
           $artifactDllPath = 'out/build/bin/Release/Toolscreen.dll'
-          $signedDllPath = 'out/build/bin/Release/Toolscreen.signed.dll'
+          $signedDllPath = 'out/build/bin/Release/Toolscreen.signed-package-input.dll'
 
           Import-Module SignPath
 
@@ -79,15 +85,20 @@ jobs:
           }
 
           Copy-Item -Path $signedDllPath -Destination $artifactDllPath -Force
-          Remove-Item -Path $signedDllPath -Force
 
       - name: Prepare EXE packaging inputs
         shell: cmd
         run: cmake --build --preset release --target toolscreen_prepare_easyinject_exe_inputs
 
       - name: Reconfigure packaging preset
-        shell: cmd
-        run: cmake --preset vs2022-x64
+        shell: pwsh
+        run: |
+          if ($env:SIGNPATH_API_TOKEN -and $env:GITHUB_EVENT_NAME -ne 'pull_request') {
+            $signedDllPath = (Resolve-Path 'out/build/bin/Release/Toolscreen.signed-package-input.dll').Path
+            cmake --preset vs2022-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath"
+          } else {
+            cmake --preset vs2022-x64
+          }
 
       - name: Remove stale packaged artifacts
         shell: pwsh
@@ -187,6 +198,19 @@ jobs:
 
           Copy-Item -Path $signedDownloaderPath -Destination $downloaderPath -Force
           Remove-Item -Path $signedDownloaderPath -Force
+
+      - name: Restore signed DLL to release output
+        if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
+        shell: pwsh
+        run: |
+          $signedDllPath = 'out/build/bin/Release/Toolscreen.signed-package-input.dll'
+          $artifactDllPath = 'out/build/bin/Release/Toolscreen.dll'
+
+          if (-not (Test-Path $signedDllPath)) {
+            throw "Expected preserved signed DLL not found: $signedDllPath"
+          }
+
+          Copy-Item -Path $signedDllPath -Destination $artifactDllPath -Force
 
       - name: Rename release artifacts
         shell: pwsh
