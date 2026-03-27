@@ -6,6 +6,8 @@
 !README.md
 !ToolscreenVersion.cmake
 !build.bat
+!scripts/
+!scripts/verify_pe_metadata.ps1
 !docs
 !docs/images/
 !docs/images/screenshot.png

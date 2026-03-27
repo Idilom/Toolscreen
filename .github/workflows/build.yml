@@ -142,7 +142,10 @@ jobs:
 
       - name: Validate PE metadata for SignPath
         shell: pwsh
-        run: ./scripts/verify_pe_metadata.ps1 -ArtifactDirectory 'out/build/bin/Release'
+        run: |
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts\verify_pe_metadata.ps1'
+          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE 'out\build\bin\Release'
+          & $scriptPath -ArtifactDirectory $artifactDirectory
 
       - name: Run CTest packaging smoke tests
         shell: cmd
