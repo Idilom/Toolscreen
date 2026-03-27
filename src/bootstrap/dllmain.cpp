@@ -1921,17 +1921,17 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         if (IsModeTransitionActive()) {
             ModeTransitionState eyeZoomTransitionState = GetModeTransitionState();
             std::string fromModeId = eyeZoomTransitionState.fromModeId;
-            const bool overlayAnimationsEnabled = eyeZoomTransitionState.overlayTransition != OverlayTransitionType::Cut;
+            const bool slideAnimationsEnabled = eyeZoomTransitionState.gameTransition == GameTransitionType::Bounce;
             auto interpolateTransitionX = [&]() {
                 return static_cast<int>(eyeZoomTransitionState.fromX +
                                         (eyeZoomTransitionState.targetX - eyeZoomTransitionState.fromX) *
                                             eyeZoomTransitionState.moveProgress);
             };
 
-            if (overlayAnimationsEnabled && !isEyeZoom && fromModeId == "EyeZoom") {
+            if (slideAnimationsEnabled && !isEyeZoom && fromModeId == "EyeZoom") {
                 isTransitioningFromEyeZoom = true;
                 eyeZoomAnimatedViewportX = interpolateTransitionX();
-            } else if (overlayAnimationsEnabled && isEyeZoom && fromModeId != "EyeZoom") {
+            } else if (slideAnimationsEnabled && isEyeZoom && fromModeId != "EyeZoom") {
                 eyeZoomAnimatedViewportX = eyeZoomTransitionState.x;
             }
         }

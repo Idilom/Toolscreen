@@ -5137,17 +5137,17 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
                 request.toH = finalH;
             }
 
-            const bool overlayAnimationsEnabled = transitionState.active && transitionState.overlayTransition != OverlayTransitionType::Cut;
+            const bool slideAnimationsEnabled = transitionState.active && transitionState.gameTransition == GameTransitionType::Bounce;
 
             request.isTransitioningFromEyeZoom =
-                overlayAnimationsEnabled && g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
+                slideAnimationsEnabled && g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
             request.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
             request.showPerformanceOverlay = false;
             request.showProfiler = false;
             request.showEyeZoom = EqualsIgnoreCase(request.modeId, "EyeZoom") ||
                                   (request.isTransitioningFromEyeZoom && !request.skipAnimation);
             request.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
-            request.eyeZoomAnimatedViewportX = (skipAnimation || !overlayAnimationsEnabled)
+            request.eyeZoomAnimatedViewportX = (skipAnimation || !slideAnimationsEnabled)
                                                   ? -1
                                                   : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
             request.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
@@ -5169,7 +5169,7 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
             request.fromSlideMirrorsIn = fromMode && fromMode->slideMirrorsIn;
             request.toSlideMirrorsIn = modeToRender->slideMirrorsIn;
             request.mirrorSlideProgress =
-                (overlayAnimationsEnabled && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
+                (slideAnimationsEnabled && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
             request.allowMirrorCaptureReuse = true;
             request.mirrorCaptureFrameTag = s_sameThreadMirrorCaptureFrameTag;
         }
@@ -6784,16 +6784,16 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             target.toH = currentGeo.finalH;
         }
 
-        const bool overlayAnimationsEnabled = transitionState.active && transitionState.overlayTransition != OverlayTransitionType::Cut;
+        const bool slideAnimationsEnabled = transitionState.active && transitionState.gameTransition == GameTransitionType::Bounce;
 
-        target.isTransitioningFromEyeZoom = overlayAnimationsEnabled && g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
+        target.isTransitioningFromEyeZoom = slideAnimationsEnabled && g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
         target.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
         target.showPerformanceOverlay = g_showPerformanceOverlay.load(std::memory_order_relaxed);
         target.showProfiler = g_showProfiler.load(std::memory_order_relaxed);
         target.showEyeZoom = EqualsIgnoreCase(target.modeId, "EyeZoom") ||
                      (target.isTransitioningFromEyeZoom && !target.skipAnimation);
         target.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
-        target.eyeZoomAnimatedViewportX = (skipAnimation || !overlayAnimationsEnabled)
+        target.eyeZoomAnimatedViewportX = (skipAnimation || !slideAnimationsEnabled)
                              ? -1
                              : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
         target.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
@@ -6820,7 +6820,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         }
         target.toSlideMirrorsIn = modeToRender->slideMirrorsIn;
         target.mirrorSlideProgress =
-            (overlayAnimationsEnabled && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
+            (slideAnimationsEnabled && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
     };
 
     const uint64_t mirrorCaptureFrameTag = BeginSameThreadMirrorCaptureFrame();
