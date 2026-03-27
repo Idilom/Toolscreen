@@ -5,6 +5,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   build:
     runs-on: windows-latest
@@ -61,6 +65,101 @@ jobs:
             $item = Get-Item $filePath
             $renamed = '{0}{1}{2}' -f $item.BaseName, $suffix, $item.Extension
             Move-Item -Path $item.FullName -Destination (Join-Path $item.DirectoryName $renamed)
+          }
+
+      - name: Stage SignPath input artifacts
+        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        shell: pwsh
+        run: |
+          $outputDir = 'out/build/bin/Release'
+          $signPathInputDir = 'out/signpath-input'
+
+          function Get-SingleArtifactPath {
+            param(
+              [string]$Pattern,
+              [string]$Label
+            )
+
+            $matches = Get-ChildItem $outputDir -File -Filter $Pattern
+
+            if ($matches.Count -ne 1) {
+              throw "Expected exactly one $Label matching '$Pattern' in $outputDir, found $($matches.Count)"
+            }
+
+            return $matches[0].FullName
+          }
+
+          if (Test-Path $signPathInputDir) {
+            Remove-Item -Path $signPathInputDir -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Path $signPathInputDir | Out-Null
+
+          $filesToStage = @(
+            Join-Path $outputDir 'Toolscreen-not-legal-for-speedruns.dll'
+            Get-SingleArtifactPath 'Toolscreen-*-double-click-me-not-legal-for-speedruns.exe' 'main installer exe'
+            Join-Path $outputDir 'toolscreen-downloader-not-legal-for-speedruns.exe'
+          )
+
+          foreach ($filePath in $filesToStage) {
+            if (-not (Test-Path $filePath)) {
+              throw "Expected signable artifact not found: $filePath"
+            }
+
+            Copy-Item -Path $filePath -Destination (Join-Path $signPathInputDir (Split-Path $filePath -Leaf)) -Force
+          }
+
+      - name: Upload SignPath input bundle
+        id: upload-signpath-input
+        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolscreen-signpath-input
+          if-no-files-found: error
+          retention-days: 1
+          path: out/signpath-input/*
+
+      - name: Sign Windows artifacts with SignPath test certificate
+        id: signpath
+        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: '0126c615-e5f1-4fed-a438-6b8de149c8f4'
+          project-slug: 'Toolscreen'
+          signing-policy-slug: 'test-signing'
+          github-artifact-id: ${{ steps.upload-signpath-input.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: out/signpath-output
+
+      - name: Replace unsigned artifacts with signed outputs
+        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        shell: pwsh
+        run: |
+          $outputDir = 'out/build/bin/Release'
+          $signPathOutputDir = 'out/signpath-output'
+
+          $signedFileNames = @(
+            'Toolscreen-not-legal-for-speedruns.dll'
+            'toolscreen-downloader-not-legal-for-speedruns.exe'
+          )
+
+          $mainInstallerMatch = Get-ChildItem $signPathOutputDir -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.exe'
+
+          if ($mainInstallerMatch.Count -ne 1) {
+            throw "Expected exactly one signed main installer exe in $signPathOutputDir, found $($mainInstallerMatch.Count)"
+          }
+
+          $signedFileNames += $mainInstallerMatch[0].Name
+
+          foreach ($fileName in $signedFileNames) {
+            $signedFilePath = Join-Path $signPathOutputDir $fileName
+
+            if (-not (Test-Path $signedFilePath)) {
+              throw "Expected signed artifact not found: $signedFilePath"
+            }
+
+            Copy-Item -Path $signedFilePath -Destination (Join-Path $outputDir $fileName) -Force
           }
 
       - name: Upload release artifacts
