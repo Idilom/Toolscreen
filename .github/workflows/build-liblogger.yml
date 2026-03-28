@@ -144,6 +144,37 @@ jobs:
       - name: Install Linux liblogger dependencies
         shell: bash
         run: |
+          write_primary_sources() {
+            local architectures="$1"
+            printf '%s\n' \
+              'Types: deb' \
+              'URIs: http://azure.archive.ubuntu.com/ubuntu/' \
+              'Suites: noble noble-updates noble-backports' \
+              'Components: main restricted universe multiverse' \
+              "Architectures: ${architectures}" \
+              'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+              '' \
+              'Types: deb' \
+              'URIs: http://security.ubuntu.com/ubuntu/' \
+              'Suites: noble-security' \
+              'Components: main restricted universe multiverse' \
+              "Architectures: ${architectures}" \
+              'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+              | sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null
+          }
+
+          write_ports_sources() {
+            local architecture="$1"
+            printf '%s\n' \
+              'Types: deb' \
+              'URIs: http://ports.ubuntu.com/ubuntu-ports/' \
+              'Suites: noble noble-updates noble-backports noble-security' \
+              'Components: main restricted universe multiverse' \
+              "Architectures: ${architecture}" \
+              'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+              | sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null
+          }
+
           case "${{ matrix.target }}" in
             x64)
               sudo apt-get update
@@ -154,22 +185,7 @@ jobs:
                 libssl-dev
               ;;
             x86)
-              sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null <<'EOF'
-              Types: deb
-              URIs: http://azure.archive.ubuntu.com/ubuntu/
-              Suites: noble noble-updates noble-backports
-              Components: main restricted universe multiverse
-              Architectures: amd64 i386
-              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-
-              Types: deb
-              URIs: http://security.ubuntu.com/ubuntu/
-              Suites: noble-security
-              Components: main restricted universe multiverse
-              Architectures: amd64 i386
-              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-              EOF
-
+              write_primary_sources 'amd64 i386'
               sudo dpkg --add-architecture i386
               sudo apt-get update
               sudo apt-get install -y \
@@ -183,31 +199,8 @@ jobs:
                 libssl-dev:i386
               ;;
             arm64)
-              sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null <<'EOF'
-              Types: deb
-              URIs: http://azure.archive.ubuntu.com/ubuntu/
-              Suites: noble noble-updates noble-backports
-              Components: main restricted universe multiverse
-              Architectures: amd64
-              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-
-              Types: deb
-              URIs: http://security.ubuntu.com/ubuntu/
-              Suites: noble-security
-              Components: main restricted universe multiverse
-              Architectures: amd64
-              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-              EOF
-
-              sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null <<'EOF'
-              Types: deb
-              URIs: http://ports.ubuntu.com/ubuntu-ports/
-              Suites: noble noble-updates noble-backports noble-security
-              Components: main restricted universe multiverse
-              Architectures: arm64
-              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-              EOF
-
+              write_primary_sources 'amd64'
+              write_ports_sources 'arm64'
               sudo dpkg --add-architecture arm64
               sudo apt-get update
               sudo apt-get install -y \
@@ -222,31 +215,8 @@ jobs:
                 libssl-dev:arm64
               ;;
             arm32)
-              sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null <<'EOF'
-              Types: deb
-              URIs: http://azure.archive.ubuntu.com/ubuntu/
-              Suites: noble noble-updates noble-backports
-              Components: main restricted universe multiverse
-              Architectures: amd64
-              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-
-              Types: deb
-              URIs: http://security.ubuntu.com/ubuntu/
-              Suites: noble-security
-              Components: main restricted universe multiverse
-              Architectures: amd64
-              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-              EOF
-
-              sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null <<'EOF'
-              Types: deb
-              URIs: http://ports.ubuntu.com/ubuntu-ports/
-              Suites: noble noble-updates noble-backports noble-security
-              Components: main restricted universe multiverse
-              Architectures: armhf
-              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-              EOF
-
+              write_primary_sources 'amd64'
+              write_ports_sources 'armhf'
               sudo dpkg --add-architecture armhf
               sudo apt-get update
               sudo apt-get install -y \
