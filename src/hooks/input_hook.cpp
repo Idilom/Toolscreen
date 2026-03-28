@@ -205,6 +205,10 @@ static bool IsShiftCurrentlyDown() {
     return (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 }
 
+static bool IsCapsLockCurrentlyOn() {
+    return (GetKeyState(VK_CAPITAL) & 0x0001) != 0;
+}
+
 static bool IsShiftDownForIncomingEvent(DWORD incomingVk, DWORD incomingRawVk, bool isKeyDown) {
     if (IsShiftVk(incomingVk) || incomingRawVk == VK_SHIFT) {
         return isKeyDown;
@@ -224,8 +228,33 @@ static bool HasShiftLayerOutputOverride(const KeyRebind& rebind) {
     return HasShiftLayerOutputVk(rebind) || HasShiftLayerOutputUnicode(rebind);
 }
 
+static bool IsSplitRebindTextMode(const KeyRebind& rebind) {
+    if (rebind.customOutputUnicode != 0) return true;
+    if (rebind.baseOutputShifted) return true;
+    if (rebind.shiftLayerUsesCapsLock) return true;
+    if (HasShiftLayerOutputOverride(rebind)) return true;
+
+    DWORD baseTextVk = (rebind.useCustomOutput && rebind.customOutputVK != 0) ? rebind.customOutputVK : rebind.fromKey;
+    if (baseTextVk == 0) baseTextVk = rebind.fromKey;
+
+    DWORD triggerVk = rebind.toKey;
+    if (triggerVk == 0) triggerVk = rebind.fromKey;
+
+    return baseTextVk != triggerVk;
+}
+
+static bool ShouldIgnoreCapsLockForRebindText(const KeyRebind& rebind) {
+    return IsSplitRebindTextMode(rebind);
+}
+
+static bool IsShiftLayerActive(const KeyRebind& rebind, bool shiftDown, bool capsLockOn) {
+    if (!HasShiftLayerOutputOverride(rebind)) return false;
+    if (shiftDown) return true;
+    return rebind.shiftLayerUsesCapsLock && capsLockOn;
+}
+
 static bool IsShiftLayerActiveForRebind(const KeyRebind& rebind, DWORD incomingVk, DWORD incomingRawVk, bool isKeyDown) {
-    return HasShiftLayerOutputOverride(rebind) && IsShiftDownForIncomingEvent(incomingVk, incomingRawVk, isKeyDown);
+    return IsShiftLayerActive(rebind, IsShiftDownForIncomingEvent(incomingVk, incomingRawVk, isKeyDown), IsCapsLockCurrentlyOn());
 }
 
 static DWORD ResolveEffectiveCustomOutputVk(const KeyRebind& rebind, bool shiftLayerActive) {
@@ -2020,9 +2049,9 @@ static bool ResolvePreferredOutputShiftState(const KeyRebind& rebind, bool shift
 static void ApplyPreferredOutputShiftState(const KeyRebind& rebind, bool shiftLayerActive, BYTE keyboardState[256]) {
     if (!keyboardState) return;
 
-    // Rebind text output should only follow live Shift state or explicit rebind shift settings,
-    // not the toggle state from Caps Lock.
-    keyboardState[VK_CAPITAL] = 0;
+    if (ShouldIgnoreCapsLockForRebindText(rebind)) {
+        keyboardState[VK_CAPITAL] = 0;
+    }
 
     bool shouldOverrideShiftState = false;
     BYTE shiftState = 0;
@@ -2759,7 +2788,7 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
         if (matched) {
             const bool shiftDown = IsShiftCurrentlyDown();
-            const bool shiftLayerActive = HasShiftLayerOutputOverride(rebind) && shiftDown;
+            const bool shiftLayerActive = IsShiftLayerActive(rebind, shiftDown, IsCapsLockCurrentlyOn());
             const bool preferShiftedText = ResolvePreferredOutputShiftState(rebind, shiftLayerActive, shiftDown);
 
             if (shiftLayerActive && HasShiftLayerOutputUnicode(rebind)) {
@@ -2793,7 +2822,15 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             } else if (outputVK == VK_BACK) {
                 outputChar = L'\b';
             } else {
-                (void)TryTranslateVkToCharPreferShiftState(outputVK, preferShiftedText, outputChar);
+                BYTE ks[256] = {};
+                if (GetKeyboardState(ks)) {
+                    ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks);
+                    (void)TryTranslateVkToCharWithKeyboardState(outputVK, ks, outputChar);
+                }
+
+                if (outputChar == 0) {
+                    (void)TryTranslateVkToCharPreferShiftState(outputVK, preferShiftedText, outputChar);
+                }
             }
 
             if (outputChar == 0) {

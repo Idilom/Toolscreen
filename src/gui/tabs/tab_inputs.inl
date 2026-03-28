@@ -500,11 +500,19 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                 static bool s_keyboardLayoutWasOpenLastFrame = false;
                 static ImVec2 s_lastKeyboardLayoutWindowSize = ImVec2(-1.0f, -1.0f);
                 static float s_lastKeyboardLayoutGuiScaleFactor = -1.0f;
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                if (ConsumeGuiTestOpenKeyboardLayoutRequest()) {
+                    s_keyboardLayoutOpen = true;
+                }
+#endif
                 if (s_layoutEscapeRequiresRelease && !ImGui::IsKeyDown(ImGuiKey_Escape)) {
                     s_layoutEscapeRequiresRelease = false;
                 }
 
                 if (ImGui::Button(trc("inputs.open_keyboard_layout"))) { s_keyboardLayoutOpen = true; }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                RecordGuiTestInteractionRect("inputs.open_keyboard_layout", ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+#endif
                 ImGui::SameLine();
                 HelpMarker(trc("inputs.tooltip.open_keyboard_layout"));
 
@@ -1264,6 +1272,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         }
                     };
 
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                    if (const DWORD requestedContextVk = ConsumeGuiTestOpenKeyboardLayoutContextRequest(); requestedContextVk != 0) {
+                        openRebindContextFor(requestedContextVk);
+                    }
+#endif
+
                     bool haveNumpadPlusAnchor = false;
                     ImVec2 numpadPlusAnchorMin = ImVec2(0, 0);
                     ImVec2 numpadPlusAnchorMax = ImVec2(0, 0);
@@ -1319,6 +1333,9 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                             const ImVec2 pMin = ImGui::GetItemRectMin();
                             const ImVec2 pMax = ImGui::GetItemRectMax();
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                            RecordGuiTestKeyboardLayoutKeyRect(kc.vk, pMin, pMax);
+#endif
 
                             const KeyRebind* rb = findRebindForKey(kc.vk);
 
@@ -1367,6 +1384,9 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
                         const ImVec2 pMin = ImGui::GetItemRectMin();
                         const ImVec2 pMax = ImVec2(pMin.x + w, pMin.y + h);
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        RecordGuiTestKeyboardLayoutKeyRect(vk, pMin, pMax);
+#endif
 
                         const KeyRebind* rb = findRebindForKey(vk);
                         ImVec2 capMin = ImVec2(pMin.x + keyPadX, pMin.y + keyPadY);
@@ -1542,26 +1562,41 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         ImGui::SetCursorScreenPos(leftMin);
                         ImGui::InvisibleButton("##mouse_left", ImVec2(leftMax.x - leftMin.x, leftMax.y - leftMin.y),
                                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        RecordGuiTestKeyboardLayoutKeyRect(VK_LBUTTON, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+#endif
                         drawMouseSegment(VK_LBUTTON, "MB1", leftMin, leftMax, bodyR * 0.75f, ImDrawFlags_RoundCornersTopLeft);
 
                         ImGui::SetCursorScreenPos(rightMin);
                         ImGui::InvisibleButton("##mouse_right", ImVec2(rightMax.x - rightMin.x, rightMax.y - rightMin.y),
                                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        RecordGuiTestKeyboardLayoutKeyRect(VK_RBUTTON, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+#endif
                         drawMouseSegment(VK_RBUTTON, "MB2", rightMin, rightMax, bodyR * 0.75f, ImDrawFlags_RoundCornersTopRight);
 
                         ImGui::SetCursorScreenPos(wheelMin);
                         ImGui::InvisibleButton("##mouse_mid", ImVec2(wheelMax.x - wheelMin.x, wheelMax.y - wheelMin.y),
                                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        RecordGuiTestKeyboardLayoutKeyRect(VK_MBUTTON, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+#endif
                         drawMouseSegment(VK_MBUTTON, "MB3", wheelMin, wheelMax, 6.0f * keyboardScale, ImDrawFlags_RoundCornersAll);
 
                         ImGui::SetCursorScreenPos(side1Min);
                         ImGui::InvisibleButton("##mouse_x1", ImVec2(side1Max.x - side1Min.x, side1Max.y - side1Min.y),
                                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        RecordGuiTestKeyboardLayoutKeyRect(VK_XBUTTON2, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+#endif
                         drawMouseSegment(VK_XBUTTON2, "MB5", side1Min, side1Max, 6.0f * keyboardScale, ImDrawFlags_RoundCornersAll);
 
                         ImGui::SetCursorScreenPos(side2Min);
                         ImGui::InvisibleButton("##mouse_x2", ImVec2(side2Max.x - side2Min.x, side2Max.y - side2Min.y),
                                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        RecordGuiTestKeyboardLayoutKeyRect(VK_XBUTTON1, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+#endif
                         drawMouseSegment(VK_XBUTTON1, "MB4", side2Min, side2Max, 6.0f * keyboardScale, ImDrawFlags_RoundCornersAll);
                     }
 
@@ -1595,6 +1630,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             if (r.customOutputUnicode != 0) return false;
                             if (r.customOutputScanCode != 0) return false;
                             if (r.baseOutputShifted) return false;
+                            if (r.shiftLayerUsesCapsLock) return false;
                             if (hasShiftLayerOverride(&r, originalVk)) return false;
                             return true;
                         };
@@ -1704,6 +1740,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                         auto clearShiftLayerOverrideIfDefault = [&](KeyRebind& r, DWORD originalVk) {
                             if (!r.shiftLayerEnabled) {
+                                r.shiftLayerUsesCapsLock = false;
                                 r.shiftLayerOutputVK = 0;
                                 r.shiftLayerOutputUnicode = 0;
                                 r.shiftLayerOutputShifted = false;
@@ -1731,6 +1768,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             r.customOutputUnicode = 0;
                             r.baseOutputShifted = false;
                             r.shiftLayerEnabled = false;
+                            r.shiftLayerUsesCapsLock = false;
                             r.shiftLayerOutputVK = 0;
                             r.shiftLayerOutputUnicode = 0;
                             r.shiftLayerOutputShifted = false;
@@ -1743,6 +1781,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             if (rb->customOutputUnicode != 0) return true;
                             if (rb->shiftLayerOutputUnicode != 0) return true;
                             if (rb->baseOutputShifted) return true;
+                            if (rb->shiftLayerUsesCapsLock) return true;
                             if (hasShiftLayerOverride(rb, originalVk)) return true;
                             return resolveTypesVkFor(rb, originalVk, false) != resolveTriggerVkFor(rb, originalVk);
                         };
@@ -1985,6 +2024,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                         r.customOutputScanCode = 0;
                                         r.baseOutputShifted = false;
                                         r.shiftLayerEnabled = false;
+                                        r.shiftLayerUsesCapsLock = false;
                                         r.shiftLayerOutputVK = 0;
                                         r.shiftLayerOutputUnicode = 0;
                                         r.shiftLayerOutputShifted = false;
@@ -2020,6 +2060,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                             r.customOutputScanCode = 0;
                                             r.baseOutputShifted = false;
                                             r.shiftLayerEnabled = false;
+                                            r.shiftLayerUsesCapsLock = false;
                                             r.shiftLayerOutputVK = 0;
                                             r.shiftLayerOutputUnicode = 0;
                                             r.shiftLayerOutputShifted = false;
@@ -2149,6 +2190,118 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         const std::string typesShiftValue = typesShiftValueFor(rbPtr, s_layoutContextVk);
                         const std::string triggersValue = triggersValueFor(rbPtr, s_layoutContextVk);
 
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        auto recordPopupInteractionRect = [&](const char* id, const ImVec2& fallbackMin, const ImVec2& fallbackMax) {
+                            ImVec2 min = ImGui::GetItemRectMin();
+                            ImVec2 max = ImGui::GetItemRectMax();
+                            if (max.x <= min.x || max.y <= min.y) {
+                                min = fallbackMin;
+                                max = fallbackMax;
+                            }
+                            RecordGuiTestInteractionRect(id, min, max);
+                        };
+
+                        auto popupButtonFallbackMax = [&](const ImVec2& min, float width) {
+                            return ImVec2(min.x + width, min.y + ImGui::GetFrameHeight());
+                        };
+
+                        auto popupToggleFallbackMax = [&](const char* label, const ImVec2& min) {
+                            const ImGuiStyle& style = ImGui::GetStyle();
+                            const float boxSize = ImGui::GetFrameHeight();
+                            const float textWidth = ImGui::CalcTextSize(label).x;
+                            return ImVec2(min.x + boxSize + style.ItemInnerSpacing.x + textWidth, min.y + boxSize);
+                        };
+
+                        if (const int requestedSplitMode = ConsumeGuiTestKeyboardLayoutSplitModeRequest(); requestedSplitMode != -1) {
+                            const bool splitMode = requestedSplitMode != 0;
+                            s_layoutContextSplitMode = splitMode;
+                            if (!splitMode && idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) {
+                                auto& r = g_config.keyRebinds.rebinds[idx];
+                                setFullRebindState(r, r.fromKey);
+                                g_configIsDirty = true;
+
+                                if (isNoOpRebindForKey(r, r.fromKey)) {
+                                    eraseRebindIndex(idx);
+                                    s_layoutContextPreferredIndex = -1;
+                                    idx = -1;
+                                }
+                            }
+                            rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
+                        }
+
+                        if (const GuiTestKeyboardLayoutBindTarget requestedBindTarget = ConsumeGuiTestKeyboardLayoutBindTargetRequest();
+                            requestedBindTarget != GuiTestKeyboardLayoutBindTarget::None) {
+                            idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                            s_layoutContextPreferredIndex = idx;
+                            if (idx >= 0) {
+                                auto& r = g_config.keyRebinds.rebinds[idx];
+                                switch (requestedBindTarget) {
+                                case GuiTestKeyboardLayoutBindTarget::FullOutputVk:
+                                    s_layoutBindTarget = LayoutBindTarget::FullOutputVk;
+                                    break;
+                                case GuiTestKeyboardLayoutBindTarget::TypesVk:
+                                    s_layoutBindTarget = LayoutBindTarget::TypesVk;
+                                    break;
+                                case GuiTestKeyboardLayoutBindTarget::TypesVkShift:
+                                    r.shiftLayerEnabled = true;
+                                    s_layoutBindTarget = LayoutBindTarget::TypesVkShift;
+                                    break;
+                                case GuiTestKeyboardLayoutBindTarget::TriggersVk:
+                                    s_layoutBindTarget = LayoutBindTarget::TriggersVk;
+                                    break;
+                                default:
+                                    break;
+                                }
+                                s_layoutBindIndex = idx;
+                                s_layoutBindLastSeq = GetLatestBindingInputSequence();
+                                MarkRebindBindingActive();
+                            }
+                        }
+
+                        if (const int requestedShiftUppercase = ConsumeGuiTestKeyboardLayoutShiftUppercaseRequest(); requestedShiftUppercase != -1) {
+                            idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                            s_layoutContextPreferredIndex = idx;
+                            if (idx >= 0) {
+                                auto& r = g_config.keyRebinds.rebinds[idx];
+                                r.shiftLayerEnabled = true;
+                                if (r.shiftLayerOutputVK == 0) {
+                                    r.shiftLayerOutputVK = resolveTypesVkFor(&r, r.fromKey, false);
+                                }
+                                r.shiftLayerOutputShifted = requestedShiftUppercase != 0;
+                                clearShiftLayerOverrideIfDefault(r, r.fromKey);
+                                g_configIsDirty = true;
+
+                                if (isNoOpRebindForKey(r, r.fromKey)) {
+                                    eraseRebindIndex(idx);
+                                    s_layoutContextPreferredIndex = -1;
+                                    idx = -1;
+                                }
+                            }
+                        }
+
+                        if (const int requestedShiftCapsLock = ConsumeGuiTestKeyboardLayoutShiftCapsLockRequest(); requestedShiftCapsLock != -1) {
+                            idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                            s_layoutContextPreferredIndex = idx;
+                            if (idx >= 0) {
+                                auto& r = g_config.keyRebinds.rebinds[idx];
+                                r.shiftLayerEnabled = true;
+                                if (r.shiftLayerOutputVK == 0) {
+                                    r.shiftLayerOutputVK = resolveTypesVkFor(&r, r.fromKey, false);
+                                }
+                                r.shiftLayerUsesCapsLock = requestedShiftCapsLock != 0;
+                                clearShiftLayerOverrideIfDefault(r, r.fromKey);
+                                g_configIsDirty = true;
+
+                                if (isNoOpRebindForKey(r, r.fromKey)) {
+                                    eraseRebindIndex(idx);
+                                    s_layoutContextPreferredIndex = -1;
+                                    idx = -1;
+                                }
+                            }
+                        }
+#endif
+
+                        const ImVec2 fullRebindRectMin = ImGui::GetCursorScreenPos();
                         if (ImGui::RadioButton(trc("inputs.full_rebind_label"), !s_layoutContextSplitMode)) {
                             s_layoutContextSplitMode = false;
                             if (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) {
@@ -2163,9 +2316,18 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 }
                             }
                         }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        recordPopupInteractionRect("inputs.keyboard_layout.popup.full_rebind", fullRebindRectMin,
+                                                   popupToggleFallbackMax(trc("inputs.full_rebind_label"), fullRebindRectMin));
+#endif
+                        const ImVec2 splitRebindRectMin = ImGui::GetCursorScreenPos();
                         if (ImGui::RadioButton(trc("inputs.split_rebind_label"), s_layoutContextSplitMode)) {
                             s_layoutContextSplitMode = true;
                         }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        recordPopupInteractionRect("inputs.keyboard_layout.popup.split_rebind", splitRebindRectMin,
+                                                   popupToggleFallbackMax(trc("inputs.split_rebind_label"), splitRebindRectMin));
+#endif
 
                         rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
                         ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -2191,6 +2353,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     std::string label = (s_layoutBindTarget == LayoutBindTarget::FullOutputVk)
                                         ? std::string(trc("hotkeys.press_keys"))
                                         : triggersValue;
+                                    const ImVec2 outputRectMin = ImGui::GetCursorScreenPos();
                                     if (ImGui::Button((label + "##output_full").c_str(), ImVec2(bindButtonW, 0))) {
                                         idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                         s_layoutContextPreferredIndex = idx;
@@ -2201,6 +2364,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                             MarkRebindBindingActive();
                                         }
                                     }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                    recordPopupInteractionRect("inputs.keyboard_layout.popup.output", outputRectMin,
+                                                               popupButtonFallbackMax(outputRectMin, bindButtonW));
+#endif
                                     ImGui::SameLine(0.0f, popupInlineGap);
                                     if (ImGui::Button((tr("label.custom") + "##output_scan_custom").c_str(), ImVec2(auxButtonW, 0))) {
                                         openTriggersCustomPopup = true;
@@ -2217,6 +2384,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     std::string label = (s_layoutBindTarget == LayoutBindTarget::TypesVk)
                                         ? std::string(trc("hotkeys.press_keys"))
                                         : typesValue;
+                                    const ImVec2 typesRectMin = ImGui::GetCursorScreenPos();
                                     if (ImGui::Button((label + "##types").c_str(), ImVec2(bindButtonW, 0))) {
                                         idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                         s_layoutContextPreferredIndex = idx;
@@ -2227,6 +2395,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                             MarkRebindBindingActive();
                                         }
                                     }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                    recordPopupInteractionRect("inputs.keyboard_layout.popup.types", typesRectMin,
+                                                               popupButtonFallbackMax(typesRectMin, bindButtonW));
+#endif
                                     ImGui::SameLine(0.0f, popupInlineGap);
                                     if (ImGui::Button((tr("label.custom") + "##types_custom").c_str(), ImVec2(auxButtonW, 0))) {
                                         idx = createRebindForKeyIfMissing(s_layoutContextVk);
@@ -2243,6 +2415,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     ImGui::SameLine(0.0f, popupInlineGap);
                                     ImGui::AlignTextToFramePadding();
                                     bool baseOutputShifted = rbPtr ? rbPtr->baseOutputShifted : false;
+                                    const ImVec2 typesUppercaseRectMin = ImGui::GetCursorScreenPos();
                                     if (ImGui::Checkbox((std::string(trc("inputs.uppercase_label")) + "##types_uppercase").c_str(), &baseOutputShifted)) {
                                         idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                         s_layoutContextPreferredIndex = idx;
@@ -2259,6 +2432,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                             }
                                         }
                                     }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                    recordPopupInteractionRect("inputs.keyboard_layout.popup.types_uppercase", typesUppercaseRectMin,
+                                                               popupToggleFallbackMax(trc("inputs.uppercase_label"), typesUppercaseRectMin));
+#endif
                                 }
 
                                 rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
@@ -2271,6 +2448,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     std::string label = (s_layoutBindTarget == LayoutBindTarget::TypesVkShift)
                                         ? std::string(trc("hotkeys.press_keys"))
                                         : typesShiftValue;
+                                    const ImVec2 typesShiftRectMin = ImGui::GetCursorScreenPos();
                                     if (ImGui::Button((label + "##types_shift").c_str(), ImVec2(bindButtonW, 0))) {
                                         idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                         s_layoutContextPreferredIndex = idx;
@@ -2283,6 +2461,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                             MarkRebindBindingActive();
                                         }
                                     }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                    recordPopupInteractionRect("inputs.keyboard_layout.popup.types_shift", typesShiftRectMin,
+                                                               popupButtonFallbackMax(typesShiftRectMin, bindButtonW));
+#endif
                                     ImGui::SameLine(0.0f, popupInlineGap);
                                     if (ImGui::Button((tr("label.custom") + "##types_shift_custom").c_str(), ImVec2(auxButtonW, 0))) {
                                         idx = createRebindForKeyIfMissing(s_layoutContextVk);
@@ -2301,6 +2483,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     ImGui::SameLine(0.0f, popupInlineGap);
                                     ImGui::AlignTextToFramePadding();
                                     bool shiftLayerOutputShifted = rbPtr ? rbPtr->shiftLayerOutputShifted : false;
+                                    const ImVec2 typesShiftUppercaseRectMin = ImGui::GetCursorScreenPos();
                                     if (ImGui::Checkbox((std::string(trc("inputs.uppercase_label")) + "##types_shift_uppercase").c_str(),
                                                         &shiftLayerOutputShifted)) {
                                         idx = createRebindForKeyIfMissing(s_layoutContextVk);
@@ -2322,6 +2505,45 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                             }
                                         }
                                     }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                    recordPopupInteractionRect("inputs.keyboard_layout.popup.types_shift_uppercase", typesShiftUppercaseRectMin,
+                                                               popupToggleFallbackMax(trc("inputs.uppercase_label"), typesShiftUppercaseRectMin));
+#endif
+                                }
+
+                                rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
+
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                drawPopupRowLabel(trc("inputs.tooltip.rebind_types_shift_caps_lock"), trc("inputs.shift_layer_label"));
+                                ImGui::TableSetColumnIndex(1);
+                                {
+                                    bool shiftLayerUsesCapsLock = rbPtr ? rbPtr->shiftLayerUsesCapsLock : false;
+                                    const ImVec2 shiftCapsLockRectMin = ImGui::GetCursorScreenPos();
+                                    if (ImGui::Checkbox(trc("inputs.shift_layer_caps_lock_label"), &shiftLayerUsesCapsLock)) {
+                                        idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                        s_layoutContextPreferredIndex = idx;
+                                        if (idx >= 0) {
+                                            auto& r = g_config.keyRebinds.rebinds[idx];
+                                            r.shiftLayerEnabled = true;
+                                            if (r.shiftLayerOutputVK == 0) {
+                                                r.shiftLayerOutputVK = resolveTypesVkFor(&r, r.fromKey, false);
+                                            }
+                                            r.shiftLayerUsesCapsLock = shiftLayerUsesCapsLock;
+                                            clearShiftLayerOverrideIfDefault(r, r.fromKey);
+                                            g_configIsDirty = true;
+
+                                            if (isNoOpRebindForKey(r, r.fromKey)) {
+                                                eraseRebindIndex(idx);
+                                                s_layoutContextPreferredIndex = -1;
+                                                idx = -1;
+                                            }
+                                        }
+                                    }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                    recordPopupInteractionRect("inputs.keyboard_layout.popup.shift_caps_lock", shiftCapsLockRectMin,
+                                                               popupToggleFallbackMax(trc("inputs.shift_layer_caps_lock_label"), shiftCapsLockRectMin));
+#endif
                                 }
 
                                 ImGui::TableNextRow();
@@ -2332,6 +2554,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     std::string label = (s_layoutBindTarget == LayoutBindTarget::TriggersVk)
                                         ? std::string(trc("hotkeys.press_keys"))
                                         : triggersValue;
+                                    const ImVec2 triggersRectMin = ImGui::GetCursorScreenPos();
                                     if (ImGui::Button((label + "##triggers").c_str(), ImVec2(bindButtonW, 0))) {
                                         idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                         s_layoutContextPreferredIndex = idx;
@@ -2342,6 +2565,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                             MarkRebindBindingActive();
                                         }
                                     }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                    recordPopupInteractionRect("inputs.keyboard_layout.popup.triggers", triggersRectMin,
+                                                               popupButtonFallbackMax(triggersRectMin, bindButtonW));
+#endif
                                     ImGui::SameLine(0.0f, popupInlineGap);
                                     if (ImGui::Button((tr("label.custom") + "##triggers_scan_custom").c_str(), ImVec2(auxButtonW, 0))) {
                                         openTriggersCustomPopup = true;
@@ -2431,6 +2658,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 r.customOutputScanCode = 0;
                                 r.baseOutputShifted = false;
                                 r.shiftLayerEnabled = false;
+                                r.shiftLayerUsesCapsLock = false;
                                 r.shiftLayerOutputVK = 0;
                                 r.shiftLayerOutputUnicode = 0;
                                 r.shiftLayerOutputShifted = false;

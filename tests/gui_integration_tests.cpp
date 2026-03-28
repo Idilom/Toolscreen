@@ -4,6 +4,7 @@
 #include "features/browser_overlay.h"
 #include "features/window_overlay.h"
 #include "gui/gui.h"
+#include "hooks/input_hook.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
 #include "render/render.h"
@@ -1429,6 +1430,7 @@ void PopulateRichConfigFixture() {
     rebind.customOutputScanCode = 0x26;
     rebind.baseOutputShifted = true;
     rebind.shiftLayerEnabled = true;
+    rebind.shiftLayerUsesCapsLock = true;
     rebind.shiftLayerOutputVK = 'P';
     rebind.shiftLayerOutputUnicode = 0x00D8;
     rebind.shiftLayerOutputShifted = true;
@@ -2063,6 +2065,7 @@ void VerifyRichKeyRebindsAndAppearance() {
     Expect(rebind.customOutputScanCode == 0x26, "Expected key rebind customOutputScanCode to roundtrip.");
     Expect(rebind.baseOutputShifted, "Expected key rebind baseOutputShifted to roundtrip.");
     Expect(rebind.shiftLayerEnabled, "Expected key rebind shiftLayerEnabled to roundtrip.");
+    Expect(rebind.shiftLayerUsesCapsLock, "Expected key rebind shiftLayerUsesCapsLock to roundtrip.");
     Expect(rebind.shiftLayerOutputVK == 'P', "Expected key rebind shiftLayerOutputVK to roundtrip.");
     Expect(rebind.shiftLayerOutputUnicode == 0x00D8, "Expected key rebind shiftLayerOutputUnicode to roundtrip.");
     Expect(rebind.shiftLayerOutputShifted, "Expected key rebind shiftLayerOutputShifted to roundtrip.");
@@ -2181,6 +2184,7 @@ void RunVisualLoop(DummyWindow& window, std::string_view testCaseName, RenderFra
 
 // The suite is split across tests/gui_integration/*.inl so new coverage does not accumulate in one monolithic file.
 #include "gui_integration/config_tests.inl"
+#include "gui_integration/rebind_tests.inl"
 #include "gui_integration/render_tests.inl"
 #include "gui_integration/ui_and_log_tests.inl"
 #include "gui_integration/runner.inl"

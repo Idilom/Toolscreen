@@ -1702,6 +1702,7 @@ void KeyRebindToToml(const KeyRebind& cfg, toml::table& out) {
     out.insert("customOutputScanCode", static_cast<int64_t>(cfg.customOutputScanCode));
     out.insert("baseOutputShifted", cfg.baseOutputShifted);
     out.insert("shiftLayerEnabled", cfg.shiftLayerEnabled);
+    out.insert("shiftLayerUsesCapsLock", cfg.shiftLayerUsesCapsLock);
     out.insert("shiftLayerOutputVK", static_cast<int64_t>(cfg.shiftLayerOutputVK));
     out.insert("shiftLayerOutputUnicode", static_cast<int64_t>(cfg.shiftLayerOutputUnicode));
     out.insert("shiftLayerOutputShifted", cfg.shiftLayerOutputShifted);
@@ -1809,6 +1810,8 @@ void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {
         static_cast<DWORD>(GetOr<int64_t>(tbl, "customOutputScanCode", ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_SCANCODE));
     cfg.baseOutputShifted = GetOr(tbl, "baseOutputShifted", ConfigDefaults::KEY_REBIND_BASE_OUTPUT_SHIFTED);
     cfg.shiftLayerEnabled = GetOr(tbl, "shiftLayerEnabled", ConfigDefaults::KEY_REBIND_SHIFT_LAYER_ENABLED);
+    cfg.shiftLayerUsesCapsLock =
+        GetOr(tbl, "shiftLayerUsesCapsLock", ConfigDefaults::KEY_REBIND_SHIFT_LAYER_USES_CAPS_LOCK);
     cfg.shiftLayerOutputVK =
         static_cast<DWORD>(GetOr<int64_t>(tbl, "shiftLayerOutputVK", ConfigDefaults::KEY_REBIND_SHIFT_LAYER_OUTPUT_VK));
     cfg.shiftLayerOutputUnicode = ConfigDefaults::KEY_REBIND_SHIFT_LAYER_OUTPUT_UNICODE;

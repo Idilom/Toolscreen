@@ -66,6 +66,32 @@ void ApplyDynamicGuiFontRefresh();
 void RequestKeyboardLayoutFontRefresh(const ImVec2& windowSize, float keyHeight, float keyboardScale, bool forceRefresh = false);
 void ApplyPendingKeyboardLayoutFontRefresh();
 
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+struct GuiTestInteractionRect {
+    float minX = 0.0f;
+    float minY = 0.0f;
+    float maxX = 0.0f;
+    float maxY = 0.0f;
+};
+
+enum class GuiTestKeyboardLayoutBindTarget {
+    None,
+    FullOutputVk,
+    TypesVk,
+    TypesVkShift,
+    TriggersVk,
+};
+
+void ResetGuiTestInteractionRects();
+bool GetGuiTestInteractionRect(const char* id, GuiTestInteractionRect& outRect);
+void RequestGuiTestOpenKeyboardLayout();
+void RequestGuiTestOpenKeyboardLayoutContext(DWORD vk);
+void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode);
+void RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget target);
+void RequestGuiTestKeyboardLayoutSetShiftLayerUppercase(bool enabled);
+void RequestGuiTestKeyboardLayoutSetShiftLayerUsesCapsLock(bool enabled);
+#endif
+
 extern ImFont* g_keyboardLayoutPrimaryFont;
 extern ImFont* g_keyboardLayoutSecondaryFont;
 
@@ -474,6 +500,7 @@ struct KeyRebind {
     DWORD customOutputScanCode = 0;
     bool baseOutputShifted = false;
     bool shiftLayerEnabled = false;
+    bool shiftLayerUsesCapsLock = false;
     DWORD shiftLayerOutputVK = 0;
     DWORD shiftLayerOutputUnicode = 0;
     bool shiftLayerOutputShifted = false;
