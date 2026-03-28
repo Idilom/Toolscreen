@@ -140,7 +140,7 @@ build_target() {
     -fvisibility=hidden \
     -ffunction-sections \
     -fdata-sections \
-    "-DLIBLOGGER_VERSION_STR=\\\"${LIBLOGGER_VERSION}\\\"" \
+    "-DLIBLOGGER_VERSION_STR=\"${LIBLOGGER_VERSION}\"" \
     -dynamiclib \
     -fPIC \
     -Wno-deprecated-declarations \

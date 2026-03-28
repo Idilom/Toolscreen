@@ -285,7 +285,7 @@ COMMON_FLAGS=(
   -fvisibility=hidden
   -ffunction-sections
   -fdata-sections
-  "-DLIBLOGGER_VERSION_STR=\\\"${LIBLOGGER_VERSION}\\\""
+  "-DLIBLOGGER_VERSION_STR=\"${LIBLOGGER_VERSION}\""
   -Wl,--gc-sections
   -Wl,--as-needed
   -static-libgcc
