@@ -740,6 +740,7 @@ void LoadConfig() {
 
         PublishConfigSnapshot();
         SetGlobalMirrorGammaMode(g_config.mirrorGammaMode);
+        DiscardUnusedUserImageCaches();
 
         extern std::atomic<bool> g_configLoaded;
         g_configLoaded = true;

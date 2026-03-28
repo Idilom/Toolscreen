@@ -313,6 +313,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.images"))) {
                 it = std::find(mode.imageIds.begin(), mode.imageIds.end(), deletedImageName);
             }
         }
+        DiscardUnusedUserImageCaches();
         g_configIsDirty = true;
     }
 

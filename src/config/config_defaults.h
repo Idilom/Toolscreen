@@ -127,6 +127,7 @@ constexpr bool DEBUG_GLOBAL_SHOW_HOTKEY_DEBUG = false;
 constexpr bool DEBUG_GLOBAL_FAKE_CURSOR = false;
 constexpr bool DEBUG_GLOBAL_SHOW_TEXTURE_GRID = false;
 constexpr bool DEBUG_GLOBAL_DELAY_RENDERING_UNTIL_FINISHED = false;
+constexpr int DEBUG_GLOBAL_VIDEO_CACHE_BUDGET_MIB = 1024;
 constexpr bool DEBUG_GLOBAL_LOG_MODE_SWITCH = false;
 constexpr bool DEBUG_GLOBAL_LOG_ANIMATION = false;
 constexpr bool DEBUG_GLOBAL_LOG_HOTKEY = false;
@@ -181,6 +182,7 @@ constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_UNICODE = 0;
 constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_SCANCODE = 0;
 constexpr bool KEY_REBIND_BASE_OUTPUT_SHIFTED = false;
 constexpr bool KEY_REBIND_SHIFT_LAYER_ENABLED = false;
+constexpr bool KEY_REBIND_SHIFT_LAYER_USES_CAPS_LOCK = false;
 constexpr DWORD KEY_REBIND_SHIFT_LAYER_OUTPUT_VK = 0;
 constexpr DWORD KEY_REBIND_SHIFT_LAYER_OUTPUT_UNICODE = 0;
 constexpr bool KEY_REBIND_SHIFT_LAYER_OUTPUT_SHIFTED = false;
@@ -190,6 +192,7 @@ constexpr bool KEY_REBINDS_RESOLVE_REBIND_TARGETS_FOR_HOTKEYS = true;
 constexpr bool KEY_REBINDS_ALLOW_SYSTEM_ALT_TAB = false;
 constexpr int KEY_REBINDS_INDICATOR_MODE = 0;
 constexpr int KEY_REBINDS_INDICATOR_POSITION = 1;
+constexpr bool KEY_REBINDS_ALLOW_SYSTEM_ALT_F4 = false;
 inline std::vector<DWORD> GetDefaultKeyRebindsToggleHotkey() { return {}; }
 
 constexpr int DEFAULT_CONFIG_VERSION = 4;

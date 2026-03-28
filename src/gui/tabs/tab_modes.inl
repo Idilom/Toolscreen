@@ -609,6 +609,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     } else if (g_config.eyezoom.activeOverlayIndex > ezoverlay_to_remove) {
                         g_config.eyezoom.activeOverlayIndex--;
                     }
+                    DiscardUnusedUserImageCaches();
                     g_configIsDirty = true;
                 }
 

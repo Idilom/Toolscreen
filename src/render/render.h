@@ -171,10 +171,19 @@ extern std::unordered_map<std::string, MirrorInstance> g_mirrorInstances;
 
 struct BackgroundTextureInstance {
     GLuint textureId = 0;
+    int width = 0;
+    int height = 0;
+    int textureStorageHeight = 0;
+    int frameCount = 1;
+    int framesPerTexture = 1;
 
     bool isAnimated = false;
+    bool isVideo = false;
     std::vector<GLuint> frameTextures;
+    std::vector<int> frameTextureHeights;
     std::vector<int> frameDelays;
+    std::vector<uint64_t> frameEndTimesMs;
+    uint64_t totalAnimationDurationMs = 0;
     size_t currentFrame = 0;
     std::chrono::steady_clock::time_point lastFrameTime;
 };
@@ -227,6 +236,7 @@ void DrawOverlayBorder(float nx1, float ny1, float nx2, float ny2, float borderW
 void RenderGameBorder(int x, int y, int w, int h, int borderWidth, int radius, const Color& color, int fullW, int fullH);
 
 void DiscardAllGPUImages();
+void DiscardUnusedUserImageCaches();
 void CleanupGPUResources();
 void ProcessPendingDecodedImages();
 void UploadDecodedImageToGPU(const DecodedImageData& imgData);

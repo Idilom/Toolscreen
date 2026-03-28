@@ -15,6 +15,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "common/video_media.h"
 #include "config/config_defaults.h"
 #include "imgui.h"
 #include "version.h"
@@ -33,6 +34,7 @@ struct DecodedImageData {
     unsigned char* data = nullptr;
 
     bool isAnimated = false;
+    bool isVideo = false;
     int frameCount = 0;
     int frameHeight = 0;
     std::vector<int> frameDelays;
@@ -63,6 +65,32 @@ void RequestDynamicGuiFontRefresh(bool forceRefresh = false);
 void ApplyDynamicGuiFontRefresh();
 void RequestKeyboardLayoutFontRefresh(const ImVec2& windowSize, float keyHeight, float keyboardScale, bool forceRefresh = false);
 void ApplyPendingKeyboardLayoutFontRefresh();
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+struct GuiTestInteractionRect {
+    float minX = 0.0f;
+    float minY = 0.0f;
+    float maxX = 0.0f;
+    float maxY = 0.0f;
+};
+
+enum class GuiTestKeyboardLayoutBindTarget {
+    None,
+    FullOutputVk,
+    TypesVk,
+    TypesVkShift,
+    TriggersVk,
+};
+
+void ResetGuiTestInteractionRects();
+bool GetGuiTestInteractionRect(const char* id, GuiTestInteractionRect& outRect);
+void RequestGuiTestOpenKeyboardLayout();
+void RequestGuiTestOpenKeyboardLayoutContext(DWORD vk);
+void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode);
+void RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget target);
+void RequestGuiTestKeyboardLayoutSetShiftLayerUppercase(bool enabled);
+void RequestGuiTestKeyboardLayoutSetShiftLayerUsesCapsLock(bool enabled);
+#endif
 
 extern ImFont* g_keyboardLayoutPrimaryFont;
 extern ImFont* g_keyboardLayoutSecondaryFont;
@@ -383,6 +411,7 @@ struct DebugGlobalConfig {
     bool showTextureGrid = false;
     bool delayRenderingUntilFinished = false;
     bool virtualCameraEnabled = false;        // Output to OBS Virtual Camera driver
+    int videoCacheBudgetMiB = ConfigDefaults::DEBUG_GLOBAL_VIDEO_CACHE_BUDGET_MIB;
 
     bool logModeSwitch = false;
     bool logAnimation = false;
@@ -471,6 +500,7 @@ struct KeyRebind {
     DWORD customOutputScanCode = 0;
     bool baseOutputShifted = false;
     bool shiftLayerEnabled = false;
+    bool shiftLayerUsesCapsLock = false;
     DWORD shiftLayerOutputVK = 0;
     DWORD shiftLayerOutputUnicode = 0;
     bool shiftLayerOutputShifted = false;
@@ -483,6 +513,7 @@ struct KeyRebindsConfig {
     int indicatorPosition = ConfigDefaults::KEY_REBINDS_INDICATOR_POSITION;
     std::string indicatorImageEnabled;
     std::string indicatorImageDisabled;
+    bool allowSystemAltF4 = ConfigDefaults::KEY_REBINDS_ALLOW_SYSTEM_ALT_F4;
     std::vector<DWORD> toggleHotkey = {};
     std::vector<KeyRebind> rebinds;
 };

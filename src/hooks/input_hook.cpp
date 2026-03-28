@@ -69,20 +69,8 @@ struct LowLevelSuppressedKeyState {
     bool isSystemKey = false;
 };
 
-struct DeferredAltTabRebindState {
-    KeyRebind rebind;
-    UINT keyDownMsg = 0;
-    WPARAM keyDownWParam = 0;
-    LPARAM keyDownLParam = 0;
-    DWORD rawVkCode = 0;
-    DWORD vkCode = 0;
-    bool dispatched = false;
-    bool passthroughTriggered = false;
-};
-
 static std::unordered_map<DWORD, LowLevelSuppressedKeyState> s_lowLevelSuppressedKeys;
 static std::mutex s_lowLevelSuppressedKeysMutex;
-static std::unordered_map<DWORD, DeferredAltTabRebindState> s_deferredAltTabRebindStates;
 static bool s_systemAltTabPassthroughActive = false;
 
 static bool SendMenuMaskKeyTap();
@@ -203,26 +191,8 @@ static bool IsTabCurrentlyDown() {
     return (GetAsyncKeyState(VK_TAB) & 0x8000) != 0;
 }
 
-static bool HasDeferredAltTabRebindState() {
-    return !s_deferredAltTabRebindStates.empty();
-}
-
-static void MarkDeferredAltTabPassthroughTriggered() {
-    for (auto& [sourceVk, state] : s_deferredAltTabRebindStates) {
-        (void)sourceVk;
-        state.passthroughTriggered = true;
-    }
-}
-
 static void UpdateSystemAltTabPassthroughState() {
     if (!s_systemAltTabPassthroughActive) return;
-
-    for (const auto& [sourceVk, state] : s_deferredAltTabRebindStates) {
-        (void)sourceVk;
-        if (state.passthroughTriggered) {
-            return;
-        }
-    }
 
     if (IsAltCurrentlyDown() || IsTabCurrentlyDown()) {
         return;
@@ -233,6 +203,10 @@ static void UpdateSystemAltTabPassthroughState() {
 
 static bool IsShiftCurrentlyDown() {
     return (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+}
+
+static bool IsCapsLockCurrentlyOn() {
+    return (GetKeyState(VK_CAPITAL) & 0x0001) != 0;
 }
 
 static bool IsShiftDownForIncomingEvent(DWORD incomingVk, DWORD incomingRawVk, bool isKeyDown) {
@@ -254,8 +228,33 @@ static bool HasShiftLayerOutputOverride(const KeyRebind& rebind) {
     return HasShiftLayerOutputVk(rebind) || HasShiftLayerOutputUnicode(rebind);
 }
 
+static bool IsSplitRebindTextMode(const KeyRebind& rebind) {
+    if (rebind.customOutputUnicode != 0) return true;
+    if (rebind.baseOutputShifted) return true;
+    if (rebind.shiftLayerUsesCapsLock) return true;
+    if (HasShiftLayerOutputOverride(rebind)) return true;
+
+    DWORD baseTextVk = (rebind.useCustomOutput && rebind.customOutputVK != 0) ? rebind.customOutputVK : rebind.fromKey;
+    if (baseTextVk == 0) baseTextVk = rebind.fromKey;
+
+    DWORD triggerVk = rebind.toKey;
+    if (triggerVk == 0) triggerVk = rebind.fromKey;
+
+    return baseTextVk != triggerVk;
+}
+
+static bool ShouldIgnoreCapsLockForRebindText(const KeyRebind& rebind) {
+    return IsSplitRebindTextMode(rebind);
+}
+
+static bool IsShiftLayerActive(const KeyRebind& rebind, bool shiftDown, bool capsLockOn) {
+    if (!HasShiftLayerOutputOverride(rebind)) return false;
+    if (shiftDown) return true;
+    return rebind.shiftLayerUsesCapsLock && capsLockOn;
+}
+
 static bool IsShiftLayerActiveForRebind(const KeyRebind& rebind, DWORD incomingVk, DWORD incomingRawVk, bool isKeyDown) {
-    return HasShiftLayerOutputOverride(rebind) && IsShiftDownForIncomingEvent(incomingVk, incomingRawVk, isKeyDown);
+    return IsShiftLayerActive(rebind, IsShiftDownForIncomingEvent(incomingVk, incomingRawVk, isKeyDown), IsCapsLockCurrentlyOn());
 }
 
 static DWORD ResolveEffectiveCustomOutputVk(const KeyRebind& rebind, bool shiftLayerActive) {
@@ -543,7 +542,12 @@ InputHandlerResult HandleAltF4(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
     if (uMsg != WM_SYSKEYDOWN) { return { false, 0 }; }
     PROFILE_SCOPE("HandleAltF4");
 
-    if (wParam == VK_F4) { return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) }; }
+    auto cfgSnap = GetConfigSnapshot();
+    if (!cfgSnap || !cfgSnap->keyRebinds.enabled || !cfgSnap->keyRebinds.allowSystemAltF4) {
+        return { false, 0 };
+    }
+
+    if (wParam == VK_F4 && IsAltCurrentlyDown()) { return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) }; }
     return { false, 0 };
 }
 
@@ -2045,9 +2049,9 @@ static bool ResolvePreferredOutputShiftState(const KeyRebind& rebind, bool shift
 static void ApplyPreferredOutputShiftState(const KeyRebind& rebind, bool shiftLayerActive, BYTE keyboardState[256]) {
     if (!keyboardState) return;
 
-    // Rebind text output should only follow live Shift state or explicit rebind shift settings,
-    // not the toggle state from Caps Lock.
-    keyboardState[VK_CAPITAL] = 0;
+    if (ShouldIgnoreCapsLockForRebindText(rebind)) {
+        keyboardState[VK_CAPITAL] = 0;
+    }
 
     bool shouldOverrideShiftState = false;
     BYTE shiftState = 0;
@@ -2188,7 +2192,7 @@ static bool ShouldSuppressLowLevelMenuModifierKey(DWORD rawVk) {
         if (!rebind.enabled || rebind.fromKey == 0 || rebind.toKey == 0) continue;
         if (!IsDeepSuppressionEligibleSourceVk(rebind.fromKey)) continue;
         if (!MatchesRebindSourceKey(rawVk, rawVk, rebind.fromKey)) continue;
-        if (cfg->keyRebinds.allowSystemAltTab && IsAltVk(rawVk) && IsAltVk(rebind.fromKey)) continue;
+        if ((cfg->keyRebinds.allowSystemAltTab || cfg->keyRebinds.allowSystemAltF4) && IsAltVk(rawVk) && IsAltVk(rebind.fromKey)) continue;
 
         const DWORD triggerVk = NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
         if (ShouldMaskMenuModifierForRebind(rebind, rawVk, rawVk, true, false, triggerVk)) {
@@ -2292,23 +2296,7 @@ static void EnsureLowLevelKeyboardHookInstalled() {
 }
 
 void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
-    auto deferredStates = std::move(s_deferredAltTabRebindStates);
-    s_deferredAltTabRebindStates.clear();
     s_systemAltTabPassthroughActive = false;
-
-    if (hWnd) {
-        for (const auto& [sourceVk, state] : deferredStates) {
-            (void)sourceVk;
-            if (!state.dispatched || state.passthroughTriggered) continue;
-
-            const bool wasSystemKey = (state.keyDownMsg == WM_SYSKEYDOWN);
-            const UINT keyUpMsg = wasSystemKey ? WM_SYSKEYUP : WM_KEYUP;
-            const LPARAM keyUpLParam = BuildKeyboardMessageLParam(GetScanCodeWithExtendedFlagFromLParam(state.keyDownLParam), false,
-                                                                  wasSystemKey, 1, true, true);
-            (void)ExecuteMatchedKeyRebind(hWnd, keyUpMsg, state.keyDownWParam, keyUpLParam, state.rawVkCode, state.vkCode, false, false,
-                                          false, state.rebind);
-        }
-    }
 
     if (!hWnd) return;
 
@@ -2716,54 +2704,11 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     const bool currentIsAlt = !isMouseButton && (IsAltVk(vkCode) || IsAltVk(rawVkCode));
     const bool currentIsTab = !isMouseButton && (IsTabVk(vkCode) || IsTabVk(rawVkCode));
 
-    if (allowSystemAltTab && currentIsTab && isKeyDown && (IsAltCurrentlyDown() || HasDeferredAltTabRebindState() || s_systemAltTabPassthroughActive)) {
+    if (allowSystemAltTab && currentIsTab && isKeyDown && IsAltCurrentlyDown()) {
         s_systemAltTabPassthroughActive = true;
-        MarkDeferredAltTabPassthroughTriggered();
     }
 
-    if (allowSystemAltTab && currentIsAlt) {
-        auto deferredIt = s_deferredAltTabRebindStates.find(vkCode);
-        if (deferredIt != s_deferredAltTabRebindStates.end()) {
-            if (isKeyDown) {
-                return { true, 0 };
-            }
-
-            DeferredAltTabRebindState deferredState = deferredIt->second;
-            s_deferredAltTabRebindStates.erase(deferredIt);
-
-            if (deferredState.passthroughTriggered) {
-                UpdateSystemAltTabPassthroughState();
-                return { true, 0 };
-            }
-
-            if (!deferredState.dispatched) {
-                (void)ExecuteMatchedKeyRebind(hWnd, deferredState.keyDownMsg, deferredState.keyDownWParam, deferredState.keyDownLParam,
-                                             deferredState.rawVkCode, deferredState.vkCode, false, true, false, deferredState.rebind);
-            }
-
-            const bool wasSystemKey = (deferredState.keyDownMsg == WM_SYSKEYDOWN);
-            const UINT keyUpMsg = wasSystemKey ? WM_SYSKEYUP : WM_KEYUP;
-            const LPARAM keyUpLParam = BuildKeyboardMessageLParam(GetScanCodeWithExtendedFlagFromLParam(deferredState.keyDownLParam), false,
-                                                                  wasSystemKey, 1, true, true);
-            InputHandlerResult deferredResult = ExecuteMatchedKeyRebind(hWnd, keyUpMsg, deferredState.keyDownWParam, keyUpLParam,
-                                                                        deferredState.rawVkCode, deferredState.vkCode, false, false,
-                                                                        false, deferredState.rebind);
-            UpdateSystemAltTabPassthroughState();
-            return deferredResult.consumed ? deferredResult : InputHandlerResult{ true, 0 };
-        }
-    }
-
-    if (allowSystemAltTab && !currentIsAlt && !currentIsTab && HasDeferredAltTabRebindState()) {
-        for (auto& [sourceVk, state] : s_deferredAltTabRebindStates) {
-            (void)sourceVk;
-            if (state.dispatched || state.passthroughTriggered) continue;
-            InputHandlerResult result = ExecuteMatchedKeyRebind(hWnd, state.keyDownMsg, state.keyDownWParam, state.keyDownLParam,
-                                                                state.rawVkCode, state.vkCode, false, true, false, state.rebind);
-            state.dispatched = result.consumed;
-        }
-    }
-
-    if (allowSystemAltTab && currentIsTab && (s_systemAltTabPassthroughActive || IsAltCurrentlyDown() || HasDeferredAltTabRebindState())) {
+    if (allowSystemAltTab && currentIsTab && s_systemAltTabPassthroughActive) {
         if (!isKeyDown) {
             UpdateSystemAltTabPassthroughState();
         }
@@ -2774,18 +2719,6 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         const auto& rebind = rebindCfg->keyRebinds.rebinds[i];
 
         if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 && MatchesRebindSourceKey(vkCode, rawVkCode, rebind.fromKey)) {
-            if (allowSystemAltTab && currentIsAlt && isKeyDown && !isAutoRepeatKeyDown && IsAltVk(rebind.fromKey)) {
-                DeferredAltTabRebindState deferredState{};
-                deferredState.rebind = rebind;
-                deferredState.keyDownMsg = uMsg;
-                deferredState.keyDownWParam = wParam;
-                deferredState.keyDownLParam = lParam;
-                deferredState.rawVkCode = rawVkCode;
-                deferredState.vkCode = vkCode;
-                s_deferredAltTabRebindStates[vkCode] = deferredState;
-                return { true, 0 };
-            }
-
             return ExecuteMatchedKeyRebind(hWnd, uMsg, wParam, lParam, rawVkCode, vkCode, isMouseButton, isKeyDown,
                                            isAutoRepeatKeyDown, rebind);
         }
@@ -2855,7 +2788,7 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
         if (matched) {
             const bool shiftDown = IsShiftCurrentlyDown();
-            const bool shiftLayerActive = HasShiftLayerOutputOverride(rebind) && shiftDown;
+            const bool shiftLayerActive = IsShiftLayerActive(rebind, shiftDown, IsCapsLockCurrentlyOn());
             const bool preferShiftedText = ResolvePreferredOutputShiftState(rebind, shiftLayerActive, shiftDown);
 
             if (shiftLayerActive && HasShiftLayerOutputUnicode(rebind)) {
@@ -2889,7 +2822,15 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             } else if (outputVK == VK_BACK) {
                 outputChar = L'\b';
             } else {
-                (void)TryTranslateVkToCharPreferShiftState(outputVK, preferShiftedText, outputChar);
+                BYTE ks[256] = {};
+                if (GetKeyboardState(ks)) {
+                    ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks);
+                    (void)TryTranslateVkToCharWithKeyboardState(outputVK, ks, outputChar);
+                }
+
+                if (outputChar == 0) {
+                    (void)TryTranslateVkToCharPreferShiftState(outputVK, preferShiftedText, outputChar);
+                }
             }
 
             if (outputChar == 0) {

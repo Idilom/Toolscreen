@@ -43,6 +43,32 @@ std::mutex g_wglSwapBuffersThirdPartyHookMutex;
 std::atomic<void*> g_lastSkippedWglSwapBuffersStart{ nullptr };
 std::atomic<void*> g_lastSkippedWglSwapBuffersTarget{ nullptr };
 
+struct ScopedModulePin {
+    HMODULE module = NULL;
+
+    ScopedModulePin() = default;
+    ScopedModulePin(const ScopedModulePin&) = delete;
+    ScopedModulePin& operator=(const ScopedModulePin&) = delete;
+
+    ~ScopedModulePin() {
+        if (module) {
+            FreeLibrary(module);
+        }
+    }
+
+    bool PinForAddress(const void* addr) {
+        if (!addr) return false;
+        if (module) {
+            FreeLibrary(module);
+            module = NULL;
+        }
+
+        return GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCSTR>(addr), &module) && module;
+    }
+
+    explicit operator bool() const { return module != NULL; }
+};
+
 static std::string PtrToHex(const void* p) {
     std::ostringstream ss;
     ss << "0x" << std::hex << std::uppercase << (uintptr_t)p;
@@ -251,6 +277,37 @@ static void LogSkippedDisallowedHookTarget(const char* apiName, void* startAddre
                     HookChain::DescribeAddressWithOwner(startAddress) + " target=" + HookChain::DescribeAddressWithOwner(skippedTarget));
 }
 
+static void LogSkippedStaleHookTarget(const char* apiName, void* target, const char* reason) {
+    if (!apiName || !target) return;
+
+    LogCategory("hookchain",
+                std::string("[") + apiName + "] skipping stale third-party hook target " + HookChain::DescribeAddressWithOwner(target) +
+                    " reason=" + (reason ? reason : "unknown"));
+}
+
+static bool IsLiveThirdPartyWglSwapBuffersHookTarget(void* target) {
+    if (!target) return false;
+
+    ScopedModulePin pinnedModule;
+    if (!pinnedModule.PinForAddress(target)) {
+        return false;
+    }
+
+    return IsReadableCodePtr(target);
+}
+
+static void ClearStaleThirdPartyWglSwapBuffersHookState(void* staleTarget, const char* reason) {
+    void* expected = staleTarget;
+    if (!g_wglSwapBuffersThirdPartyHookTarget.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    g_owglSwapBuffersThirdParty = NULL;
+    g_lastSkippedWglSwapBuffersStart.store(nullptr, std::memory_order_release);
+    g_lastSkippedWglSwapBuffersTarget.store(nullptr, std::memory_order_release);
+    LogSkippedStaleHookTarget("wglSwapBuffers", staleTarget, reason);
+}
+
 static void* ResolveAbsoluteJumpTarget(void* p) {
     if (!p) return nullptr;
 
@@ -351,28 +408,6 @@ static void LogIatHookChainDetails(const char* apiName, HMODULE importingModule,
                     HookChain::DescribeAddressWithOwner(thunkTarget) + " expectedExport=" + HookChain::DescribeAddressWithOwner(expectedExport));
 }
 
-static void ResetThirdPartyWglSwapBuffersHookChain() {
-    void* currentTarget = g_wglSwapBuffersThirdPartyHookTarget.exchange(nullptr, std::memory_order_acq_rel);
-    g_owglSwapBuffersThirdParty = NULL;
-    g_lastSkippedWglSwapBuffersStart.store(nullptr, std::memory_order_release);
-    g_lastSkippedWglSwapBuffersTarget.store(nullptr, std::memory_order_release);
-    if (!currentTarget) {
-        return;
-    }
-
-    MH_STATUS st = MH_DisableHook(currentTarget);
-    if (st != MH_OK && st != MH_ERROR_DISABLED && st != MH_ERROR_NOT_CREATED) {
-        LogCategory("hookchain", std::string("[wglSwapBuffers] failed to disable previous third-party hook target ") +
-                                     HookChain::DescribeAddressWithOwner(currentTarget) + " status=" + std::to_string((int)st));
-    }
-
-    st = MH_RemoveHook(currentTarget);
-    if (st != MH_OK && st != MH_ERROR_NOT_CREATED) {
-        LogCategory("hookchain", std::string("[wglSwapBuffers] failed to remove previous third-party hook target ") +
-                                     HookChain::DescribeAddressWithOwner(currentTarget) + " status=" + std::to_string((int)st));
-    }
-}
-
 static bool TryInstallThirdPartyWglSwapBuffersHook(void* jumpTarget, const char* what) {
     void* currentTarget = g_wglSwapBuffersThirdPartyHookTarget.load(std::memory_order_acquire);
     if (jumpTarget == currentTarget) {
@@ -380,7 +415,22 @@ static bool TryInstallThirdPartyWglSwapBuffersHook(void* jumpTarget, const char*
     }
 
     if (currentTarget) {
-        ResetThirdPartyWglSwapBuffersHookChain();
+        LogCategory("hookchain",
+                    std::string("[wglSwapBuffers] keeping existing third-party hook target ") +
+                        HookChain::DescribeAddressWithOwner(currentTarget) + " instead of switching to " +
+                        HookChain::DescribeAddressWithOwner(jumpTarget));
+        return false;
+    }
+
+    ScopedModulePin pinnedModule;
+    if (!pinnedModule.PinForAddress(jumpTarget)) {
+        LogSkippedStaleHookTarget("wglSwapBuffers", jumpTarget, "owner module unloaded before install");
+        return false;
+    }
+
+    if (!IsReadableCodePtr(jumpTarget)) {
+        LogSkippedStaleHookTarget("wglSwapBuffers", jumpTarget, "target page not readable during install");
+        return false;
     }
 
     if (!HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty),
@@ -623,6 +673,16 @@ std::string DescribeAddressWithOwner(const void* addr) {
 
 void RefreshAllThirdPartyHookChains() {
     std::lock_guard<std::mutex> lock(g_wglSwapBuffersThirdPartyHookMutex);
+
+    void* currentTarget = g_wglSwapBuffersThirdPartyHookTarget.load(std::memory_order_acquire);
+    if (currentTarget) {
+        if (IsLiveThirdPartyWglSwapBuffersHookTarget(currentTarget)) {
+            return;
+        }
+
+        ClearStaleThirdPartyWglSwapBuffersHookState(currentTarget, "installed target no longer live during refresh");
+    }
+
     RefreshThirdPartyWglSwapBuffersHookChain();
     if (!g_wglSwapBuffersThirdPartyHookTarget.load(std::memory_order_acquire)) {
         RefreshThirdPartyWglSwapBuffersIatHookChain();

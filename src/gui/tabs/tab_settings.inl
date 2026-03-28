@@ -31,53 +31,6 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
     ImGui::SameLine();
     HelpMarker(trc("tooltip.hide_animations_in_game"));
 
-    ImGui::Spacing();
-    ImGui::SeparatorText(trc("hotkeys.window_hotkeys"));
-
-    ImGui::PushID("settings_borderless_hotkey");
-    {
-        std::string borderlessKeyStr = GetKeyComboString(g_config.borderlessHotkey);
-
-        ImGui::Text(trc("label.toggle_borderless"));
-        ImGui::SameLine();
-
-        const bool isBindingBorderless = (s_mainHotkeyToBind == -998);
-        const char* borderlessButtonLabel =
-            isBindingBorderless ? trc("hotkeys.press_keys") : (borderlessKeyStr.empty() ? trc("hotkeys.click_to_bind") : borderlessKeyStr.c_str());
-        if (ImGui::Button(borderlessButtonLabel, ImVec2(150, 0))) {
-            s_mainHotkeyToBind = -998;
-            s_altHotkeyToBind = { -1, -1 };
-            s_exclusionToBind = { -1, -1 };
-            MarkHotkeyBindingActive();
-        }
-        ImGui::SameLine();
-        HelpMarker(trc("tooltip.toggle_borderless"));
-    }
-    ImGui::PopID();
-
-    ImGui::PushID("settings_auto_borderless");
-    if (ImGui::Checkbox(trc("settings.auto_borderless"), &g_config.autoBorderless)) { g_configIsDirty = true; }
-    ImGui::SameLine();
-    HelpMarker(trc("tooltip.auto_borderless"));
-    ImGui::PopID();
-
-    ImGui::Spacing();
-    ImGui::SeparatorText(trc("config_mode.advanced"));
-    if (ImGui::Checkbox(trc("settings.restore_windowed_mode_on_fullscreen_exit"), &g_config.restoreWindowedModeOnFullscreenExit)) {
-        g_configIsDirty = true;
-    }
-    ImGui::SameLine();
-    HelpMarker(trc("settings.tooltip.restore_windowed_mode_on_fullscreen_exit"));
-
-/*    if (ImGui::Checkbox("Disable Fullscreen Prompt", &g_config.disableFullscreenPrompt)) { g_configIsDirty = true; }
-    ImGui::SameLine();
-    HelpMarker("Disables the fullscreen toast prompt (toast2).\n"
-               "When disabled, toast2 appears in fullscreen and starts fading out after 10 seconds.");
-
-    if (ImGui::Checkbox("Disable Configure Prompt", &g_config.disableConfigurePrompt)) { g_configIsDirty = true; }
-    ImGui::SameLine();
-    HelpMarker("Disables the configure toast prompt (toast1) shown in windowed mode.");*/
-
     bool driverInstalled = IsVirtualCameraDriverInstalled();
     bool inUseByOBS = driverInstalled && IsVirtualCameraInUseByOBS();
     ImGui::BeginDisabled(!driverInstalled || inUseByOBS);
@@ -105,6 +58,74 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
     } else {
         HelpMarker(trc("settings.tooltip.virtual_camera"));
     }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText(trc("hotkeys.window_hotkeys"));
+
+    ImGui::PushID("settings_borderless_toggle");
+    {
+        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+        const bool canToggleBorderless = (hwnd != NULL && IsWindow(hwnd));
+
+        ImGui::Text(trc("label.toggle_borderless"));
+        ImGui::SameLine();
+
+        if (!canToggleBorderless) { ImGui::BeginDisabled(); }
+        if (ImGui::Button(trc("general.go_borderless"), ImVec2(150, 0))) {
+            ToggleBorderlessWindowedFullscreen(hwnd);
+        }
+        if (!canToggleBorderless) { ImGui::EndDisabled(); }
+        ImGui::SameLine();
+        HelpMarker(trc("tooltip.toggle_borderless"));
+    }
+    ImGui::PopID();
+
+    ImGui::PushID("settings_auto_borderless");
+    if (ImGui::Checkbox(trc("settings.auto_borderless"), &g_config.autoBorderless)) { g_configIsDirty = true; }
+    ImGui::SameLine();
+    HelpMarker(trc("tooltip.auto_borderless"));
+    ImGui::PopID();
+
+    ImGui::Spacing();
+    ImGui::SeparatorText(trc("config_mode.advanced"));
+    if (ImGui::Checkbox(trc("settings.restore_windowed_mode_on_fullscreen_exit"), &g_config.restoreWindowedModeOnFullscreenExit)) {
+        g_configIsDirty = true;
+    }
+    ImGui::SameLine();
+    HelpMarker(trc("settings.tooltip.restore_windowed_mode_on_fullscreen_exit"));
+
+    ImGui::Spacing();
+    ImGui::SeparatorText(trc("settings.performance"));
+    ImGui::Text(trc("label.fps_limit"));
+    ImGui::SetNextItemWidth(300);
+    int fpsLimitValue = (g_config.fpsLimit == 0) ? 1001 : g_config.fpsLimit;
+    if (ImGui::SliderInt("##fpsLimit", &fpsLimitValue, 30, 1001, fpsLimitValue == 1001 ? trc("label.unlimited") : "%d fps")) {
+        g_config.fpsLimit = (fpsLimitValue == 1001) ? 0 : fpsLimitValue;
+        g_configIsDirty = true;
+    }
+    ImGui::SameLine();
+    HelpMarker(trc("tooltip.fps_limit.advanced"));
+
+/*    if (ImGui::Checkbox("Disable Fullscreen Prompt", &g_config.disableFullscreenPrompt)) { g_configIsDirty = true; }
+    ImGui::SameLine();
+    HelpMarker("Disables the fullscreen toast prompt (toast2).\n"
+               "When disabled, toast2 appears in fullscreen and starts fading out after 10 seconds.");
+
+    if (ImGui::Checkbox("Disable Configure Prompt", &g_config.disableConfigurePrompt)) { g_configIsDirty = true; }
+    ImGui::SameLine();
+    HelpMarker("Disables the configure toast prompt (toast1) shown in windowed mode.");*/
+
+    ImGui::Spacing();
+    ImGui::Text(trc("settings.video_cache_budget_mib"));
+    ImGui::SetNextItemWidth(300);
+    int videoCacheBudgetMiB = g_config.debug.videoCacheBudgetMiB;
+    if (ImGui::SliderInt("##videoCacheBudgetMiB", &videoCacheBudgetMiB, 0, 2048,
+                         videoCacheBudgetMiB == 0 ? trc("label.disabled") : "%d MiB")) {
+        g_config.debug.videoCacheBudgetMiB = videoCacheBudgetMiB;
+        g_configIsDirty = true;
+    }
+    ImGui::SameLine();
+    HelpMarker(trc("settings.tooltip.video_cache_budget_mib"));
 
     ImGui::Spacing();
 
@@ -144,18 +165,117 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
             ImGui::EndPopup();
         }
     } else {
+        struct MpegVideoTextureDebugStats {
+            size_t uploadedVramBytes = 0;
+            size_t uploadedClipCount = 0;
+            size_t uploadedTextureCount = 0;
+        };
+
+        auto collectMpegVideoTextureDebugStats = []() {
+            MpegVideoTextureDebugStats stats;
+
+            auto tryMultiply = [](size_t left, size_t right, size_t& out) {
+                if (left == 0 || right == 0) {
+                    out = 0;
+                    return true;
+                }
+                if (left > (std::numeric_limits<size_t>::max)() / right) {
+                    return false;
+                }
+                out = left * right;
+                return true;
+            };
+
+            auto tryComputeRgbaBytes = [&tryMultiply](int width, int height, size_t& outBytes) {
+                if (width <= 0 || height <= 0) {
+                    return false;
+                }
+
+                size_t pixelCount = 0;
+                if (!tryMultiply(static_cast<size_t>(width), static_cast<size_t>(height), pixelCount)) {
+                    return false;
+                }
+                return tryMultiply(pixelCount, 4, outBytes);
+            };
+
+            auto computeTextureBytes = [&tryComputeRgbaBytes](int width, int height) {
+                if (width <= 0 || height <= 0) {
+                    return static_cast<size_t>(0);
+                }
+
+                size_t textureBytes = 0;
+                if (!tryComputeRgbaBytes(width, height, textureBytes)) {
+                    return static_cast<size_t>(0);
+                }
+                return textureBytes;
+            };
+
+            auto computeInstanceTextureBytes = [&computeTextureBytes](const auto& inst) {
+                size_t totalBytes = 0;
+                if (inst.isAnimated && !inst.frameTextures.empty()) {
+                    if (!inst.frameTextureHeights.empty()) {
+                        for (int textureHeight : inst.frameTextureHeights) {
+                            totalBytes += computeTextureBytes(inst.width, textureHeight);
+                        }
+                        return totalBytes;
+                    }
+
+                    const int textureHeight = inst.textureStorageHeight > 0 ? inst.textureStorageHeight : inst.height;
+                    return computeTextureBytes(inst.width, textureHeight) * inst.frameTextures.size();
+                }
+
+                if (inst.textureId == 0) {
+                    return static_cast<size_t>(0);
+                }
+
+                const int textureHeight = inst.textureStorageHeight > 0 ? inst.textureStorageHeight : inst.height;
+                return computeTextureBytes(inst.width, textureHeight);
+            };
+
+            {
+                std::lock_guard<std::mutex> lock(g_backgroundTexturesMutex);
+                for (const auto& [id, inst] : g_backgroundTextures) {
+                    (void)id;
+                    if (!inst.isVideo) {
+                        continue;
+                    }
+
+                    const size_t textureCount = inst.isAnimated ? inst.frameTextures.size() : (inst.textureId != 0 ? 1u : 0u);
+                    if (textureCount == 0) {
+                        continue;
+                    }
+
+                    stats.uploadedClipCount += 1;
+                    stats.uploadedTextureCount += textureCount;
+                    stats.uploadedVramBytes += computeInstanceTextureBytes(inst);
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(g_userImagesMutex);
+                for (const auto& [id, inst] : g_userImages) {
+                    (void)id;
+                    if (!inst.isVideo) {
+                        continue;
+                    }
+
+                    const size_t textureCount = inst.isAnimated ? inst.frameTextures.size() : (inst.textureId != 0 ? 1u : 0u);
+                    if (textureCount == 0) {
+                        continue;
+                    }
+
+                    stats.uploadedClipCount += 1;
+                    stats.uploadedTextureCount += textureCount;
+                    stats.uploadedVramBytes += computeInstanceTextureBytes(inst);
+                }
+            }
+
+            return stats;
+        };
+
         ImGui::SeparatorText(trc("settings.debug_options"));
         drawMirrorColorspaceSetting();
         ImGui::Spacing();
-        ImGui::Text(trc("label.fps_limit"));
-        ImGui::SetNextItemWidth(300);
-        int fpsLimitValue = (g_config.fpsLimit == 0) ? 1001 : g_config.fpsLimit;
-        if (ImGui::SliderInt("##debugFpsLimit", &fpsLimitValue, 30, 1001, fpsLimitValue == 1001 ? trc("label.unlimited") : "%d fps")) {
-            g_config.fpsLimit = (fpsLimitValue == 1001) ? 0 : fpsLimitValue;
-            g_configIsDirty = true;
-        }
-        ImGui::SameLine();
-        HelpMarker(trc("tooltip.fps_limit.advanced"));
         if (ImGui::Checkbox(trc("settings.limit_capture_framerate"), &g_config.limitCaptureFramerate)) { g_configIsDirty = true; }
         ImGui::SameLine();
         HelpMarker(trc("settings.tooltip.limit_capture_framerate"));
@@ -177,6 +297,20 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
         if (ImGui::Checkbox(trc("settings.show_texture_grid"), &g_config.debug.showTextureGrid)) { g_configIsDirty = true; }
         ImGui::SameLine();
         HelpMarker(trc("settings.tooltip.show_texture_grid"));
+
+        ImGui::Spacing();
+        ImGui::SeparatorText(trc("settings.debug_mpeg_video_memory"));
+        const MpegVideoTextureDebugStats mpegVideoStats = collectMpegVideoTextureDebugStats();
+        if (mpegVideoStats.uploadedClipCount == 0) {
+            ImGui::TextDisabled(trc("settings.debug_mpeg_video_memory_empty"));
+        } else {
+            ImGui::Text("%s %zu", trc("settings.debug_mpeg_video_memory_uploaded_clips"), mpegVideoStats.uploadedClipCount);
+            ImGui::Text("%s %zu", trc("settings.debug_mpeg_video_memory_uploaded_textures"), mpegVideoStats.uploadedTextureCount);
+            ImGui::Text("%s %.2f MiB (%llu bytes)", trc("settings.debug_mpeg_video_memory_vram"),
+                        static_cast<double>(mpegVideoStats.uploadedVramBytes) / (1024.0 * 1024.0),
+                        static_cast<unsigned long long>(mpegVideoStats.uploadedVramBytes));
+            ImGui::TextDisabled(trc("settings.debug_mpeg_video_memory_note"));
+        }
 
         ImGui::Spacing();
         if (ImGui::CollapsingHeader(trc("settings.advanced_logging"))) {

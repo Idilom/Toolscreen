@@ -15,6 +15,13 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/ToolscreenVersion.cmake")
 set(TOOLSCREEN_VERSION "${TOOLSCREEN_VERSION_MAJOR}.${TOOLSCREEN_VERSION_MINOR}.${TOOLSCREEN_VERSION_PATCH}")
 
+set(TOOLSCREEN_PROJECT_NAME "Toolscreen")
+set(TOOLSCREEN_COMPANY_NAME "jojoe77777")
+set(TOOLSCREEN_COPYRIGHT "Copyright (c) 2026 jojoe77777")
+set(TOOLSCREEN_DLL_FILE_DESCRIPTION "Toolscreen hook DLL")
+set(TOOLSCREEN_INSTALLER_FILE_DESCRIPTION "Toolscreen installer")
+set(TOOLSCREEN_DOWNLOADER_FILE_DESCRIPTION "Toolscreen downloader")
+
 project(Toolscreen VERSION ${TOOLSCREEN_VERSION} LANGUAGES C CXX RC)
 
 set(TOOLSCREEN_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -31,6 +38,7 @@ if(NOT WIN32)
 endif()
 
 option(TOOLSCREEN_ENABLE_JAR_PACKAGING "Enable the EasyInjectBundled jar packaging target." ON)
+set(TOOLSCREEN_PACKAGING_DLL_PATH "" CACHE FILEPATH "Optional override DLL path used for jar and EXE packaging inputs")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -80,6 +88,21 @@ function(toolscreen_set_brand_version branding_file version_string)
     endif()
 
     file(WRITE "${branding_file}" "${toolscreen_branding_contents}")
+endfunction()
+
+function(toolscreen_write_text_file_if_different file_path content)
+    set(toolscreen_should_write TRUE)
+
+    if(EXISTS "${file_path}")
+        file(READ "${file_path}" toolscreen_existing_content)
+        if(toolscreen_existing_content STREQUAL content)
+            set(toolscreen_should_write FALSE)
+        endif()
+    endif()
+
+    if(toolscreen_should_write)
+        file(WRITE "${file_path}" "${content}")
+    endif()
 endfunction()
 
 if(MSVC)
@@ -408,6 +431,50 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
 
     set(TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES "${easyinjectbundled_exe_SOURCE_DIR}/branding.properties")
     toolscreen_set_brand_version("${TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES}" "${PROJECT_VERSION}")
+    toolscreen_write_text_file_if_different(
+        "${easyinjectbundled_exe_SOURCE_DIR}/exe/src/embedded_resources.rc.in"
+        [=[#include <winres.h>
+
+1 ICON "@APP_ICON_FILE_RC@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
+ PRODUCTVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "@TOOLSCREEN_COMPANY_NAME@\0"
+            VALUE "FileDescription", "@TOOLSCREEN_INSTALLER_FILE_DESCRIPTION@\0"
+            VALUE "FileVersion", "@TOOLSCREEN_VERSION@\0"
+            VALUE "InternalName", "Toolscreen\0"
+            VALUE "LegalCopyright", "@TOOLSCREEN_COPYRIGHT@\0"
+            VALUE "OriginalFilename", "Toolscreen-@BRAND_VERSION@-double-click-me.exe\0"
+            VALUE "ProductName", "@TOOLSCREEN_PROJECT_NAME@\0"
+            VALUE "ProductVersion", "@TOOLSCREEN_VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+@BRANDING_RESOURCE_ID@ RCDATA "@BRANDING_FILE_RC@"
+@DLL_INDEX_RESOURCE_ID@ RCDATA "@EMBED_DLL_INDEX_FILE_RC@"
+@EMBED_DLL_RESOURCE_LINES@
+]=]
+    )
 
     set(JAR_NAME "Toolscreen-${PROJECT_VERSION}-double-click-me.jar")
     set(JAR_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${JAR_NAME}")
@@ -418,6 +485,11 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     set(DOWNLOADER_EXE_NAME "toolscreen-downloader.exe")
     set(DOWNLOADER_EXE_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${DOWNLOADER_EXE_NAME}")
 
+    set(TOOLSCREEN_PACKAGING_DLL_SOURCE "$<TARGET_FILE:${PROJECT_NAME}>")
+    if(TOOLSCREEN_PACKAGING_DLL_PATH)
+        set(TOOLSCREEN_PACKAGING_DLL_SOURCE "${TOOLSCREEN_PACKAGING_DLL_PATH}")
+    endif()
+
     file(GENERATE
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/copy_toolscreen_downloader_jar_$<CONFIG>.cmake"
         CONTENT "set(NEW_DOWNLOADER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\nset(TYPO_DOWNLOADER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\nset(LEGACY_INSTALLER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\nset(DOWNLOADER_JAR_OUTPUT \"${DOWNLOADER_JAR_OUTPUT}\")\nif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\nelseif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\nelseif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\nelse()\n  message(FATAL_ERROR \"Expected downloader jar at '${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}', typo downloader jar at '${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar', or legacy installer jar at '${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${DOWNLOADER_JAR_SOURCE}\" \"\${DOWNLOADER_JAR_OUTPUT}\" RESULT_VARIABLE COPY_RESULT)\nif(NOT COPY_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to copy downloader jar from '\${DOWNLOADER_JAR_SOURCE}' to '\${DOWNLOADER_JAR_OUTPUT}'\")\nendif()\n"
@@ -426,7 +498,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     add_custom_target(jar ALL
         COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/custom-dlls"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PROJECT_NAME}>" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
         COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
         COMMAND "${TOOLSCREEN_MAVEN_EXECUTABLE}" -f "${easyinjectbundled_SOURCE_DIR}/pom.xml" clean package -q
                 -Dbrand.name=Toolscreen
@@ -448,6 +520,47 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
         set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/tioolscrteen-downloader-exe")
     endif()
 
+    toolscreen_write_text_file_if_different(
+        "${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}/src/app.rc.in"
+        [=[#include <winres.h>
+
+1 ICON "@APP_ICON_FILE_RC@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
+ PRODUCTVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "@TOOLSCREEN_COMPANY_NAME@\0"
+            VALUE "FileDescription", "@TOOLSCREEN_DOWNLOADER_FILE_DESCRIPTION@\0"
+            VALUE "FileVersion", "@TOOLSCREEN_VERSION@\0"
+            VALUE "InternalName", "toolscreen-downloader\0"
+            VALUE "LegalCopyright", "@TOOLSCREEN_COPYRIGHT@\0"
+            VALUE "OriginalFilename", "toolscreen-downloader.exe\0"
+            VALUE "ProductName", "@TOOLSCREEN_PROJECT_NAME@\0"
+            VALUE "ProductVersion", "@TOOLSCREEN_VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+]=]
+    )
+
     add_subdirectory("${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-toolscreen-downloader-exe")
 
     if(TARGET ToolscreenDownloaderExe)
@@ -465,7 +578,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
 
     add_custom_target(toolscreen_prepare_easyinject_exe_inputs
         COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PROJECT_NAME}>" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
         COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
         DEPENDS ${PROJECT_NAME}
         COMMENT "Preparing EasyInject exe packaging inputs"
@@ -535,11 +648,24 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     )
 endif()
 
+set(TOOLSCREEN_GUI_INTEGRATION_SUITE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration_tests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/config_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/rebind_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/render_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/ui_and_log_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/runner.inl
+)
+
 add_executable(toolscreen_gui_integration_tests
     ${TOOLSCREEN_SOURCES}
     ${TOOLSCREEN_GENERATED_VERSION_HEADER}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/resource.rc
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration_tests.cpp
+    ${TOOLSCREEN_GUI_INTEGRATION_SUITE_FILES}
+)
+
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/tests" PREFIX "Tests" FILES
+    ${TOOLSCREEN_GUI_INTEGRATION_SUITE_FILES}
 )
 
 target_include_directories(toolscreen_gui_integration_tests PRIVATE
@@ -553,6 +679,7 @@ target_compile_definitions(toolscreen_gui_integration_tests PRIVATE
     CMAKE_BUILD
     GLEW_STATIC
     NOMINMAX
+    TOOLSCREEN_GUI_INTEGRATION_TESTS
     UNICODE
     _UNICODE
 )
@@ -592,6 +719,10 @@ toolscreen_configure_target_outputs(toolscreen_gui_integration_tests)
 toolscreen_enable_release_symbols(toolscreen_gui_integration_tests)
 
 set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
+    log-multi-instance-latest-suffix
+    log-header-includes-peer-info
+    log-archive-collision-handling
+    log-released-slot-reuse
     config-default-load
     config-roundtrip
     config-roundtrip-global-settings
@@ -632,6 +763,21 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-key-rebind-escaped-unicode-string-parsed
     config-load-key-rebind-hex-unicode-string-parsed
     config-load-key-rebind-invalid-unicode-defaulted
+    config-load-key-rebind-shift-layer-caps-lock-parsed
+    config-load-key-rebind-shift-layer-caps-lock-defaulted
+    key-rebind-runtime-full-forwarding
+    key-rebind-runtime-split-vk-output
+    key-rebind-runtime-split-unicode-output
+    key-rebind-runtime-shift-layer-shift-activated
+    key-rebind-runtime-shift-layer-caps-lock-activated
+    key-rebind-runtime-full-caps-lock-honored
+    key-rebind-runtime-split-caps-lock-ignored
+    key-rebind-runtime-non-typable-trigger-consumes-char
+    key-rebind-runtime-mouse-source-emits-key-and-char
+    key-rebind-runtime-disabled-rebind-ignored
+    key-rebind-gui-keyboard-layout-full-bind-and-trigger
+    key-rebind-gui-keyboard-layout-split-bind-and-trigger
+    key-rebind-gui-keyboard-layout-mouse-source-bind-and-trigger
     config-load-fullscreen-stretch-repaired
     config-load-preemptive-sync-existing-mode
     config-load-thin-min-width-enforced
@@ -650,6 +796,8 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     mode-mirror-group-render
     mode-window-overlay-render
     mode-browser-overlay-render
+    mode-image-overlay-render-png
+    mode-image-overlay-render-mpeg
     config-error-gui
     settings-gui-basic
     settings-gui-advanced

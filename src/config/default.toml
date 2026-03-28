@@ -85,6 +85,7 @@ windowWidth = 384
 enabled = false
 resolveRebindTargetsForHotkeys = true
 allowSystemAltTab = false
+allowSystemAltF4 = false
 toggleHotkey = [ ]
 rebinds = []
 

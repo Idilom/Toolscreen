@@ -87,12 +87,14 @@ if errorlevel 1 (
     goto :fail
 )
 
-if exist "%ARTIFACT_DIR%\toolscreen-installer.jar" del /q "%ARTIFACT_DIR%\toolscreen-installer.jar"
-if exist "%ARTIFACT_DIR%\toolscreen-installer.exe" del /q "%ARTIFACT_DIR%\toolscreen-installer.exe"
-if exist "%ARTIFACT_DIR%\toolscreen-installer.pdb" del /q "%ARTIFACT_DIR%\toolscreen-installer.pdb"
-if exist "%ARTIFACT_DIR%\tioolscrteen-downloader.jar" del /q "%ARTIFACT_DIR%\tioolscrteen-downloader.jar"
-if exist "%ARTIFACT_DIR%\tioolscrteen-downloader.exe" del /q "%ARTIFACT_DIR%\tioolscrteen-downloader.exe"
-if exist "%ARTIFACT_DIR%\tioolscrteen-downloader.pdb" del /q "%ARTIFACT_DIR%\tioolscrteen-downloader.pdb"
+echo Removing stale packaged artifacts...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$patterns = @('Toolscreen-*-double-click-me.jar', 'Toolscreen-*-double-click-me.exe', 'toolscreen-downloader.jar', 'toolscreen-downloader.exe', 'tioolscrteen-downloader.jar', 'tioolscrteen-downloader.exe'); foreach ($pattern in $patterns) { Get-ChildItem -Path '%ARTIFACT_DIR%' -File -Filter $pattern -ErrorAction SilentlyContinue | Remove-Item -Force }"
+if errorlevel 1 (
+        set "FAILURE_STEP=Remove stale packaged artifacts"
+        set "FAILURE_CODE=45"
+        goto :fail
+)
 
 echo Building EXE package with preset %BUILD_PRESET%...
 cmake --build --preset %BUILD_PRESET% --target installer_exe
@@ -118,7 +120,23 @@ if errorlevel 1 (
     goto :fail
 )
 
+echo Verifying PE metadata for signed artifacts...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%scripts\verify_pe_metadata.ps1" -ArtifactDirectory "%ARTIFACT_DIR%"
+if errorlevel 1 (
+    set "FAILURE_STEP=Verify PE metadata for signing"
+    set "FAILURE_CODE=62"
+    goto :fail
+)
+
 if "%RUN_TESTS%"=="1" (
+    echo Building test executable with preset %BUILD_PRESET%...
+    cmake --build --preset %BUILD_PRESET% --target toolscreen_gui_integration_tests
+    if errorlevel 1 (
+        set "FAILURE_STEP=Build test executable"
+        set "FAILURE_CODE=65"
+        goto :fail
+    )
+
     echo Running CTest packaging smoke tests with preset %TEST_PRESET%...
     ctest --preset %TEST_PRESET% --exclude-regex "^toolscreen_integration_"
     if errorlevel 1 (
