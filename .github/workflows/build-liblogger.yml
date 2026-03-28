@@ -122,6 +122,14 @@ jobs:
 
   build-liblogger-linux:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x64
+          - x86
+          - arm64
+          - arm32
 
     steps:
       - name: Check out repository
@@ -136,66 +144,139 @@ jobs:
       - name: Install Linux liblogger dependencies
         shell: bash
         run: |
-          sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null <<'EOF'
-          Types: deb
-          URIs: http://azure.archive.ubuntu.com/ubuntu/
-          Suites: noble noble-updates noble-backports
-          Components: main restricted universe multiverse
-          Architectures: amd64 i386
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          case "${{ matrix.target }}" in
+            x64)
+              sudo apt-get update
+              sudo apt-get install -y \
+                pkg-config \
+                clang \
+                binutils \
+                libssl-dev
+              ;;
+            x86)
+              sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null <<'EOF'
+              Types: deb
+              URIs: http://azure.archive.ubuntu.com/ubuntu/
+              Suites: noble noble-updates noble-backports
+              Components: main restricted universe multiverse
+              Architectures: amd64 i386
+              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
-          Types: deb
-          URIs: http://security.ubuntu.com/ubuntu/
-          Suites: noble-security
-          Components: main restricted universe multiverse
-          Architectures: amd64 i386
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          EOF
+              Types: deb
+              URIs: http://security.ubuntu.com/ubuntu/
+              Suites: noble-security
+              Components: main restricted universe multiverse
+              Architectures: amd64 i386
+              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+              EOF
 
-          sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null <<'EOF'
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports/
-          Suites: noble noble-updates noble-backports noble-security
-          Components: main restricted universe multiverse
-          Architectures: arm64 armhf
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          EOF
+              sudo dpkg --add-architecture i386
+              sudo apt-get update
+              sudo apt-get install -y \
+                pkg-config \
+                clang \
+                binutils \
+                gcc-multilib \
+                g++-multilib \
+                libc6-dev-i386 \
+                libssl-dev \
+                libssl-dev:i386
+              ;;
+            arm64)
+              sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null <<'EOF'
+              Types: deb
+              URIs: http://azure.archive.ubuntu.com/ubuntu/
+              Suites: noble noble-updates noble-backports
+              Components: main restricted universe multiverse
+              Architectures: amd64
+              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
-          sudo dpkg --add-architecture i386
-          sudo dpkg --add-architecture arm64
-          sudo dpkg --add-architecture armhf
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            clang \
-            binutils \
-            binutils-aarch64-linux-gnu \
-            binutils-arm-linux-gnueabihf \
-            g++-multilib \
-            gcc-multilib \
-            g++-aarch64-linux-gnu \
-            gcc-aarch64-linux-gnu \
-            g++-arm-linux-gnueabihf \
-            gcc-arm-linux-gnueabihf \
-            libc6-dev-i386 \
-            libc6-dev-arm64-cross \
-            libc6-dev-armhf-cross \
-            libssl-dev \
-            libssl-dev:i386 \
-            libssl-dev:arm64 \
-            libssl-dev:armhf
+              Types: deb
+              URIs: http://security.ubuntu.com/ubuntu/
+              Suites: noble-security
+              Components: main restricted universe multiverse
+              Architectures: amd64
+              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+              EOF
+
+              sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null <<'EOF'
+              Types: deb
+              URIs: http://ports.ubuntu.com/ubuntu-ports/
+              Suites: noble noble-updates noble-backports noble-security
+              Components: main restricted universe multiverse
+              Architectures: arm64
+              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+              EOF
+
+              sudo dpkg --add-architecture arm64
+              sudo apt-get update
+              sudo apt-get install -y \
+                pkg-config \
+                clang \
+                binutils \
+                binutils-aarch64-linux-gnu \
+                gcc-aarch64-linux-gnu \
+                g++-aarch64-linux-gnu \
+                libc6-dev-arm64-cross \
+                libssl-dev \
+                libssl-dev:arm64
+              ;;
+            arm32)
+              sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null <<'EOF'
+              Types: deb
+              URIs: http://azure.archive.ubuntu.com/ubuntu/
+              Suites: noble noble-updates noble-backports
+              Components: main restricted universe multiverse
+              Architectures: amd64
+              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+              Types: deb
+              URIs: http://security.ubuntu.com/ubuntu/
+              Suites: noble-security
+              Components: main restricted universe multiverse
+              Architectures: amd64
+              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+              EOF
+
+              sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null <<'EOF'
+              Types: deb
+              URIs: http://ports.ubuntu.com/ubuntu-ports/
+              Suites: noble noble-updates noble-backports noble-security
+              Components: main restricted universe multiverse
+              Architectures: armhf
+              Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+              EOF
+
+              sudo dpkg --add-architecture armhf
+              sudo apt-get update
+              sudo apt-get install -y \
+                pkg-config \
+                clang \
+                binutils \
+                binutils-arm-linux-gnueabihf \
+                gcc-arm-linux-gnueabihf \
+                g++-arm-linux-gnueabihf \
+                libc6-dev-armhf-cross \
+                libssl-dev \
+                libssl-dev:armhf
+              ;;
+            *)
+              echo "Unsupported Linux liblogger target: ${{ matrix.target }}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Build Linux liblogger binaries
         shell: bash
-        run: LINUX_TARGETS="x64 x86 arm64 arm32" bash ./liblogger/build.sh
+        run: LINUX_TARGETS="${{ matrix.target }}" bash ./liblogger/build.sh
 
       - name: Upload Linux liblogger artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: liblogger-linux
+          name: liblogger-linux-${{ matrix.target }}
           if-no-files-found: error
           retention-days: 14
-          path: liblogger/dist/linux/*.so
+          path: liblogger/dist/linux/liblogger_${{ matrix.target }}.so
 
   build-liblogger-macos:
     runs-on: macos-latest
@@ -251,7 +332,25 @@ jobs:
       - name: Download Linux liblogger artifacts
         uses: actions/download-artifact@v4
         with:
-          name: liblogger-linux
+          name: liblogger-linux-x64
+          path: collected/linux
+
+      - name: Download x86 Linux liblogger artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: liblogger-linux-x86
+          path: collected/linux
+
+      - name: Download ARM64 Linux liblogger artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: liblogger-linux-arm64
+          path: collected/linux
+
+      - name: Download ARM32 Linux liblogger artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: liblogger-linux-arm32
           path: collected/linux
 
       - name: Download macOS liblogger artifacts
@@ -310,7 +409,25 @@ jobs:
       - name: Download Linux liblogger artifacts
         uses: actions/download-artifact@v4
         with:
-          name: liblogger-linux
+          name: liblogger-linux-x64
+          path: publish/linux
+
+      - name: Download x86 Linux liblogger artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: liblogger-linux-x86
+          path: publish/linux
+
+      - name: Download ARM64 Linux liblogger artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: liblogger-linux-arm64
+          path: publish/linux
+
+      - name: Download ARM32 Linux liblogger artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: liblogger-linux-arm32
           path: publish/linux
 
       - name: Download macOS liblogger artifacts
