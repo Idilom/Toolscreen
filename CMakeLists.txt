@@ -648,11 +648,23 @@ END
     )
 endif()
 
+set(TOOLSCREEN_GUI_INTEGRATION_SUITE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration_tests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/config_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/render_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/ui_and_log_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/runner.inl
+)
+
 add_executable(toolscreen_gui_integration_tests
     ${TOOLSCREEN_SOURCES}
     ${TOOLSCREEN_GENERATED_VERSION_HEADER}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/resource.rc
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration_tests.cpp
+    ${TOOLSCREEN_GUI_INTEGRATION_SUITE_FILES}
+)
+
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/tests" PREFIX "Tests" FILES
+    ${TOOLSCREEN_GUI_INTEGRATION_SUITE_FILES}
 )
 
 target_include_directories(toolscreen_gui_integration_tests PRIVATE
@@ -705,6 +717,10 @@ toolscreen_configure_target_outputs(toolscreen_gui_integration_tests)
 toolscreen_enable_release_symbols(toolscreen_gui_integration_tests)
 
 set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
+    log-multi-instance-latest-suffix
+    log-header-includes-peer-info
+    log-archive-collision-handling
+    log-released-slot-reuse
     config-default-load
     config-roundtrip
     config-roundtrip-global-settings

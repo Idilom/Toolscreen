@@ -532,6 +532,478 @@ bool CompressFileToGzip(const std::wstring& srcPath, const std::wstring& dstPath
     return true;
 }
 
+namespace {
+constexpr wchar_t kLogOwnerSuffix[] = L".owner";
+constexpr size_t kLogOwnerSuffixLength = (sizeof(kLogOwnerSuffix) / sizeof(kLogOwnerSuffix[0])) - 1;
+constexpr uint64_t kTransientOwnerGraceMs = 5000;
+
+uint64_t FileTimeToUint64(const FILETIME& fileTime) {
+    ULARGE_INTEGER value{};
+    value.LowPart = fileTime.dwLowDateTime;
+    value.HighPart = fileTime.dwHighDateTime;
+    return value.QuadPart;
+}
+
+bool GetFileLastWriteTime(const std::wstring& path, FILETIME& outLastWriteTime) {
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attributes)) {
+        return false;
+    }
+
+    outLastWriteTime = attributes.ftLastWriteTime;
+    return true;
+}
+
+bool PathExists(const std::wstring& path) {
+    return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+std::wstring BuildLatestLogFilename(size_t slotIndex) {
+    if (slotIndex == 0) {
+        return L"latest.log";
+    }
+
+    return L"latest-" + std::to_wstring(slotIndex) + L".log";
+}
+
+bool ParseLatestLogFilename(const std::wstring& fileName, size_t& outSlotIndex) {
+    if (fileName == L"latest.log") {
+        outSlotIndex = 0;
+        return true;
+    }
+
+    if (!fileName.starts_with(L"latest-") || !fileName.ends_with(L".log")) {
+        return false;
+    }
+
+    const std::wstring slotText = fileName.substr(7, fileName.size() - 11);
+    if (slotText.empty()) {
+        return false;
+    }
+
+    size_t slotIndex = 0;
+    for (wchar_t ch : slotText) {
+        if (ch < L'0' || ch > L'9') {
+            return false;
+        }
+
+        slotIndex = (slotIndex * 10) + static_cast<size_t>(ch - L'0');
+    }
+
+    if (slotIndex == 0) {
+        return false;
+    }
+
+    outSlotIndex = slotIndex;
+    return true;
+}
+
+bool ParseOwnerFileName(const std::wstring& fileName, size_t& outSlotIndex) {
+    if (!fileName.ends_with(kLogOwnerSuffix)) {
+        return false;
+    }
+
+    return ParseLatestLogFilename(fileName.substr(0, fileName.size() - kLogOwnerSuffixLength), outSlotIndex);
+}
+
+std::wstring BuildOwnerFilePath(const std::wstring& logFilePath) {
+    return logFilePath + kLogOwnerSuffix;
+}
+
+bool GetProcessStartFileTime(DWORD processId, uint64_t& outProcessStartFileTime) {
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process) {
+        return false;
+    }
+
+    FILETIME creationTime{};
+    FILETIME exitTime{};
+    FILETIME kernelTime{};
+    FILETIME userTime{};
+    const BOOL success = GetProcessTimes(process, &creationTime, &exitTime, &kernelTime, &userTime);
+    CloseHandle(process);
+
+    if (!success) {
+        return false;
+    }
+
+    outProcessStartFileTime = FileTimeToUint64(creationTime);
+    return true;
+}
+
+bool TryParseUint64(const std::string& text, uint64_t& outValue) {
+    if (text.empty()) {
+        return false;
+    }
+
+    uint64_t value = 0;
+    for (char ch : text) {
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+
+        value = (value * 10u) + static_cast<uint64_t>(ch - '0');
+    }
+
+    outValue = value;
+    return true;
+}
+
+bool TryParseOwnerFile(const std::wstring& ownerFilePath, LogInstanceInfo& outInfo) {
+    std::ifstream in(std::filesystem::path(ownerFilePath), std::ios::binary);
+    if (!in.is_open()) {
+        return false;
+    }
+
+    std::string line;
+    std::string logPathUtf8;
+    bool foundPid = false;
+    bool foundStartTime = false;
+    while (std::getline(in, line)) {
+        const size_t equalsPos = line.find('=');
+        if (equalsPos == std::string::npos) {
+            continue;
+        }
+
+        const std::string key = line.substr(0, equalsPos);
+        const std::string value = line.substr(equalsPos + 1);
+        if (key == "pid") {
+            uint64_t parsedPid = 0;
+            if (!TryParseUint64(value, parsedPid) || parsedPid > static_cast<uint64_t>(std::numeric_limits<DWORD>::max())) {
+                return false;
+            }
+
+            outInfo.processId = static_cast<DWORD>(parsedPid);
+            foundPid = true;
+        } else if (key == "processStartFileTime") {
+            if (!TryParseUint64(value, outInfo.processStartFileTime)) {
+                return false;
+            }
+
+            foundStartTime = true;
+        } else if (key == "logFile") {
+            logPathUtf8 = value;
+        }
+    }
+
+    if (!foundPid || !foundStartTime || logPathUtf8.empty()) {
+        return false;
+    }
+
+    outInfo.logFilePath = Utf8ToWide(logPathUtf8);
+    return !outInfo.logFilePath.empty();
+}
+
+bool IsLiveLogInstance(const LogInstanceInfo& info) {
+    if (info.processId == 0 || info.processStartFileTime == 0 || info.logFilePath.empty()) {
+        return false;
+    }
+
+    uint64_t currentProcessStartFileTime = 0;
+    return GetProcessStartFileTime(info.processId, currentProcessStartFileTime) &&
+           currentProcessStartFileTime == info.processStartFileTime;
+}
+
+struct OwnerFileState {
+    bool exists = false;
+    bool live = false;
+    bool stale = false;
+    LogInstanceInfo instance;
+};
+
+OwnerFileState InspectOwnerFile(const std::wstring& ownerFilePath) {
+    OwnerFileState state;
+    state.exists = PathExists(ownerFilePath);
+    if (!state.exists) {
+        return state;
+    }
+
+    if (TryParseOwnerFile(ownerFilePath, state.instance)) {
+        if (IsLiveLogInstance(state.instance)) {
+            state.live = true;
+            return state;
+        }
+
+        state.stale = true;
+        return state;
+    }
+
+    FILETIME lastWriteTime{};
+    if (!GetFileLastWriteTime(ownerFilePath, lastWriteTime)) {
+        state.live = true;
+        return state;
+    }
+
+    FILETIME nowFileTime{};
+    GetSystemTimeAsFileTime(&nowFileTime);
+    const uint64_t now = FileTimeToUint64(nowFileTime);
+    const uint64_t lastWrite = FileTimeToUint64(lastWriteTime);
+    const uint64_t ageMs = now > lastWrite ? (now - lastWrite) / 10000u : 0;
+    if (ageMs > kTransientOwnerGraceMs) {
+        state.stale = true;
+    } else {
+        state.live = true;
+    }
+
+    return state;
+}
+
+std::vector<size_t> GatherKnownLatestLogSlots(const std::wstring& logsDirectory) {
+    std::vector<size_t> slots;
+    std::error_code error;
+    if (!std::filesystem::exists(std::filesystem::path(logsDirectory), error)) {
+        return slots;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(logsDirectory), error)) {
+        if (error) {
+            break;
+        }
+
+        const std::wstring fileName = entry.path().filename().wstring();
+        size_t slotIndex = 0;
+        if (ParseLatestLogFilename(fileName, slotIndex) || ParseOwnerFileName(fileName, slotIndex)) {
+            slots.push_back(slotIndex);
+        }
+    }
+
+    std::sort(slots.begin(), slots.end());
+    slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+    return slots;
+}
+
+std::wstring GetArchiveTimestampString(const std::wstring& logFilePath) {
+    FILETIME lastWriteTime{};
+    if (!GetFileLastWriteTime(logFilePath, lastWriteTime)) {
+        GetSystemTimeAsFileTime(&lastWriteTime);
+    }
+
+    FILETIME localFileTime{};
+    if (!FileTimeToLocalFileTime(&lastWriteTime, &localFileTime)) {
+        localFileTime = lastWriteTime;
+    }
+
+    SYSTEMTIME localSystemTime{};
+    if (!FileTimeToSystemTime(&localFileTime, &localSystemTime)) {
+        GetLocalTime(&localSystemTime);
+    }
+
+    wchar_t timestamp[32]{};
+    swprintf_s(timestamp,
+               L"%04d%02d%02d_%02d%02d%02d",
+               localSystemTime.wYear,
+               localSystemTime.wMonth,
+               localSystemTime.wDay,
+               localSystemTime.wHour,
+               localSystemTime.wMinute,
+               localSystemTime.wSecond);
+    return timestamp;
+}
+
+std::wstring MakeUniqueArchivedLogPath(const std::wstring& logsDirectory, const std::wstring& timestamp) {
+    for (int counter = 0; counter < 1000; ++counter) {
+        const std::wstring suffix = counter == 0 ? L"" : (L"_" + std::to_wstring(counter));
+        const std::wstring archivedLogPath = logsDirectory + L"\\" + timestamp + suffix + L".log";
+        if (!PathExists(archivedLogPath) && !PathExists(archivedLogPath + L".gz")) {
+            return archivedLogPath;
+        }
+    }
+
+    return logsDirectory + L"\\" + timestamp + L"_" + std::to_wstring(GetTickCount64()) + L".log";
+}
+
+std::wstring ArchiveLatestLogFile(const std::wstring& logsDirectory, const std::wstring& logFilePath) {
+    if (!PathExists(logFilePath)) {
+        return std::wstring();
+    }
+
+    const std::wstring archivedLogPath = MakeUniqueArchivedLogPath(logsDirectory, GetArchiveTimestampString(logFilePath));
+    if (!MoveFileW(logFilePath.c_str(), archivedLogPath.c_str())) {
+        return std::wstring();
+    }
+
+    return archivedLogPath;
+}
+
+void CleanupStaleLatestLogs(const std::wstring& logsDirectory) {
+    for (const size_t slotIndex : GatherKnownLatestLogSlots(logsDirectory)) {
+        const std::wstring logFilePath = logsDirectory + L"\\" + BuildLatestLogFilename(slotIndex);
+        const std::wstring ownerFilePath = BuildOwnerFilePath(logFilePath);
+        const OwnerFileState ownerState = InspectOwnerFile(ownerFilePath);
+        if (ownerState.live) {
+            continue;
+        }
+
+        if (ownerState.exists) {
+            DeleteFileW(ownerFilePath.c_str());
+        }
+
+        const std::wstring archivedLogPath = ArchiveLatestLogFile(logsDirectory, logFilePath);
+        if (!archivedLogPath.empty()) {
+            QueueArchivedLogCompression(archivedLogPath);
+        }
+    }
+}
+
+std::vector<LogInstanceInfo> EnumerateLiveLogInstances(const std::wstring& logsDirectory) {
+    std::vector<LogInstanceInfo> instances;
+    for (const size_t slotIndex : GatherKnownLatestLogSlots(logsDirectory)) {
+        const std::wstring logFilePath = logsDirectory + L"\\" + BuildLatestLogFilename(slotIndex);
+        const OwnerFileState ownerState = InspectOwnerFile(BuildOwnerFilePath(logFilePath));
+        if (!ownerState.live) {
+            continue;
+        }
+
+        LogInstanceInfo info = ownerState.instance;
+        if (info.logFilePath.empty()) {
+            info.logFilePath = logFilePath;
+        }
+        instances.push_back(std::move(info));
+    }
+
+    std::sort(instances.begin(), instances.end(), [](const LogInstanceInfo& left, const LogInstanceInfo& right) {
+        return left.logFilePath < right.logFilePath;
+    });
+    return instances;
+}
+
+bool WriteOwnerFile(HANDLE ownerHandle, const LogSession& session) {
+    const std::string contents = "pid=" + std::to_string(session.processId) + "\n" +
+                                 "processStartFileTime=" + std::to_string(session.processStartFileTime) + "\n" +
+                                 "logFile=" + WideToUtf8(session.logFilePath) + "\n";
+
+    DWORD bytesWritten = 0;
+    if (!WriteFile(ownerHandle, contents.data(), static_cast<DWORD>(contents.size()), &bytesWritten, nullptr)) {
+        return false;
+    }
+
+    if (bytesWritten != contents.size()) {
+        return false;
+    }
+
+    return FlushFileBuffers(ownerHandle) == TRUE;
+}
+
+std::string FormatLocalDateTimeForHeader() {
+    const auto now = std::chrono::system_clock::now();
+    const auto timeValue = std::chrono::system_clock::to_time_t(now);
+
+    std::tm localTime{};
+    localtime_s(&localTime, &timeValue);
+
+    std::ostringstream stream;
+    stream << std::put_time(&localTime, "%Y-%m-%d %H:%M:%S");
+    return stream.str();
+}
+} // namespace
+
+bool AcquireLatestLogSession(const std::wstring& logsDirectory, LogSession& outSession) {
+    outSession = LogSession{};
+    if (logsDirectory.empty()) {
+        return false;
+    }
+
+    std::error_code error;
+    std::filesystem::create_directories(std::filesystem::path(logsDirectory), error);
+    if (error) {
+        return false;
+    }
+
+    LogSession session;
+    session.logsDirectory = logsDirectory;
+    session.processId = GetCurrentProcessId();
+    GetProcessStartFileTime(session.processId, session.processStartFileTime);
+
+    CleanupStaleLatestLogs(logsDirectory);
+
+    for (size_t slotIndex = 0; slotIndex < 1024; ++slotIndex) {
+        session.slotIndex = slotIndex;
+        session.logFilePath = logsDirectory + L"\\" + BuildLatestLogFilename(slotIndex);
+        session.ownerFilePath = BuildOwnerFilePath(session.logFilePath);
+
+        const OwnerFileState ownerState = InspectOwnerFile(session.ownerFilePath);
+        if (ownerState.live) {
+            continue;
+        }
+
+        if (ownerState.exists) {
+            DeleteFileW(session.ownerFilePath.c_str());
+
+            const std::wstring archivedLogPath = ArchiveLatestLogFile(logsDirectory, session.logFilePath);
+            if (!archivedLogPath.empty()) {
+                QueueArchivedLogCompression(archivedLogPath);
+            }
+        } else if (PathExists(session.logFilePath)) {
+            const std::wstring archivedLogPath = ArchiveLatestLogFile(logsDirectory, session.logFilePath);
+            if (!archivedLogPath.empty()) {
+                QueueArchivedLogCompression(archivedLogPath);
+            }
+        }
+
+        HANDLE ownerHandle =
+            CreateFileW(session.ownerFilePath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (ownerHandle == INVALID_HANDLE_VALUE) {
+            const DWORD lastError = GetLastError();
+            if (lastError == ERROR_FILE_EXISTS || lastError == ERROR_ALREADY_EXISTS) {
+                continue;
+            }
+
+            continue;
+        }
+
+        const bool wroteOwnerFile = WriteOwnerFile(ownerHandle, session);
+        CloseHandle(ownerHandle);
+        if (!wroteOwnerFile) {
+            DeleteFileW(session.ownerFilePath.c_str());
+            continue;
+        }
+
+        session.otherOpenInstances.clear();
+        for (const LogInstanceInfo& instance : EnumerateLiveLogInstances(logsDirectory)) {
+            if (instance.processId == session.processId && instance.processStartFileTime == session.processStartFileTime &&
+                instance.logFilePath == session.logFilePath) {
+                continue;
+            }
+
+            session.otherOpenInstances.push_back(instance);
+        }
+
+        outSession = std::move(session);
+        return true;
+    }
+
+    return false;
+}
+
+void ReleaseLatestLogSession(LogSession& session) {
+    if (!session.ownerFilePath.empty()) {
+        DeleteFileW(session.ownerFilePath.c_str());
+    }
+
+    session = LogSession{};
+}
+
+std::string BuildLogSessionHeader(const LogSession& session) {
+    std::ostringstream stream;
+    stream << "========================================\n";
+    stream << "Toolscreen log session\n";
+    stream << "Started local time: " << FormatLocalDateTimeForHeader() << "\n";
+    stream << "Process ID: " << session.processId << "\n";
+    stream << "Process start FILETIME: " << session.processStartFileTime << "\n";
+    stream << "Log file: " << WideToUtf8(session.logFilePath) << "\n";
+    stream << "Other open instances at startup: " << session.otherOpenInstances.size() << "\n";
+    if (session.otherOpenInstances.empty()) {
+        stream << "  (none)\n";
+    } else {
+        for (const LogInstanceInfo& instance : session.otherOpenInstances) {
+            stream << "  - pid=" << instance.processId << ", start=" << instance.processStartFileTime
+                   << ", log=" << WideToUtf8(instance.logFilePath) << "\n";
+        }
+    }
+    stream << "========================================\n\n";
+    return stream.str();
+}
+
 // Uses a lock-free ring buffer for zero-contention log submission.
 // A background thread writes to disk every 500ms.
 
@@ -578,6 +1050,8 @@ void QueueArchivedLogCompression(const std::wstring& archivedLogPath) {
     g_pendingLogArchives.push_back(archivedLogPath);
 }
 
+void ProcessQueuedArchivedLogCompressions() { ProcessPendingLogArchives(); }
+
 void StartLogThread() {
     if (g_logThreadRunning.load()) return;
     g_logThreadRunning.store(true);
@@ -585,11 +1059,13 @@ void StartLogThread() {
 }
 
 void StopLogThread() {
-    if (!g_logThreadRunning.load()) return;
-    g_logThreadRunning.store(false);
-    if (g_logThread.joinable()) { g_logThread.join(); }
-    // Final flush after thread stops
+    if (g_logThreadRunning.load()) {
+        g_logThreadRunning.store(false);
+        if (g_logThread.joinable()) { g_logThread.join(); }
+    }
+
     FlushLogs();
+    ProcessQueuedArchivedLogCompressions();
 }
 
 static void LogThreadMain() {
