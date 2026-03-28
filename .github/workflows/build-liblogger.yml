@@ -136,6 +136,31 @@ jobs:
       - name: Install Linux liblogger dependencies
         shell: bash
         run: |
+          sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null <<'EOF'
+          Types: deb
+          URIs: http://azure.archive.ubuntu.com/ubuntu/
+          Suites: noble noble-updates noble-backports
+          Components: main restricted universe multiverse
+          Architectures: amd64 i386
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: http://security.ubuntu.com/ubuntu/
+          Suites: noble-security
+          Components: main restricted universe multiverse
+          Architectures: amd64 i386
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+
+          sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null <<'EOF'
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports/
+          Suites: noble noble-updates noble-backports noble-security
+          Components: main restricted universe multiverse
+          Architectures: arm64 armhf
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+
           sudo dpkg --add-architecture i386
           sudo dpkg --add-architecture arm64
           sudo dpkg --add-architecture armhf
