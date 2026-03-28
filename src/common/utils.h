@@ -240,6 +240,22 @@ struct MirrorInstance {
     }
 };
 
+struct LogInstanceInfo {
+    DWORD processId = 0;
+    uint64_t processStartFileTime = 0;
+    std::wstring logFilePath;
+};
+
+struct LogSession {
+    std::wstring logsDirectory;
+    std::wstring logFilePath;
+    std::wstring ownerFilePath;
+    DWORD processId = 0;
+    uint64_t processStartFileTime = 0;
+    size_t slotIndex = 0;
+    std::vector<LogInstanceInfo> otherOpenInstances;
+};
+
 struct UserImageInstance {
     GLuint textureId = 0;
     int width = 0;
@@ -309,9 +325,15 @@ void Log(const std::wstring& message);
 void APIENTRY BindTextureDirect(GLenum target, GLuint texture);
 void InvalidateTrackedGameTextureId(bool clearSwapThread = false);
 
+bool AcquireLatestLogSession(const std::wstring& logsDirectory, LogSession& outSession);
+void ReleaseLatestLogSession(LogSession& session);
+std::string BuildLogSessionHeader(const LogSession& session);
+
 void StartLogThread(); // Start background log writer thread
 void StopLogThread();  // Stop background log writer thread (flushes first)
 void FlushLogs();
+void QueueArchivedLogCompression(const std::wstring& archivedLogPath);
+void ProcessQueuedArchivedLogCompressions();
 
 void LogCategory(const char* category, const std::string& message);
 

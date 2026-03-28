@@ -168,6 +168,7 @@ std::atomic<bool> g_browserOverlayDragMode{ false };
 
 std::ofstream logFile;
 std::mutex g_logFileMutex;
+static LogSession g_logSession;
 HMODULE g_hModule = NULL;
 
 GameVersion g_gameVersion;
@@ -2272,66 +2273,22 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         g_toolscreenPath = GetToolscreenPath();
         if (!g_toolscreenPath.empty()) {
             std::wstring logsDir = g_toolscreenPath + L"\\logs";
-            CreateDirectoryW(logsDir.c_str(), NULL);
-
-            std::wstring latestLogPath = logsDir + L"\\latest.log";
-
-            if (GetFileAttributesW(latestLogPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                HANDLE hFile =
-                    CreateFileW(latestLogPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-                if (hFile != INVALID_HANDLE_VALUE) {
-                    FILETIME lastWriteTime;
-                    if (GetFileTime(hFile, NULL, NULL, &lastWriteTime)) {
-                        FILETIME localFileTime;
-                        FileTimeToLocalFileTime(&lastWriteTime, &localFileTime);
-                        SYSTEMTIME st;
-                        FileTimeToSystemTime(&localFileTime, &st);
-
-                        WCHAR timestamp[32];
-                        swprintf_s(timestamp, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-
-                        std::wstring archivedLogPath = logsDir + L"\\" + timestamp + L".log";
-
-                        CloseHandle(hFile);
-
-                        if (GetFileAttributesW(archivedLogPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                            for (int counter = 1; counter < 100; counter++) {
-                                std::wstring altPath = logsDir + L"\\" + timestamp + L"_" + std::to_wstring(counter) + L".log";
-                                if (GetFileAttributesW(altPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
-                                    archivedLogPath = altPath;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (!MoveFileW(latestLogPath.c_str(), archivedLogPath.c_str())) {
-                            Log("WARNING: Could not rename old log to " + WideToUtf8(archivedLogPath) +
-                                ", error code: " + std::to_string(GetLastError()));
-                        } else {
-                            // Compress the archived log to .gz on a background thread
-                            // so we don't block DLL initialization
-                            std::wstring archiveSrc = archivedLogPath;
-                            std::thread([archiveSrc]() {
-                                std::wstring gzPath = archiveSrc + L".gz";
-                                if (CompressFileToGzip(archiveSrc, gzPath)) {
-                                    DeleteFileW(archiveSrc.c_str());
-                                }
-                            }).detach();
-                        }
-                    } else {
-                        CloseHandle(hFile);
+            if (AcquireLatestLogSession(logsDir, g_logSession)) {
+                {
+                    std::lock_guard<std::mutex> lock(g_logFileMutex);
+                    logFile.open(std::filesystem::path(g_logSession.logFilePath), std::ios_base::out | std::ios_base::trunc);
+                    if (logFile.is_open()) {
+                        logFile << BuildLogSessionHeader(g_logSession);
+                        logFile.flush();
                     }
                 }
-            }
 
-            {
-                std::lock_guard<std::mutex> lock(g_logFileMutex);
-                // Open via std::filesystem::path so wide Win32 APIs are used.
-                logFile.open(std::filesystem::path(latestLogPath), std::ios_base::out | std::ios_base::trunc);
+                if (logFile.is_open()) {
+                    StartLogThread();
+                } else {
+                    ReleaseLatestLogSession(g_logSession);
+                }
             }
-
-            // Start async logging thread now that log file is open
-            StartLogThread();
 
             g_modeFilePath = g_toolscreenPath + L"\\mode.txt";
         }
@@ -2539,6 +2496,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 logFile.close();
             }
         }
+
+        ReleaseLatestLogSession(g_logSession);
     }
     return TRUE;
 }

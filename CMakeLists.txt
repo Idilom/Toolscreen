@@ -648,11 +648,24 @@ END
     )
 endif()
 
+set(TOOLSCREEN_GUI_INTEGRATION_SUITE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration_tests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/config_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/rebind_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/render_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/ui_and_log_tests.inl
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration/runner.inl
+)
+
 add_executable(toolscreen_gui_integration_tests
     ${TOOLSCREEN_SOURCES}
     ${TOOLSCREEN_GENERATED_VERSION_HEADER}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/resource.rc
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration_tests.cpp
+    ${TOOLSCREEN_GUI_INTEGRATION_SUITE_FILES}
+)
+
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/tests" PREFIX "Tests" FILES
+    ${TOOLSCREEN_GUI_INTEGRATION_SUITE_FILES}
 )
 
 target_include_directories(toolscreen_gui_integration_tests PRIVATE
@@ -666,6 +679,7 @@ target_compile_definitions(toolscreen_gui_integration_tests PRIVATE
     CMAKE_BUILD
     GLEW_STATIC
     NOMINMAX
+    TOOLSCREEN_GUI_INTEGRATION_TESTS
     UNICODE
     _UNICODE
 )
@@ -705,6 +719,10 @@ toolscreen_configure_target_outputs(toolscreen_gui_integration_tests)
 toolscreen_enable_release_symbols(toolscreen_gui_integration_tests)
 
 set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
+    log-multi-instance-latest-suffix
+    log-header-includes-peer-info
+    log-archive-collision-handling
+    log-released-slot-reuse
     config-default-load
     config-roundtrip
     config-roundtrip-global-settings
@@ -745,6 +763,21 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-key-rebind-escaped-unicode-string-parsed
     config-load-key-rebind-hex-unicode-string-parsed
     config-load-key-rebind-invalid-unicode-defaulted
+    config-load-key-rebind-shift-layer-caps-lock-parsed
+    config-load-key-rebind-shift-layer-caps-lock-defaulted
+    key-rebind-runtime-full-forwarding
+    key-rebind-runtime-split-vk-output
+    key-rebind-runtime-split-unicode-output
+    key-rebind-runtime-shift-layer-shift-activated
+    key-rebind-runtime-shift-layer-caps-lock-activated
+    key-rebind-runtime-full-caps-lock-honored
+    key-rebind-runtime-split-caps-lock-ignored
+    key-rebind-runtime-non-typable-trigger-consumes-char
+    key-rebind-runtime-mouse-source-emits-key-and-char
+    key-rebind-runtime-disabled-rebind-ignored
+    key-rebind-gui-keyboard-layout-full-bind-and-trigger
+    key-rebind-gui-keyboard-layout-split-bind-and-trigger
+    key-rebind-gui-keyboard-layout-mouse-source-bind-and-trigger
     config-load-fullscreen-stretch-repaired
     config-load-preemptive-sync-existing-mode
     config-load-thin-min-width-enforced

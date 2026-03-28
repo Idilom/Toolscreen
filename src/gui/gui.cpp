@@ -74,6 +74,70 @@ namespace {
 const char* s_forcedSettingsTopTabLabel = nullptr;
 const char* s_forcedSettingsInputsSubTabLabel = nullptr;
 
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+std::unordered_map<std::string, GuiTestInteractionRect> s_guiTestInteractionRects;
+bool s_guiTestOpenKeyboardLayoutRequested = false;
+DWORD s_guiTestOpenKeyboardLayoutContextVk = 0;
+int s_guiTestKeyboardLayoutSplitModeRequest = -1;
+GuiTestKeyboardLayoutBindTarget s_guiTestKeyboardLayoutBindTargetRequest = GuiTestKeyboardLayoutBindTarget::None;
+int s_guiTestKeyboardLayoutShiftUppercaseRequest = -1;
+int s_guiTestKeyboardLayoutShiftCapsLockRequest = -1;
+
+void RecordGuiTestInteractionRect(const char* id, const ImVec2& min, const ImVec2& max) {
+    if (id == nullptr) {
+        return;
+    }
+
+    s_guiTestInteractionRects[std::string(id)] = GuiTestInteractionRect{ min.x, min.y, max.x, max.y };
+}
+
+void RecordGuiTestInteractionRect(const std::string& id, const ImVec2& min, const ImVec2& max) {
+    RecordGuiTestInteractionRect(id.c_str(), min, max);
+}
+
+void RecordGuiTestKeyboardLayoutKeyRect(DWORD vk, const ImVec2& min, const ImVec2& max) {
+    char id[96] = {};
+    sprintf_s(id, "inputs.keyboard_layout.key.%u", static_cast<unsigned>(vk));
+    RecordGuiTestInteractionRect(id, min, max);
+}
+
+bool ConsumeGuiTestOpenKeyboardLayoutRequest() {
+    const bool requested = s_guiTestOpenKeyboardLayoutRequested;
+    s_guiTestOpenKeyboardLayoutRequested = false;
+    return requested;
+}
+
+DWORD ConsumeGuiTestOpenKeyboardLayoutContextRequest() {
+    const DWORD vk = s_guiTestOpenKeyboardLayoutContextVk;
+    s_guiTestOpenKeyboardLayoutContextVk = 0;
+    return vk;
+}
+
+int ConsumeGuiTestKeyboardLayoutSplitModeRequest() {
+    const int request = s_guiTestKeyboardLayoutSplitModeRequest;
+    s_guiTestKeyboardLayoutSplitModeRequest = -1;
+    return request;
+}
+
+GuiTestKeyboardLayoutBindTarget ConsumeGuiTestKeyboardLayoutBindTargetRequest() {
+    const GuiTestKeyboardLayoutBindTarget request = s_guiTestKeyboardLayoutBindTargetRequest;
+    s_guiTestKeyboardLayoutBindTargetRequest = GuiTestKeyboardLayoutBindTarget::None;
+    return request;
+}
+
+int ConsumeGuiTestKeyboardLayoutShiftUppercaseRequest() {
+    const int request = s_guiTestKeyboardLayoutShiftUppercaseRequest;
+    s_guiTestKeyboardLayoutShiftUppercaseRequest = -1;
+    return request;
+}
+
+int ConsumeGuiTestKeyboardLayoutShiftCapsLockRequest() {
+    const int request = s_guiTestKeyboardLayoutShiftCapsLockRequest;
+    s_guiTestKeyboardLayoutShiftCapsLockRequest = -1;
+    return request;
+}
+#endif
+
 bool BeginSelectableSettingsTopTabItem(const char* label) {
     ImGuiTabItemFlags flags = ImGuiTabItemFlags_None;
     if (s_forcedSettingsTopTabLabel != nullptr && std::strcmp(s_forcedSettingsTopTabLabel, label) == 0) {
@@ -131,6 +195,50 @@ void CloseSettingsGuiWindow() {
 }
 
 }
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+void ResetGuiTestInteractionRects() {
+    s_guiTestInteractionRects.clear();
+}
+
+bool GetGuiTestInteractionRect(const char* id, GuiTestInteractionRect& outRect) {
+    if (id == nullptr) {
+        return false;
+    }
+
+    const auto found = s_guiTestInteractionRects.find(id);
+    if (found == s_guiTestInteractionRects.end()) {
+        return false;
+    }
+
+    outRect = found->second;
+    return true;
+}
+
+void RequestGuiTestOpenKeyboardLayout() {
+    s_guiTestOpenKeyboardLayoutRequested = true;
+}
+
+void RequestGuiTestOpenKeyboardLayoutContext(DWORD vk) {
+    s_guiTestOpenKeyboardLayoutContextVk = vk;
+}
+
+void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode) {
+    s_guiTestKeyboardLayoutSplitModeRequest = splitMode ? 1 : 0;
+}
+
+void RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget target) {
+    s_guiTestKeyboardLayoutBindTargetRequest = target;
+}
+
+void RequestGuiTestKeyboardLayoutSetShiftLayerUppercase(bool enabled) {
+    s_guiTestKeyboardLayoutShiftUppercaseRequest = enabled ? 1 : 0;
+}
+
+void RequestGuiTestKeyboardLayoutSetShiftLayerUsesCapsLock(bool enabled) {
+    s_guiTestKeyboardLayoutShiftCapsLockRequest = enabled ? 1 : 0;
+}
+#endif
 
 void SetGuiTabSelectionOverride(const char* topLevelTabLabel, const char* inputsSubTabLabel) {
     s_forcedSettingsTopTabLabel = topLevelTabLabel;
@@ -209,6 +317,10 @@ void RenderConfigErrorGUI() {
 
 void RenderSettingsGUI() {
     ResetTransientBindingUiState();
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+    ResetGuiTestInteractionRects();
+#endif
 
     static const std::vector<std::pair<const char*, const char*>>
         relativeToOptions = {
