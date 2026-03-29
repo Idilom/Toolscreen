@@ -17,6 +17,18 @@
 
 static std::atomic<bool> s_isConfigSaving{ false };
 
+bool WaitForConfigSaveIdle(int timeoutMs) {
+    const auto startWait = std::chrono::steady_clock::now();
+    while (s_isConfigSaving.load(std::memory_order_acquire)) {
+        if (timeoutMs >= 0 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startWait).count() > timeoutMs) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return true;
+}
+
 std::string GameTransitionTypeToString(GameTransitionType type) {
     switch (type) {
     case GameTransitionType::Cut:
@@ -213,20 +225,10 @@ void SaveConfig() {
     try {
         toml::table tbl;
         ConfigToToml(g_config, tbl);
-
-        static const std::vector<std::string> profileKeys = {
-            "configVersion", "defaultMode", "mouseSensitivity", "windowsMouseSpeed",
-            "hideAnimationsInGame", "autoBorderless", "borderlessHotkey",
-            "imageOverlaysHotkey", "windowOverlaysHotkey",
-            "eyezoom", "cursors", "keyRebinds",
-            "mode", "mirror", "mirrorGroup", "image",
-            "windowOverlay", "browserOverlay", "hotkey", "sensitivityHotkey"
-        };
-        toml::table profileTbl;
-        for (const auto& key : profileKeys) {
-            if (auto node = tbl.get(key)) profileTbl.insert(key, *node);
-        }
-        std::wstring profilePath = g_toolscreenPath + L"\\profiles\\" + Utf8ToWide(g_profilesConfig.activeProfile) + L".toml";
+        Config profileSnapshot;
+        ApplyProfileFields(g_config, profileSnapshot);
+        profileSnapshot.configVersion = g_config.configVersion;
+        const std::string activeProfileName = g_profilesConfig.activeProfile;
 
         PublishConfigSnapshot();
 
@@ -234,7 +236,7 @@ void SaveConfig() {
         s_lastSaveTime = currentTime;
         s_isConfigSaving = true;
 
-        std::thread([configPath, tbl = std::move(tbl), profilePath, profileTbl = std::move(profileTbl)]() {
+        std::thread([configPath, tbl = std::move(tbl), activeProfileName, profileSnapshot = std::move(profileSnapshot)]() {
             _set_se_translator(SEHTranslator);
             try {
                 try {
@@ -248,16 +250,8 @@ void SaveConfig() {
                 } catch (const std::exception& e) {
                     Log("ERROR: Failed to write config file: " + std::string(e.what()));
                 }
-                try {
-                    std::ofstream po(std::filesystem::path(profilePath), std::ios::binary | std::ios::trunc);
-                    if (po.is_open()) {
-                        po << profileTbl;
-                        po.close();
-                    }
-                } catch (const std::exception& e) {
-                    Log("ERROR: Failed to write profile file: " + std::string(e.what()));
-                } catch (...) {
-                    Log("ERROR: Failed to write profile file: unknown exception");
+                if (!SaveProfileSnapshotIfTracked(activeProfileName, profileSnapshot)) {
+                    Log("INFO: Skipped async profile save for removed or renamed profile '" + activeProfileName + "'.");
                 }
             } catch (const SE_Exception& e) {
                 LogException("ConfigSaveThread (SEH)", e.getCode(), e.getInfo());
@@ -280,13 +274,8 @@ void SaveConfigImmediate() {
 
     if (s_isConfigSaving.load()) {
         Log("SaveConfigImmediate: Waiting for background save to complete...");
-        auto startWait = std::chrono::steady_clock::now();
-        while (s_isConfigSaving.load()) {
-            if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - startWait).count() > 3) {
-                Log("SaveConfigImmediate: Timed out waiting for background save. Proceeding anyway.");
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (!WaitForConfigSaveIdle(3000)) {
+            Log("SaveConfigImmediate: Timed out waiting for background save. Proceeding anyway.");
         }
     }
 
@@ -313,7 +302,12 @@ void SaveConfigImmediate() {
         o << tbl;
         o.close();
 
-        SaveProfile(g_profilesConfig.activeProfile);
+        Config profileSnapshot;
+        ApplyProfileFields(g_config, profileSnapshot);
+        profileSnapshot.configVersion = g_config.configVersion;
+        if (!SaveProfileSnapshotIfTracked(g_profilesConfig.activeProfile, profileSnapshot)) {
+            Log("INFO: Skipped immediate profile save for removed or renamed profile '" + g_profilesConfig.activeProfile + "'.");
+        }
 
         Log("Configuration saved to file (immediate).");
         g_configIsDirty = false;
@@ -490,7 +484,7 @@ void LoadConfig() {
         ConfigFromToml(tbl, g_config);
 
         MigrateToProfiles();
-        LoadProfilesConfig();
+        EnsureProfilesConfigReady();
         if (!LoadProfile(g_profilesConfig.activeProfile)) {
             Log("WARNING: Failed to load active profile '" + g_profilesConfig.activeProfile + "', using base config");
         }

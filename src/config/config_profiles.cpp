@@ -6,12 +6,20 @@
 #include "runtime/logic_thread.h"
 #include "common/mode_dimensions.h"
 
+#include <Windows.h>
+
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <thread>
 
 ProfilesConfig g_profilesConfig;
+
+namespace {
+
+std::mutex g_profilesMutex;
 
 static std::wstring GetProfilesDir() {
     return g_toolscreenPath + L"\\profiles";
@@ -24,6 +32,331 @@ static std::wstring GetProfilePath(const std::string& name) {
 static std::wstring GetProfilesConfigPath() {
     return g_toolscreenPath + L"\\profiles.toml";
 }
+
+static bool ProfileNamesEqual(const std::string& a, const std::string& b) {
+    return EqualsIgnoreCase(a, b);
+}
+
+static void CopyColor(float dst[3], const float src[3]) {
+    dst[0] = src[0];
+    dst[1] = src[1];
+    dst[2] = src[2];
+}
+
+static bool ColorsEqual(const float a[3], const float b[3]) {
+    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
+}
+
+static std::wstring MakeTempSiblingPath(const std::wstring& finalPath, const wchar_t* suffix) {
+    const std::filesystem::path final(finalPath);
+    const std::wstring filename = final.filename().wstring();
+    return (final.parent_path() /
+            (filename + suffix + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64())))
+        .wstring();
+}
+
+static bool ReplacePathAtomically(const std::wstring& tempPath, const std::wstring& finalPath) {
+    if (MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        return true;
+    }
+
+    std::error_code removeError;
+    std::filesystem::remove(std::filesystem::path(finalPath), removeError);
+    if (MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        return true;
+    }
+
+    std::error_code cleanupError;
+    std::filesystem::remove(std::filesystem::path(tempPath), cleanupError);
+    return false;
+}
+
+static bool RenamePathReplacingExisting(const std::wstring& fromPath, const std::wstring& toPath) {
+    if (fromPath == toPath) {
+        return true;
+    }
+
+    if (MoveFileExW(fromPath.c_str(), toPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        return true;
+    }
+
+    if (_wcsicmp(fromPath.c_str(), toPath.c_str()) != 0) {
+        return false;
+    }
+
+    const std::wstring tempPath = MakeTempSiblingPath(fromPath, L".rename-");
+    if (!MoveFileExW(fromPath.c_str(), tempPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        return false;
+    }
+
+    if (MoveFileExW(tempPath.c_str(), toPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        return true;
+    }
+
+    MoveFileExW(tempPath.c_str(), fromPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    return false;
+}
+
+static void EnsureProfilesDirExists() {
+    std::filesystem::create_directories(std::filesystem::path(GetProfilesDir()));
+}
+
+static bool SaveConfigAtomically(const Config& config, const std::wstring& path) {
+    std::error_code dirError;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), dirError);
+
+    const std::wstring tempPath = MakeTempSiblingPath(path, L".tmp-");
+    if (!SaveConfigToTomlFile(config, tempPath)) {
+        std::error_code cleanupError;
+        std::filesystem::remove(std::filesystem::path(tempPath), cleanupError);
+        return false;
+    }
+
+    if (!ReplacePathAtomically(tempPath, path)) {
+        std::error_code cleanupError;
+        std::filesystem::remove(std::filesystem::path(tempPath), cleanupError);
+        return false;
+    }
+
+    return true;
+}
+
+static bool WriteTomlTableAtomically(const toml::table& tbl, const std::wstring& path) {
+    std::error_code dirError;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), dirError);
+
+    const std::wstring tempPath = MakeTempSiblingPath(path, L".tmp-");
+    {
+        std::ofstream out(std::filesystem::path(tempPath), std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            return false;
+        }
+        out << tbl;
+        out.close();
+    }
+
+    if (!ReplacePathAtomically(tempPath, path)) {
+        std::error_code cleanupError;
+        std::filesystem::remove(std::filesystem::path(tempPath), cleanupError);
+        return false;
+    }
+
+    return true;
+}
+
+static ProfileMetadata* FindProfileMetadataLocked(const std::string& name) {
+    for (auto& pm : g_profilesConfig.profiles) {
+        if (ProfileNamesEqual(pm.name, name)) {
+            return &pm;
+        }
+    }
+    return nullptr;
+}
+
+static const ProfileMetadata* FindProfileMetadataLockedConst(const std::string& name) {
+    for (const auto& pm : g_profilesConfig.profiles) {
+        if (ProfileNamesEqual(pm.name, name)) {
+            return &pm;
+        }
+    }
+    return nullptr;
+}
+
+static std::string ResolveTrackedProfileNameLocked(const std::string& name) {
+    const ProfileMetadata* pm = FindProfileMetadataLockedConst(name);
+    return pm ? pm->name : std::string();
+}
+
+static bool ProfileNameExistsLocked(const std::string& name, const std::string& excludeName = std::string()) {
+    for (const auto& pm : g_profilesConfig.profiles) {
+        if (!excludeName.empty() && ProfileNamesEqual(pm.name, excludeName)) {
+            continue;
+        }
+        if (ProfileNamesEqual(pm.name, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool LoadProfileConfigFromPath(const std::wstring& path, Config& profileConfig) {
+    if (!std::filesystem::exists(std::filesystem::path(path))) {
+        return false;
+    }
+    return LoadConfigFromTomlFile(path, profileConfig);
+}
+
+static std::vector<std::string> ListProfilesOnDiskLocked() {
+    std::vector<std::string> names;
+    std::error_code error;
+    const std::filesystem::path profilesDir = GetProfilesDir();
+    if (!std::filesystem::exists(profilesDir, error)) {
+        return names;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(profilesDir, error)) {
+        if (error) {
+            break;
+        }
+        if (!entry.is_regular_file(error) || error) {
+            continue;
+        }
+        if (entry.path().extension() != L".toml") {
+            continue;
+        }
+        names.push_back(WideToUtf8(entry.path().stem().wstring()));
+    }
+
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+static bool LoadProfilesConfigLocked() {
+    g_profilesConfig = ProfilesConfig();
+
+    const std::wstring path = GetProfilesConfigPath();
+    if (!std::filesystem::exists(std::filesystem::path(path))) {
+        return false;
+    }
+
+    try {
+        std::ifstream file(std::filesystem::path(path), std::ios::binary);
+        if (!file.is_open()) {
+            return false;
+        }
+
+        auto tbl = toml::parse(file);
+        g_profilesConfig.activeProfile = tbl["activeProfile"].value_or(std::string(kDefaultProfileName));
+
+        if (auto arr = tbl["profile"].as_array()) {
+            for (const auto& elem : *arr) {
+                if (auto t = elem.as_table()) {
+                    ProfileMetadata pm;
+                    pm.name = (*t)["name"].value_or(std::string(""));
+                    if (auto colorArr = (*t)["color"].as_array(); colorArr && colorArr->size() >= 3) {
+                        pm.color[0] = (*colorArr)[0].value_or(kDefaultProfileColor[0]);
+                        pm.color[1] = (*colorArr)[1].value_or(kDefaultProfileColor[1]);
+                        pm.color[2] = (*colorArr)[2].value_or(kDefaultProfileColor[2]);
+                    }
+                    if (!pm.name.empty() && !ProfileNameExistsLocked(pm.name)) {
+                        g_profilesConfig.profiles.push_back(pm);
+                    }
+                }
+            }
+        }
+    } catch (...) {
+        g_profilesConfig = ProfilesConfig();
+        return false;
+    }
+
+    return true;
+}
+
+static void BuildProfilesConfigToml(toml::table& tbl) {
+    tbl.insert("activeProfile", g_profilesConfig.activeProfile);
+
+    toml::array profilesArr;
+    for (const auto& pm : g_profilesConfig.profiles) {
+        toml::table pt;
+        pt.insert("name", pm.name);
+        toml::array colorArr;
+        colorArr.push_back(pm.color[0]);
+        colorArr.push_back(pm.color[1]);
+        colorArr.push_back(pm.color[2]);
+        pt.insert("color", colorArr);
+        profilesArr.push_back(pt);
+    }
+    tbl.insert("profile", profilesArr);
+}
+
+static bool SaveProfilesConfigLocked() {
+    toml::table tbl;
+    BuildProfilesConfigToml(tbl);
+    return WriteTomlTableAtomically(tbl, GetProfilesConfigPath());
+}
+
+static bool ProfilesConfigMatchesLocked(const std::vector<ProfileMetadata>& profiles, const std::string& activeProfile) {
+    if (!ProfileNamesEqual(g_profilesConfig.activeProfile, activeProfile)) {
+        return false;
+    }
+    if (g_profilesConfig.profiles.size() != profiles.size()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < profiles.size(); ++i) {
+        if (g_profilesConfig.profiles[i].name != profiles[i].name) {
+            return false;
+        }
+        if (!ColorsEqual(g_profilesConfig.profiles[i].color, profiles[i].color)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool SyncProfilesConfigWithDiskLocked(bool seedFromCurrentConfigIfEmpty) {
+    EnsureProfilesDirExists();
+
+    std::vector<std::string> profileNames = ListProfilesOnDiskLocked();
+    if (profileNames.empty() && seedFromCurrentConfigIfEmpty) {
+        Config defaultProfile;
+        defaultProfile = Config{};
+        ApplyProfileFields(g_config, defaultProfile);
+        defaultProfile.configVersion = g_config.configVersion;
+        if (!SaveConfigAtomically(defaultProfile, GetProfilePath(kDefaultProfileName))) {
+            Log("EnsureProfilesConfigReady: failed to seed default profile file");
+            return false;
+        }
+        profileNames.push_back(kDefaultProfileName);
+    }
+
+    if (profileNames.empty()) {
+        g_profilesConfig = ProfilesConfig();
+        return false;
+    }
+
+    std::vector<ProfileMetadata> normalizedProfiles;
+    normalizedProfiles.reserve(profileNames.size());
+    for (const auto& profileName : profileNames) {
+        ProfileMetadata normalized;
+        normalized.name = profileName;
+        if (const ProfileMetadata* existing = FindProfileMetadataLockedConst(profileName)) {
+            CopyColor(normalized.color, existing->color);
+        }
+        normalizedProfiles.push_back(normalized);
+    }
+
+    std::string resolvedActiveProfile = ResolveTrackedProfileNameLocked(g_profilesConfig.activeProfile);
+    if (resolvedActiveProfile.empty()) {
+        for (const auto& pm : normalizedProfiles) {
+            if (ProfileNamesEqual(pm.name, kDefaultProfileName)) {
+                resolvedActiveProfile = pm.name;
+                break;
+            }
+        }
+    }
+    if (resolvedActiveProfile.empty()) {
+        resolvedActiveProfile = normalizedProfiles.front().name;
+    }
+
+    if (!ProfilesConfigMatchesLocked(normalizedProfiles, resolvedActiveProfile)) {
+        g_profilesConfig.profiles = std::move(normalizedProfiles);
+        g_profilesConfig.activeProfile = resolvedActiveProfile;
+        if (!SaveProfilesConfigLocked()) {
+            Log("EnsureProfilesConfigReady: failed to persist rebuilt profiles metadata");
+        }
+    }
+
+    return true;
+}
+
+static bool SaveProfileSnapshotLocked(const std::string& name, const Config& configSnapshot) {
+    EnsureProfilesDirExists();
+    return SaveConfigAtomically(configSnapshot, GetProfilePath(name));
+}
+
+} // namespace
 
 bool IsValidProfileName(const std::string& name) {
     if (name.empty()) return false;
@@ -45,13 +378,6 @@ bool IsValidProfileName(const std::string& name) {
     }
     if (name.find("..") != std::string::npos) return false;
     return true;
-}
-
-static bool ProfileNameExists(const std::string& name) {
-    for (const auto& pm : g_profilesConfig.profiles) {
-        if (pm.name == name) return true;
-    }
-    return false;
 }
 
 void ApplyProfileFields(const Config& src, Config& dst) {
@@ -110,26 +436,39 @@ static void ExtractProfileConfigMove(Config&& full, Config& profile) {
     profile.configVersion = full.configVersion;
 }
 
-static void EnsureProfilesDirExists() {
-    std::filesystem::create_directories(std::filesystem::path(GetProfilesDir()));
-}
-
 void SaveProfile(const std::string& name) {
-    EnsureProfilesDirExists();
     Config profileConfig;
     ExtractProfileConfig(g_config, profileConfig);
-    SaveConfigToTomlFile(profileConfig, GetProfilePath(name));
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
+    if (!SaveProfileSnapshotLocked(name, profileConfig)) {
+        Log("SaveProfile: failed to write profile '" + name + "'");
+    }
+}
+
+bool SaveProfileSnapshot(const std::string& name, const Config& configSnapshot) {
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
+    return SaveProfileSnapshotLocked(name, configSnapshot);
+}
+
+bool SaveProfileSnapshotIfTracked(const std::string& name, const Config& configSnapshot) {
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
+    const std::string trackedName = ResolveTrackedProfileNameLocked(name);
+    if (trackedName.empty()) {
+        return false;
+    }
+    return SaveProfileSnapshotLocked(trackedName, configSnapshot);
 }
 
 bool LoadProfile(const std::string& name) {
-    std::wstring path = GetProfilePath(name);
-    if (!std::filesystem::exists(std::filesystem::path(path))) {
-        Log("LoadProfile: file not found for '" + name + "'");
-        return false;
+    std::wstring path;
+    {
+        std::lock_guard<std::mutex> lock(g_profilesMutex);
+        const std::string trackedName = ResolveTrackedProfileNameLocked(name);
+        path = GetProfilePath(trackedName.empty() ? name : trackedName);
     }
 
     Config profileConfig;
-    if (!LoadConfigFromTomlFile(path, profileConfig)) {
+    if (!LoadProfileConfigFromPath(path, profileConfig)) {
         Log("LoadProfile: failed to parse profile '" + name + "', using current config");
         return false;
     }
@@ -139,86 +478,64 @@ bool LoadProfile(const std::string& name) {
 }
 
 bool LoadProfilesConfig() {
-    std::wstring path = GetProfilesConfigPath();
-    if (!std::filesystem::exists(std::filesystem::path(path))) return false;
-
-    try {
-        std::ifstream file(std::filesystem::path(path), std::ios::binary);
-        if (!file.is_open()) return false;
-
-        auto tbl = toml::parse(file);
-        g_profilesConfig.activeProfile = tbl["activeProfile"].value_or(std::string(kDefaultProfileName));
-        g_profilesConfig.profiles.clear();
-
-        if (auto arr = tbl["profile"].as_array()) {
-            for (const auto& elem : *arr) {
-                if (auto t = elem.as_table()) {
-                    ProfileMetadata pm;
-                    pm.name = (*t)["name"].value_or(std::string(""));
-                    if (auto colorArr = (*t)["color"].as_array(); colorArr && colorArr->size() >= 3) {
-                        pm.color[0] = (*colorArr)[0].value_or(kDefaultProfileColor[0]);
-                        pm.color[1] = (*colorArr)[1].value_or(kDefaultProfileColor[1]);
-                        pm.color[2] = (*colorArr)[2].value_or(kDefaultProfileColor[2]);
-                    }
-                    if (!pm.name.empty()) g_profilesConfig.profiles.push_back(pm);
-                }
-            }
-        }
-    } catch (...) {
-        return false;
-    }
-    return true;
-}
-
-static void BuildProfilesConfigToml(toml::table& tbl) {
-    tbl.insert("activeProfile", g_profilesConfig.activeProfile);
-
-    toml::array profilesArr;
-    for (const auto& pm : g_profilesConfig.profiles) {
-        toml::table pt;
-        pt.insert("name", pm.name);
-        toml::array colorArr;
-        colorArr.push_back(pm.color[0]);
-        colorArr.push_back(pm.color[1]);
-        colorArr.push_back(pm.color[2]);
-        pt.insert("color", colorArr);
-        profilesArr.push_back(pt);
-    }
-    tbl.insert("profile", profilesArr);
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
+    return LoadProfilesConfigLocked();
 }
 
 void SaveProfilesConfig() {
-    toml::table tbl;
-    BuildProfilesConfigToml(tbl);
-
-    std::ofstream file(std::filesystem::path(GetProfilesConfigPath()), std::ios::binary | std::ios::trunc);
-    if (file.is_open()) {
-        file << tbl;
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
+    if (!SaveProfilesConfigLocked()) {
+        Log("SaveProfilesConfig: failed to write profiles metadata");
     }
+}
+
+bool EnsureProfilesConfigReady() {
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
+    LoadProfilesConfigLocked();
+    return SyncProfilesConfigWithDiskLocked(true);
 }
 
 void SwitchProfile(const std::string& newProfileName) {
     Config oldProfileConfig;
-    ExtractProfileConfig(g_config, oldProfileConfig);
-    std::wstring oldProfilePath = GetProfilePath(g_profilesConfig.activeProfile);
+    Config newProfileConfig;
+    std::string resolvedNewProfileName;
+    bool failedToSavePreviousProfile = false;
+    bool failedToSaveProfilesMetadata = false;
 
-    if (!LoadProfile(newProfileName)) return;
+    {
+        std::lock_guard<std::mutex> lock(g_profilesMutex);
+        resolvedNewProfileName = ResolveTrackedProfileNameLocked(newProfileName);
+        if (resolvedNewProfileName.empty()) {
+            resolvedNewProfileName = newProfileName;
+        }
 
-    g_profilesConfig.activeProfile = newProfileName;
+        if (!LoadProfileConfigFromPath(GetProfilePath(resolvedNewProfileName), newProfileConfig)) {
+            Log("LoadProfile: failed to parse profile '" + resolvedNewProfileName + "', using current config");
+            return;
+        }
 
-    toml::table profilesMetaTbl;
-    BuildProfilesConfigToml(profilesMetaTbl);
-    std::wstring profilesMetaPath = GetProfilesConfigPath();
+        ExtractProfileConfig(g_config, oldProfileConfig);
+        const std::string previousTrackedProfileName = ResolveTrackedProfileNameLocked(g_profilesConfig.activeProfile);
+        const std::string previousProfileName = previousTrackedProfileName.empty() ? g_profilesConfig.activeProfile : previousTrackedProfileName;
 
-    std::thread([oldProfileConfig = std::move(oldProfileConfig), oldProfilePath,
-                 profilesMetaTbl = std::move(profilesMetaTbl), profilesMetaPath]() {
-        try { SaveConfigToTomlFile(oldProfileConfig, oldProfilePath); }
-        catch (...) { Log("SwitchProfile: failed to save old profile"); }
-        try {
-            std::ofstream f(std::filesystem::path(profilesMetaPath), std::ios::binary | std::ios::trunc);
-            if (f.is_open()) { f << profilesMetaTbl; }
-        } catch (...) { Log("SwitchProfile: failed to save profiles metadata"); }
-    }).detach();
+        if (!previousProfileName.empty() && !SaveProfileSnapshotLocked(previousProfileName, oldProfileConfig)) {
+            failedToSavePreviousProfile = true;
+        }
+
+        g_profilesConfig.activeProfile = resolvedNewProfileName;
+        if (!SaveProfilesConfigLocked()) {
+            failedToSaveProfilesMetadata = true;
+        }
+    }
+
+    if (failedToSavePreviousProfile) {
+        Log("SwitchProfile: failed to save previous profile before switching");
+    }
+    if (failedToSaveProfilesMetadata) {
+        Log("SwitchProfile: failed to save profiles metadata");
+    }
+
+    ApplyProfileFields(newProfileConfig, g_config);
 
     RemoveInvalidHotkeyModeReferences(g_config);
     ResetAllHotkeySecondaryModes(g_config);
@@ -264,32 +581,49 @@ void SwitchProfile(const std::string& newProfileName) {
 }
 
 bool CreateNewProfile(const std::string& name) {
-    if (!IsValidProfileName(name) || ProfileNameExists(name)) return false;
+    if (!IsValidProfileName(name)) return false;
 
     Config defaultConfig;
     LoadEmbeddedDefaultConfig(defaultConfig);
 
     Config profileConfig;
     ExtractProfileConfigMove(std::move(defaultConfig), profileConfig);
-    SaveConfigToTomlFile(profileConfig, GetProfilePath(name));
+
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
+    if (ProfileNameExistsLocked(name)) return false;
+    if (!SaveProfileSnapshotLocked(name, profileConfig)) return false;
 
     ProfileMetadata pm;
     pm.name = name;
     g_profilesConfig.profiles.push_back(pm);
-    SaveProfilesConfig();
+    if (!SaveProfilesConfigLocked()) {
+        g_profilesConfig.profiles.pop_back();
+        std::error_code cleanupError;
+        std::filesystem::remove(std::filesystem::path(GetProfilePath(name)), cleanupError);
+        return false;
+    }
+
     return true;
 }
 
 bool DuplicateProfile(const std::string& srcName, const std::string& dstName) {
-    if (!IsValidProfileName(dstName) || ProfileNameExists(dstName)) return false;
+    if (!IsValidProfileName(dstName)) return false;
 
-    if (srcName == g_profilesConfig.activeProfile) {
-        SaveProfile(srcName);
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
+    if (ProfileNameExistsLocked(dstName)) return false;
+
+    const std::string resolvedSourceName = ResolveTrackedProfileNameLocked(srcName);
+    const std::string trackedSourceName = resolvedSourceName.empty() ? srcName : resolvedSourceName;
+    if (ProfileNamesEqual(trackedSourceName, g_profilesConfig.activeProfile)) {
+        Config activeSnapshot;
+        ExtractProfileConfig(g_config, activeSnapshot);
+        if (!SaveProfileSnapshotLocked(trackedSourceName, activeSnapshot)) {
+            return false;
+        }
     }
 
-    std::wstring srcPath = GetProfilePath(srcName);
-    std::wstring dstPath = GetProfilePath(dstName);
-
+    const std::wstring srcPath = GetProfilePath(trackedSourceName);
+    const std::wstring dstPath = GetProfilePath(dstName);
     try {
         std::filesystem::copy_file(srcPath, dstPath, std::filesystem::copy_options::overwrite_existing);
     } catch (...) {
@@ -298,67 +632,103 @@ bool DuplicateProfile(const std::string& srcName, const std::string& dstName) {
 
     ProfileMetadata pm;
     pm.name = dstName;
-    for (const auto& existing : g_profilesConfig.profiles) {
-        if (existing.name == srcName) {
-            pm.color[0] = existing.color[0];
-            pm.color[1] = existing.color[1];
-            pm.color[2] = existing.color[2];
-            break;
-        }
+    if (const ProfileMetadata* existing = FindProfileMetadataLockedConst(trackedSourceName)) {
+        CopyColor(pm.color, existing->color);
     }
     g_profilesConfig.profiles.push_back(pm);
-    SaveProfilesConfig();
+    if (!SaveProfilesConfigLocked()) {
+        g_profilesConfig.profiles.pop_back();
+        std::error_code cleanupError;
+        std::filesystem::remove(std::filesystem::path(dstPath), cleanupError);
+        return false;
+    }
+
     return true;
 }
 
 void DeleteProfile(const std::string& name) {
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
+    const std::string trackedName = ResolveTrackedProfileNameLocked(name);
+    if (trackedName.empty()) return;
     if (g_profilesConfig.profiles.size() <= 1) return;
-    if (name == g_profilesConfig.activeProfile) return;
+    if (ProfileNamesEqual(trackedName, g_profilesConfig.activeProfile)) return;
 
-    try {
-        std::filesystem::remove(std::filesystem::path(GetProfilePath(name)));
-    } catch (const std::exception& e) {
-        Log("DeleteProfile: failed to delete file for '" + name + "': " + e.what());
-    } catch (...) {
-        Log("DeleteProfile: failed to delete file for '" + name + "'");
-    }
-
+    const std::vector<ProfileMetadata> previousProfiles = g_profilesConfig.profiles;
     auto& profiles = g_profilesConfig.profiles;
     profiles.erase(std::remove_if(profiles.begin(), profiles.end(),
-                                  [&](const ProfileMetadata& p) { return p.name == name; }),
+                                  [&](const ProfileMetadata& p) { return ProfileNamesEqual(p.name, trackedName); }),
                    profiles.end());
-    SaveProfilesConfig();
-}
 
-bool RenameProfile(const std::string& oldName, const std::string& newName) {
-    if (oldName == newName) return true;
-    if (!IsValidProfileName(newName) || ProfileNameExists(newName)) return false;
-
-    for (auto& pm : g_profilesConfig.profiles) {
-        if (pm.name == oldName) {
-            pm.name = newName;
-            break;
-        }
+    if (!SaveProfilesConfigLocked()) {
+        g_profilesConfig.profiles = previousProfiles;
+        Log("DeleteProfile: failed to update profiles metadata for '" + trackedName + "'");
+        return;
     }
-    bool wasActive = (g_profilesConfig.activeProfile == oldName);
-    if (wasActive) g_profilesConfig.activeProfile = newName;
-    SaveProfilesConfig();
 
     try {
-        std::filesystem::rename(std::filesystem::path(GetProfilePath(oldName)),
-                                std::filesystem::path(GetProfilePath(newName)));
+        std::filesystem::remove(std::filesystem::path(GetProfilePath(trackedName)));
+    } catch (const std::exception& e) {
+        g_profilesConfig.profiles = previousProfiles;
+        SaveProfilesConfigLocked();
+        Log("DeleteProfile: failed to delete file for '" + trackedName + "': " + e.what());
     } catch (...) {
-        for (auto& pm : g_profilesConfig.profiles) {
-            if (pm.name == newName) { pm.name = oldName; break; }
+        g_profilesConfig.profiles = previousProfiles;
+        SaveProfilesConfigLocked();
+        Log("DeleteProfile: failed to delete file for '" + trackedName + "'");
+    }
+}
+
+bool UpdateProfileMetadata(const std::string& currentName, const std::string& newName, const float color[3]) {
+    if (!IsValidProfileName(newName)) return false;
+
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
+    ProfileMetadata* existing = FindProfileMetadataLocked(currentName);
+    if (!existing) return false;
+    if (ProfileNameExistsLocked(newName, existing->name)) return false;
+
+    const ProfileMetadata previousMetadata = *existing;
+    const std::string previousActiveProfile = g_profilesConfig.activeProfile;
+    const bool renameRequested = previousMetadata.name != newName;
+
+    if (renameRequested) {
+        const std::wstring oldPath = GetProfilePath(previousMetadata.name);
+        const std::wstring newPath = GetProfilePath(newName);
+        if (!RenamePathReplacingExisting(oldPath, newPath)) {
+            return false;
         }
-        if (wasActive) g_profilesConfig.activeProfile = oldName;
-        SaveProfilesConfig();
+    }
+
+    existing->name = newName;
+    CopyColor(existing->color, color);
+    if (ProfileNamesEqual(g_profilesConfig.activeProfile, previousMetadata.name)) {
+        g_profilesConfig.activeProfile = newName;
+    }
+
+    if (!SaveProfilesConfigLocked()) {
+        if (renameRequested) {
+            RenamePathReplacingExisting(GetProfilePath(newName), GetProfilePath(previousMetadata.name));
+        }
+        *existing = previousMetadata;
+        g_profilesConfig.activeProfile = previousActiveProfile;
         return false;
     }
+
     return true;
 }
 
+bool RenameProfile(const std::string& oldName, const std::string& newName) {
+    float color[3] = { kDefaultProfileColor[0], kDefaultProfileColor[1], kDefaultProfileColor[2] };
+    {
+        std::lock_guard<std::mutex> lock(g_profilesMutex);
+        const ProfileMetadata* existing = FindProfileMetadataLockedConst(oldName);
+        if (!existing) return false;
+        CopyColor(color, existing->color);
+    }
+    return UpdateProfileMetadata(oldName, newName, color);
+}
+
 bool MigrateToProfiles() {
+    std::lock_guard<std::mutex> lock(g_profilesMutex);
     if (std::filesystem::exists(std::filesystem::path(GetProfilesDir()))) return false;
 
     EnsureProfilesDirExists();
@@ -367,14 +737,22 @@ bool MigrateToProfiles() {
         return false;
     }
 
-    SaveProfile(kDefaultProfileName);
+    Config defaultProfile;
+    ExtractProfileConfig(g_config, defaultProfile);
+    if (!SaveProfileSnapshotLocked(kDefaultProfileName, defaultProfile)) {
+        Log("MigrateToProfiles: failed to save default profile");
+        return false;
+    }
 
     g_profilesConfig.activeProfile = kDefaultProfileName;
     g_profilesConfig.profiles.clear();
     ProfileMetadata pm;
     pm.name = kDefaultProfileName;
     g_profilesConfig.profiles.push_back(pm);
-    SaveProfilesConfig();
+    if (!SaveProfilesConfigLocked()) {
+        Log("MigrateToProfiles: failed to save profiles metadata");
+        return false;
+    }
 
     return true;
 }

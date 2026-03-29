@@ -22,6 +22,7 @@
 #include <array>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);

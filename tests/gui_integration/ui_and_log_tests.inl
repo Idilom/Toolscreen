@@ -217,6 +217,23 @@ void ResetProfileTestState(std::string_view caseName) {
     ExpectConfigLoadSucceeded(std::string(caseName) + " initial load");
 }
 
+std::filesystem::path GetProfilesDirectoryForTests() {
+    return std::filesystem::path(g_toolscreenPath) / "profiles";
+}
+
+std::filesystem::path GetProfilesMetadataPathForTests() {
+    return std::filesystem::path(g_toolscreenPath) / "profiles.toml";
+}
+
+bool ContainsFileNameIgnoreCase(const std::vector<std::string>& fileNames, std::string_view expectedName) {
+    for (const auto& fileName : fileNames) {
+        if (EqualsIgnoreCase(fileName, std::string(expectedName))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Automated) {
     (void)runMode;
     ResetProfileTestState("profile_apply_fields_roundtrip");
@@ -396,11 +413,156 @@ void RunProfileRenameTest(TestRunMode runMode = TestRunMode::Automated) {
     }
     Expect(found, "Renamed profile should exist in metadata.");
 
-    const bool dupRename = RenameProfile("NewName", kDefaultProfileName);
+    const float renamedColor[3] = { 0.25f, 0.5f, 0.75f };
+    const bool updated = UpdateProfileMetadata("NewName", "newname", renamedColor);
+    Expect(updated, "UpdateProfileMetadata should allow case-only rename and color changes.");
+    Expect(g_profilesConfig.activeProfile == "newname", "Active profile should follow case-only rename updates.");
+
+    bool foundUpdated = false;
+    for (const auto& pm : g_profilesConfig.profiles) {
+        if (pm.name == "newname") {
+            foundUpdated = true;
+            Expect(std::abs(pm.color[0] - renamedColor[0]) < 0.01f, "Updated profile color[0] should persist.");
+            Expect(std::abs(pm.color[1] - renamedColor[1]) < 0.01f, "Updated profile color[1] should persist.");
+            Expect(std::abs(pm.color[2] - renamedColor[2]) < 0.01f, "Updated profile color[2] should persist.");
+            break;
+        }
+    }
+    Expect(foundUpdated, "Updated profile should exist after case-only rename.");
+
+    const bool dupRename = RenameProfile("newname", kDefaultProfileName);
     Expect(!dupRename, "Rename to existing name should fail.");
 
-    const bool invalidRename = RenameProfile("NewName", "a/b");
+    const bool invalidRename = RenameProfile("newname", "a/b");
     Expect(!invalidRename, "Rename to invalid name should fail.");
+}
+
+void RunProfileCaseInsensitiveCollisionTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+    ResetProfileTestState("profile_case_insensitive_collisions");
+
+    Expect(!CreateNewProfile("default"), "CreateNewProfile should reject names that collide by case with an existing profile.");
+    Expect(CreateNewProfile("Alpha"), "CreateNewProfile should allow a new unique profile.");
+    Expect(!DuplicateProfile(kDefaultProfileName, "alpha"), "DuplicateProfile should reject case-insensitive destination collisions.");
+    Expect(!RenameProfile(kDefaultProfileName, "ALPHA"), "RenameProfile should reject case-insensitive collisions with another profile.");
+}
+
+void RunProfileRecoverMissingMetadataTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+    ResetProfileTestState("profile_recover_missing_metadata");
+
+    Expect(CreateNewProfile("Second"), "CreateNewProfile should succeed before metadata recovery test.");
+    const std::filesystem::path metadataPath = GetProfilesMetadataPathForTests();
+    Expect(std::filesystem::exists(metadataPath), "profiles.toml should exist before removal.");
+    std::filesystem::remove(metadataPath);
+    Expect(!std::filesystem::exists(metadataPath), "profiles.toml should be removed before recovery load.");
+
+    g_profilesConfig = ProfilesConfig();
+    LoadConfig();
+    ExpectConfigLoadSucceeded("profile_recover_missing_metadata reload");
+
+    Expect(std::filesystem::exists(metadataPath), "LoadConfig should rebuild missing profiles metadata.");
+    Expect(g_profilesConfig.profiles.size() == 2, "Recovered metadata should include both on-disk profiles.");
+
+    bool foundDefault = false;
+    bool foundSecond = false;
+    for (const auto& pm : g_profilesConfig.profiles) {
+        if (pm.name == kDefaultProfileName) foundDefault = true;
+        if (pm.name == "Second") foundSecond = true;
+    }
+    Expect(foundDefault, "Recovered metadata should include the Default profile.");
+    Expect(foundSecond, "Recovered metadata should include the additional profile.");
+    Expect(g_profilesConfig.activeProfile == kDefaultProfileName, "Recovered metadata should fall back to the Default active profile.");
+}
+
+void RunProfileAsyncSaveSkipDeletedProfileTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+    ResetProfileTestState("profile_async_save_skip_deleted_profile");
+
+    Expect(CreateNewProfile("Other"), "CreateNewProfile should create the fallback profile.");
+
+    g_config.defaultMode = "QueuedAsyncSave";
+    g_configIsDirty = true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    SaveConfig();
+
+    SwitchProfile("Other");
+    DeleteProfile(kDefaultProfileName);
+    Expect(WaitForConfigSaveIdle(3000), "Background save should finish within the timeout.");
+
+    const std::vector<std::string> profileFiles = ListDirectoryFileNamesSorted(GetProfilesDirectoryForTests());
+    Expect(!ContainsFileNameIgnoreCase(profileFiles, "Default.toml"), "Async save should not recreate a deleted profile file.");
+
+    Expect(LoadProfilesConfig(), "Profiles metadata should remain loadable after async save/delete interplay.");
+    Expect(g_profilesConfig.profiles.size() == 1, "Only the surviving profile should remain in metadata after delete.");
+    Expect(g_profilesConfig.profiles[0].name == "Other", "The remaining profile should be the fallback profile.");
+}
+
+void RunProfileSwitchConcurrentReadersTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+    ResetProfileTestState("profile_switch_concurrent_readers");
+
+    Expect(CreateNewProfile("Second"), "CreateNewProfile should create the second profile.");
+    Expect(CreateNewProfile("Third"), "CreateNewProfile should create the third profile.");
+
+    const std::filesystem::path profilesDir = GetProfilesDirectoryForTests();
+    const std::filesystem::path metadataPath = GetProfilesMetadataPathForTests();
+    std::atomic<bool> stopReaders{ false };
+    std::atomic<int> readFailures{ 0 };
+
+    auto reader = [&]() {
+        while (!stopReaders.load(std::memory_order_acquire)) {
+            try {
+                if (std::filesystem::exists(metadataPath)) {
+                    std::ifstream metadataIn(metadataPath, std::ios::binary);
+                    if (metadataIn.is_open()) {
+                        auto tbl = toml::parse(metadataIn);
+                        (void)tbl;
+                    }
+                }
+
+                for (const char* name : { kDefaultProfileName, "Second", "Third" }) {
+                    const std::filesystem::path profilePath = profilesDir / (std::string(name) + ".toml");
+                    if (!std::filesystem::exists(profilePath)) {
+                        continue;
+                    }
+
+                    std::ifstream profileIn(profilePath, std::ios::binary);
+                    if (!profileIn.is_open()) {
+                        continue;
+                    }
+
+                    auto tbl = toml::parse(profileIn);
+                    (void)tbl;
+                }
+            } catch (...) {
+                readFailures.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            std::this_thread::yield();
+        }
+    };
+
+    std::vector<std::thread> readers;
+    for (int i = 0; i < 3; ++i) {
+        readers.emplace_back(reader);
+    }
+
+    const std::array<std::string, 3> switchOrder = { kDefaultProfileName, "Second", "Third" };
+    for (int i = 0; i < 24; ++i) {
+        SwitchProfile(switchOrder[i % static_cast<int>(switchOrder.size())]);
+    }
+
+    stopReaders.store(true, std::memory_order_release);
+    for (auto& readerThread : readers) {
+        readerThread.join();
+    }
+
+    Expect(readFailures.load(std::memory_order_acquire) == 0,
+        "Concurrent profile readers should not observe malformed TOML while switching profiles.");
+    Expect(LoadProfilesConfig(), "Profiles metadata should remain loadable after concurrent switching.");
+    Expect(g_profilesConfig.profiles.size() == 3, "All profiles should still be present after concurrent switching.");
+    Expect(g_profilesConfig.activeProfile == "Third", "The final active profile should match the last switch target.");
 }
 
 void RunLogMultiInstanceLatestSuffixTest(TestRunMode runMode = TestRunMode::Automated) {

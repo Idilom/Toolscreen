@@ -821,6 +821,7 @@ void RenderSettingsGUI() {
         {
             static std::string s_renameBuffer;
             static std::string s_newProfileName;
+            static float s_renameColor[3] = { kDefaultProfileColor[0], kDefaultProfileColor[1], kDefaultProfileColor[2] };
 
             static GLuint s_iconAdd = 0, s_iconDuplicate = 0, s_iconRename = 0, s_iconDelete = 0;
             static HGLRC s_iconLastCtx = NULL;
@@ -907,6 +908,14 @@ void RenderSettingsGUI() {
                 iconBtnStyle();
                 if (ImGui::ImageButton("##profileRen", (ImTextureID)(intptr_t)s_iconRename, ImVec2(iconSz, iconSz))) {
                     s_renameBuffer = g_profilesConfig.activeProfile;
+                    for (const auto& pm : g_profilesConfig.profiles) {
+                        if (pm.name == g_profilesConfig.activeProfile) {
+                            s_renameColor[0] = pm.color[0];
+                            s_renameColor[1] = pm.color[1];
+                            s_renameColor[2] = pm.color[2];
+                            break;
+                        }
+                    }
                     ImGui::OpenPopup(trc("profiles.rename_popup"));
                 }
                 iconBtnStylePop();
@@ -947,19 +956,30 @@ void RenderSettingsGUI() {
 
             if (ImGui::BeginPopup(trc("profiles.rename_popup"))) {
                 ImGui::InputText("##renameProfileName", &s_renameBuffer);
-                bool renameValid = IsValidProfileName(s_renameBuffer) && s_renameBuffer != g_profilesConfig.activeProfile;
-                if (!s_renameBuffer.empty() && !IsValidProfileName(s_renameBuffer))
-                    ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", trc("profiles.invalid_name"));
-                for (auto& pm : g_profilesConfig.profiles) {
+                const ProfileMetadata* activeProfile = nullptr;
+                for (const auto& pm : g_profilesConfig.profiles) {
                     if (pm.name == g_profilesConfig.activeProfile) {
-                        ImGui::ColorEdit3(trc("profiles.color"), pm.color, ImGuiColorEditFlags_NoInputs);
+                        activeProfile = &pm;
                         break;
                     }
                 }
+
+                const bool nameChanged = s_renameBuffer != g_profilesConfig.activeProfile;
+                const bool nameValid = IsValidProfileName(s_renameBuffer);
+                const bool colorChanged = activeProfile != nullptr &&
+                    (activeProfile->color[0] != s_renameColor[0] ||
+                     activeProfile->color[1] != s_renameColor[1] ||
+                     activeProfile->color[2] != s_renameColor[2]);
+                const bool renameValid = (nameChanged ? nameValid : true) && (nameChanged || colorChanged);
+
+                if (nameChanged && !nameValid)
+                    ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", trc("profiles.invalid_name"));
+                ImGui::ColorEdit3(trc("profiles.color"), s_renameColor, ImGuiColorEditFlags_NoInputs);
                 ImGui::BeginDisabled(!renameValid);
                 if (ImGui::Button(trc("button.ok"), ImVec2(80, 0))) {
-                    RenameProfile(g_profilesConfig.activeProfile, s_renameBuffer);
-                    ImGui::CloseCurrentPopup();
+                    if (UpdateProfileMetadata(g_profilesConfig.activeProfile, s_renameBuffer, s_renameColor)) {
+                        ImGui::CloseCurrentPopup();
+                    }
                 }
                 ImGui::EndDisabled();
                 ImGui::SameLine();
