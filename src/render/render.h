@@ -200,7 +200,9 @@ extern int g_sceneW;
 extern int g_sceneH;
 
 // --- Mutex Protection for GPU Resource Maps ---
-// These maps are accessed from multiple threads (render + GUI)
+// These maps are accessed from multiple threads (render + GUI).
+// Lock ordering (when nesting): g_mirrorInstancesMutex > g_backgroundTexturesMutex
+//   > g_userImagesMutex > g_texturesToDeleteMutex
 extern std::shared_mutex g_mirrorInstancesMutex;
 extern std::mutex g_userImagesMutex;
 extern std::mutex g_backgroundTexturesMutex;

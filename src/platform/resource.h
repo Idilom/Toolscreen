@@ -13,3 +13,7 @@
 
 #define IDR_REBIND_ON_PNG      109
 #define IDR_REBIND_OFF_PNG     110
+#define IDR_ICON_DELETE        111
+#define IDR_ICON_RENAME        112
+#define IDR_ICON_DUPLICATE     113
+#define IDR_ICON_ADD           114

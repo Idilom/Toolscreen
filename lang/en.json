@@ -853,5 +853,21 @@
     "window.title": "Toolscreen v{} by jojoe77777",
     "window.tooltip_delete": "Are you sure you want to delete window overlay '%s'?\nThis cannot be undone.",
     "window.tooltip_match_priority": "Window title must match: Only captures windows with exact matching title\nMatch title, otherwise find window of same executable: Prefers matching title, falls back to same executable (e.g chrome.exe)",
-    "window.tooltip.only_on_my_screen": "When enabled, this image will only be visible to you and not captured by OBS"
+    "window.tooltip.only_on_my_screen": "When enabled, this image will only be visible to you and not captured by OBS",
+    "profiles.label": "Profile:",
+    "profiles.duplicate": "Dup",
+    "profiles.rename": "Ren",
+    "profiles.delete": "Del",
+    "profiles.tooltip.new": "Create a new empty profile",
+    "profiles.tooltip.duplicate": "Duplicate current profile",
+    "profiles.tooltip.rename": "Rename current profile",
+    "profiles.tooltip.delete": "Delete current profile",
+    "profiles.new_popup": "New Profile",
+    "profiles.rename_popup": "Rename Profile",
+    "profiles.delete_popup": "Delete Profile",
+    "profiles.confirm_delete": "Delete profile '{}'?",
+    "profiles.copy_suffix": "(Copy)",
+    "profiles.invalid_name": "Invalid profile name",
+    "profiles.color": "Color",
+    "profiles.switch_to": "Will switch to '{}'"
 }

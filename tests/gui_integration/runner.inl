@@ -116,6 +116,17 @@ const auto& GetTestCaseDefinitions() {
         {"settings-tab-appearance-populated", &RunSettingsTabAppearancePopulatedTest},
         {"settings-tab-misc-populated", &RunSettingsTabMiscPopulatedTest},
         {"settings-tab-supporters-populated", &RunSettingsTabSupportersPopulatedTest},
+        {"profile-apply-fields-roundtrip", &RunProfileApplyFieldsRoundtripTest},
+        {"profile-profiles-config-roundtrip", &RunProfilesConfigRoundtripTest},
+        {"profile-name-validation", &RunProfileNameValidationTest},
+        {"profile-create-duplicate-delete", &RunProfileCreateDuplicateDeleteTest},
+        {"profile-migrate", &RunProfileMigrateTest},
+        {"profile-delete-guards", &RunProfileDeleteGuardsTest},
+        {"profile-rename", &RunProfileRenameTest},
+        {"profile-case-insensitive-collisions", &RunProfileCaseInsensitiveCollisionTest},
+        {"profile-recover-missing-metadata", &RunProfileRecoverMissingMetadataTest},
+        {"profile-async-save-skip-deleted-profile", &RunProfileAsyncSaveSkipDeletedProfileTest},
+        {"profile-switch-concurrent-readers", &RunProfileSwitchConcurrentReadersTest},
     };
 
     return testCases;

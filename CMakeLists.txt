@@ -385,10 +385,12 @@ if(TOOLSCREEN_BUILD_LIBLOGGER_FROM_SOURCE)
 else()
     get_filename_component(TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH "${TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     get_filename_component(TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH "${TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    get_filename_component(TOOLSCREEN_PREBUILT_LIBLOGGER_DIR "${TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH}" DIRECTORY)
+    get_filename_component(TOOLSCREEN_FETCH_LIBLOGGER_SCRIPT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_signed_liblogger.ps1" ABSOLUTE)
 
     file(GENERATE
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/stage_prebuilt_liblogger_$<CONFIG>.cmake"
-        CONTENT "set(SOURCE_DLL \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH}\")\nset(SOURCE_PDB \"${TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH}\")\nset(DEST_DLL \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}\")\nset(DEST_PDB \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}\")\nget_filename_component(DEST_DIR \"\${DEST_DLL}\" DIRECTORY)\nfile(MAKE_DIRECTORY \"\${DEST_DIR}\")\nif(NOT EXISTS \"\${SOURCE_DLL}\")\n  message(FATAL_ERROR \"Expected prebuilt liblogger DLL at '\${SOURCE_DLL}'\")\nendif()\nif(NOT EXISTS \"\${SOURCE_PDB}\")\n  message(FATAL_ERROR \"Expected prebuilt liblogger PDB at '\${SOURCE_PDB}'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_DLL}\" \"\${DEST_DLL}\" RESULT_VARIABLE COPY_DLL_RESULT)\nif(NOT COPY_DLL_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to stage prebuilt liblogger DLL from '\${SOURCE_DLL}' to '\${DEST_DLL}'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_PDB}\" \"\${DEST_PDB}\" RESULT_VARIABLE COPY_PDB_RESULT)\nif(NOT COPY_PDB_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to stage prebuilt liblogger PDB from '\${SOURCE_PDB}' to '\${DEST_PDB}'\")\nendif()\n"
+        CONTENT "set(SOURCE_DLL \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH}\")\nset(SOURCE_PDB \"${TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH}\")\nset(SOURCE_DIR \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DIR}\")\nset(FETCH_SCRIPT \"${TOOLSCREEN_FETCH_LIBLOGGER_SCRIPT_PATH}\")\nset(DEST_DLL \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}\")\nset(DEST_PDB \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}\")\nget_filename_component(DEST_DIR \"\${DEST_DLL}\" DIRECTORY)\nfile(MAKE_DIRECTORY \"\${DEST_DIR}\")\nif((NOT EXISTS \"\${SOURCE_DLL}\") OR (NOT EXISTS \"\${SOURCE_PDB}\"))\n  if(NOT EXISTS \"\${FETCH_SCRIPT}\")\n    message(FATAL_ERROR \"Missing liblogger fetch script at '\${FETCH_SCRIPT}'\")\n  endif()\n  execute_process(COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File \"\${FETCH_SCRIPT}\" -DestinationDirectory \"\${SOURCE_DIR}\" RESULT_VARIABLE FETCH_RESULT)\n  if(NOT FETCH_RESULT EQUAL 0)\n    message(FATAL_ERROR \"Failed to download signed liblogger artifacts into '\${SOURCE_DIR}'\")\n  endif()\nendif()\nif(NOT EXISTS \"\${SOURCE_DLL}\")\n  message(FATAL_ERROR \"Expected prebuilt liblogger DLL at '\${SOURCE_DLL}'\")\nendif()\nif(NOT EXISTS \"\${SOURCE_PDB}\")\n  message(FATAL_ERROR \"Expected prebuilt liblogger PDB at '\${SOURCE_PDB}'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_DLL}\" \"\${DEST_DLL}\" RESULT_VARIABLE COPY_DLL_RESULT)\nif(NOT COPY_DLL_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to stage prebuilt liblogger DLL from '\${SOURCE_DLL}' to '\${DEST_DLL}'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_PDB}\" \"\${DEST_PDB}\" RESULT_VARIABLE COPY_PDB_RESULT)\nif(NOT COPY_PDB_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to stage prebuilt liblogger PDB from '\${SOURCE_PDB}' to '\${DEST_PDB}'\")\nendif()\n"
     )
 
     add_custom_target(toolscreen_stage_liblogger_artifacts
@@ -896,6 +898,17 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     settings-tab-appearance-populated
     settings-tab-misc-populated
     settings-tab-supporters-populated
+    profile-apply-fields-roundtrip
+    profile-profiles-config-roundtrip
+    profile-name-validation
+    profile-create-duplicate-delete
+    profile-migrate
+    profile-delete-guards
+    profile-rename
+    profile-case-insensitive-collisions
+    profile-recover-missing-metadata
+    profile-async-save-skip-deleted-profile
+    profile-switch-concurrent-readers
 )
 
 foreach(test_case IN LISTS TOOLSCREEN_GUI_INTEGRATION_TEST_CASES)

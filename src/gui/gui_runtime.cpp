@@ -207,6 +207,38 @@ float ComputeGuiScaleFactorFromCachedWindowSize() {
     return scaleFactor;
 }
 
+void LoadEmbeddedResourceTexture(GLuint& tex, int resourceId, int filterMode) {
+    if (tex != 0) return;
+    HMODULE hModule = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)&g_showGui, &hModule);
+    if (!hModule) return;
+    HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(resourceId), RT_RCDATA);
+    if (!hResource) return;
+    HGLOBAL hData = LoadResource(hModule, hResource);
+    if (!hData) return;
+    DWORD dataSize = SizeofResource(hModule, hResource);
+    const unsigned char* rawData = (const unsigned char*)LockResource(hData);
+    if (!rawData || dataSize == 0) return;
+    stbi_set_flip_vertically_on_load_thread(0);
+    int w = 0, h = 0, ch = 0;
+    unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &ch, 4);
+    if (!pixels || w <= 0 || h <= 0) { if (pixels) stbi_image_free(pixels); return; }
+    glGenTextures(1, &tex);
+    BindTextureDirect(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filterMode);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filterMode);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    BindTextureDirect(GL_TEXTURE_2D, 0);
+    stbi_image_free(pixels);
+}
+
 void RequestDynamicGuiFontRefresh(bool forceRefresh) {
     std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
     s_pendingMainGuiFontRefresh.pending = true;

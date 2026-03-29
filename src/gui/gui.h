@@ -577,6 +577,39 @@ struct Config {
     bool disableFullscreenPrompt = false;
     bool disableConfigurePrompt = false;
 };
+
+inline constexpr const char* kDefaultProfileName = "Default";
+inline constexpr float kDefaultProfileColor[3] = { 0.4f, 0.8f, 0.4f };
+
+struct ProfileMetadata {
+    std::string name;
+    float color[3] = { kDefaultProfileColor[0], kDefaultProfileColor[1], kDefaultProfileColor[2] };
+};
+
+struct ProfilesConfig {
+    std::string activeProfile = kDefaultProfileName;
+    std::vector<ProfileMetadata> profiles;
+};
+
+extern ProfilesConfig g_profilesConfig;
+
+bool IsValidProfileName(const std::string& name);
+void SaveProfile(const std::string& name);
+bool LoadProfile(const std::string& name);
+void SwitchProfile(const std::string& newProfileName);
+void ApplyProfileFields(const Config& src, Config& dst);
+bool LoadProfilesConfig();
+void SaveProfilesConfig();
+bool EnsureProfilesConfigReady();
+bool CreateNewProfile(const std::string& name);
+bool DuplicateProfile(const std::string& srcName, const std::string& dstName);
+void DeleteProfile(const std::string& name);
+bool RenameProfile(const std::string& oldName, const std::string& newName);
+bool UpdateProfileMetadata(const std::string& currentName, const std::string& newName, const float color[3]);
+bool SaveProfileSnapshot(const std::string& name, const Config& configSnapshot);
+bool SaveProfileSnapshotIfTracked(const std::string& name, const Config& configSnapshot);
+bool MigrateToProfiles();
+
 struct GameViewportGeometry {
     int gameW = 0, gameH = 0;
     int finalX = 0, finalY = 0, finalW = 0, finalH = 0;
@@ -811,6 +844,7 @@ void RenderImGuiWithStateProtection(bool useFullProtection);
 void SyncImGuiDisplayMetrics(HWND hwnd);
 void SaveConfig();
 void SaveConfigImmediate();
+bool WaitForConfigSaveIdle(int timeoutMs = 3000);
 void ApplyAppearanceConfig();
 void SaveTheme();
 void LoadTheme();
