@@ -902,7 +902,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                     auto drawKeyCell = [&](DWORD vk, const char* label, const ImVec2& pMin, const ImVec2& pMax, const KeyRebind* rb) {
                         const bool hovered = ImGui::IsItemHovered();
-                        const bool active = ImGui::IsItemActive();
+                        const bool physDown = (GetAsyncKeyState(vk) & 0x8000) != 0;
+                        const bool active = ImGui::IsItemActive() || physDown;
 
                         struct KeyTheme {
                             ImU32 top;
