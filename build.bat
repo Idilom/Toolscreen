@@ -2,9 +2,11 @@
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
+set "CONFIGURE_PRESET=vs2022-x64"
 set "BUILD_PRESET=release"
 set "TEST_PRESET=release"
 set "RUN_TESTS=0"
+set "RUN_NINJABRAIN_MANUAL_TESTS=0"
 set "FAILURE_STEP="
 set "FAILURE_CODE=1"
 set "ARTIFACT_CONFIG_DIR=Release"
@@ -20,8 +22,23 @@ for %%A in (%*) do (
         set "ARTIFACT_CONFIG_DIR=Debug"
     ) else if /I "%%~A"=="--test" (
         set "RUN_TESTS=1"
+    ) else if /I "%%~A"=="--manual-ninjabrain-tests" (
+        set "RUN_NINJABRAIN_MANUAL_TESTS=1"
     ) else (
         goto :usage
+    )
+)
+
+if "%RUN_TESTS%"=="1" if "%RUN_NINJABRAIN_MANUAL_TESTS%"=="1" goto :usage
+
+if "%RUN_NINJABRAIN_MANUAL_TESTS%"=="1" (
+    set "CONFIGURE_PRESET=vs2022-x64-ninjabrain-manual-tests"
+    if /I "%ARTIFACT_CONFIG_DIR%"=="Debug" (
+        set "BUILD_PRESET=debug-ninjabrain-manual-tests"
+        set "TEST_PRESET=debug-ninjabrain-manual-tests"
+    ) else (
+        set "BUILD_PRESET=release-ninjabrain-manual-tests"
+        set "TEST_PRESET=release-ninjabrain-manual-tests"
     )
 )
 
@@ -29,13 +46,15 @@ set "ARTIFACT_DIR=%SCRIPT_DIR%out\build\bin\%ARTIFACT_CONFIG_DIR%"
 
 pushd "%SCRIPT_DIR%" >nul || exit /b 1
 
-echo Configuring with preset vs2022-x64...
-cmake --preset vs2022-x64
+echo Configuring with preset %CONFIGURE_PRESET%...
+cmake --preset %CONFIGURE_PRESET%
 if errorlevel 1 (
-    set "FAILURE_STEP=Configure preset vs2022-x64"
+    set "FAILURE_STEP=Configure preset %CONFIGURE_PRESET%"
     set "FAILURE_CODE=10"
     goto :fail
 )
+
+if "%RUN_NINJABRAIN_MANUAL_TESTS%"=="1" goto :manual_ninjabrain_tests
 
 echo Building DLL with preset %BUILD_PRESET%...
 cmake --build --preset %BUILD_PRESET% --target Toolscreen
@@ -105,8 +124,28 @@ if "%RUN_TESTS%"=="1" (
 popd >nul
 exit /b 0
 
+:manual_ninjabrain_tests
+echo Building manual Ninjabrain API tests with preset %BUILD_PRESET%...
+cmake --build --preset %BUILD_PRESET% --target toolscreen_ninjabrain_api_tests
+if errorlevel 1 (
+    set "FAILURE_STEP=Build manual Ninjabrain API test executable"
+    set "FAILURE_CODE=65"
+    goto :fail
+)
+
+echo Running manual Ninjabrain API tests with preset %TEST_PRESET%...
+ctest --preset %TEST_PRESET%
+if errorlevel 1 (
+    set "FAILURE_STEP=Run manual Ninjabrain CTest preset %TEST_PRESET%"
+    set "FAILURE_CODE=70"
+    goto :fail
+)
+
+popd >nul
+exit /b 0
+
 :usage
-echo Usage: build.bat [release^|debug] [--test]
+echo Usage: build.bat [release^|debug] [--test^|--manual-ninjabrain-tests]
 popd >nul 2>nul
 exit /b 2
 

@@ -17,6 +17,8 @@ set(TOOLSCREEN_VERSION "${TOOLSCREEN_VERSION_MAJOR}.${TOOLSCREEN_VERSION_MINOR}.
 
 project(Toolscreen VERSION ${TOOLSCREEN_VERSION} LANGUAGES C CXX RC)
 
+include(CTest)
+
 set(TOOLSCREEN_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(TOOLSCREEN_GENERATED_VERSION_HEADER "${TOOLSCREEN_GENERATED_DIR}/version.h")
 file(MAKE_DIRECTORY "${TOOLSCREEN_GENERATED_DIR}")
@@ -31,6 +33,7 @@ if(NOT WIN32)
 endif()
 
 option(TOOLSCREEN_ENABLE_JAR_PACKAGING "Enable the EasyInjectBundled jar packaging target." ON)
+option(TOOLSCREEN_ENABLE_NINJABRAIN_API_MANUAL_TESTS "Enable the manual-only Ninjabrain API integration test target." OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -329,7 +332,6 @@ endif()
 toolscreen_configure_target_outputs(${PROJECT_NAME})
 toolscreen_enable_release_symbols(${PROJECT_NAME})
 
-enable_testing()
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/cmake")
 file(GENERATE
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_artifact_$<CONFIG>.cmake"
@@ -340,6 +342,105 @@ add_test(
     NAME toolscreen_artifact_exists
     COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_artifact_$<CONFIG>.cmake"
 )
+
+if(BUILD_TESTING AND TOOLSCREEN_ENABLE_NINJABRAIN_API_MANUAL_TESTS)
+    set(TOOLSCREEN_NINJABRAIN_BOT_VERSION "1.5.2")
+    set(TOOLSCREEN_NINJABRAIN_BOT_SHA256 "98099F6321A90D4ACEC13400E86D05F7AF8D60E5639C2F38427E968DC71450FF")
+    set(TOOLSCREEN_NINJABRAIN_BOT_URL
+        "https://github.com/Ninjabrain1/Ninjabrain-Bot/releases/download/${TOOLSCREEN_NINJABRAIN_BOT_VERSION}/Ninjabrain-Bot-${TOOLSCREEN_NINJABRAIN_BOT_VERSION}.jar")
+    set(TOOLSCREEN_NINJABRAIN_BOT_JAR
+        "${CMAKE_CURRENT_BINARY_DIR}/downloads/Ninjabrain-Bot-${TOOLSCREEN_NINJABRAIN_BOT_VERSION}.jar")
+
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/downloads")
+
+    set(TOOLSCREEN_NINJABRAIN_BOT_DOWNLOAD_REQUIRED ON)
+    if(EXISTS "${TOOLSCREEN_NINJABRAIN_BOT_JAR}")
+        file(SHA256 "${TOOLSCREEN_NINJABRAIN_BOT_JAR}" TOOLSCREEN_NINJABRAIN_BOT_EXISTING_SHA256)
+        if(TOOLSCREEN_NINJABRAIN_BOT_EXISTING_SHA256 STREQUAL TOOLSCREEN_NINJABRAIN_BOT_SHA256)
+            set(TOOLSCREEN_NINJABRAIN_BOT_DOWNLOAD_REQUIRED OFF)
+        else()
+            file(REMOVE "${TOOLSCREEN_NINJABRAIN_BOT_JAR}")
+        endif()
+    endif()
+
+    if(TOOLSCREEN_NINJABRAIN_BOT_DOWNLOAD_REQUIRED)
+        file(DOWNLOAD
+            "${TOOLSCREEN_NINJABRAIN_BOT_URL}"
+            "${TOOLSCREEN_NINJABRAIN_BOT_JAR}"
+            EXPECTED_HASH "SHA256=${TOOLSCREEN_NINJABRAIN_BOT_SHA256}"
+            TLS_VERIFY ON
+            SHOW_PROGRESS
+            STATUS TOOLSCREEN_NINJABRAIN_BOT_DOWNLOAD_STATUS
+        )
+        list(GET TOOLSCREEN_NINJABRAIN_BOT_DOWNLOAD_STATUS 0 TOOLSCREEN_NINJABRAIN_BOT_DOWNLOAD_STATUS_CODE)
+        list(GET TOOLSCREEN_NINJABRAIN_BOT_DOWNLOAD_STATUS 1 TOOLSCREEN_NINJABRAIN_BOT_DOWNLOAD_STATUS_TEXT)
+        if(NOT TOOLSCREEN_NINJABRAIN_BOT_DOWNLOAD_STATUS_CODE EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to download Ninjabrain Bot ${TOOLSCREEN_NINJABRAIN_BOT_VERSION}: ${TOOLSCREEN_NINJABRAIN_BOT_DOWNLOAD_STATUS_TEXT}")
+        endif()
+    endif()
+
+    find_package(Java COMPONENTS Runtime REQUIRED)
+
+    string(REPLACE "\\" "\\\\" TOOLSCREEN_TEST_JAVA_EXECUTABLE_LITERAL "${Java_JAVA_EXECUTABLE}")
+    string(REPLACE "\\" "\\\\" TOOLSCREEN_TEST_NINJABRAIN_BOT_JAR_LITERAL "${TOOLSCREEN_NINJABRAIN_BOT_JAR}")
+
+    add_executable(toolscreen_ninjabrain_api_tests
+        tests/ninjabrain_api_tests.cpp
+        src/features/ninjabrain_api.cpp
+        src/features/ninjabrain_data.cpp
+    )
+
+    target_include_directories(toolscreen_ninjabrain_api_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${nlohmann_json_SOURCE_DIR}/single_include
+        ${cpp_httplib_SOURCE_DIR}
+    )
+
+    target_compile_definitions(toolscreen_ninjabrain_api_tests PRIVATE
+        CMAKE_BUILD
+        NOMINMAX
+        UNICODE
+        _UNICODE
+        TOOLSCREEN_TEST_JAVA_EXECUTABLE="${TOOLSCREEN_TEST_JAVA_EXECUTABLE_LITERAL}"
+        TOOLSCREEN_TEST_NINJABRAIN_BOT_JAR="${TOOLSCREEN_TEST_NINJABRAIN_BOT_JAR_LITERAL}"
+    )
+
+    target_link_libraries(toolscreen_ninjabrain_api_tests PRIVATE
+        ws2_32
+    )
+
+    if(MSVC)
+        target_compile_options(toolscreen_ninjabrain_api_tests PRIVATE
+            /W3
+            /MP
+            /EHa
+        )
+    endif()
+
+    toolscreen_configure_target_outputs(toolscreen_ninjabrain_api_tests)
+    toolscreen_enable_release_symbols(toolscreen_ninjabrain_api_tests)
+
+    set(TOOLSCREEN_NINJABRAIN_API_TEST_CASES
+        boat_event_parses_snapshot
+        stronghold_failure_preserves_boat
+        stronghold_event_parses_prediction_details
+        stronghold_increment_recovery_without_correction_increments
+        live_ninjabrain_api_http_server_smoke
+        live_ninjabrain_api_session_reconnects
+    )
+
+    foreach(test_case IN LISTS TOOLSCREEN_NINJABRAIN_API_TEST_CASES)
+        add_test(
+            NAME toolscreen_ninjabrain_${test_case}
+            COMMAND toolscreen_ninjabrain_api_tests --run ${test_case}
+        )
+        set_tests_properties(
+            toolscreen_ninjabrain_${test_case}
+            PROPERTIES LABELS "manual;ninjabrain"
+        )
+    endforeach()
+endif()
 
 if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     find_package(Java COMPONENTS Development REQUIRED)

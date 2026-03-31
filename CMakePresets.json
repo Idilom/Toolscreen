@@ -18,6 +18,16 @@
       "cacheVariables": {
         "TOOLSCREEN_ENABLE_JAR_PACKAGING": "ON"
       }
+    },
+    {
+      "name": "vs2022-x64-ninjabrain-manual-tests",
+      "displayName": "Visual Studio 2022 x64 (Manual Ninjabrain Tests)",
+      "inherits": "vs2022-x64",
+      "binaryDir": "${sourceDir}/out/build-ninjabrain-manual",
+      "cacheVariables": {
+        "TOOLSCREEN_ENABLE_JAR_PACKAGING": "OFF",
+        "TOOLSCREEN_ENABLE_NINJABRAIN_API_MANUAL_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -31,6 +41,18 @@
       "name": "debug",
       "displayName": "Debug",
       "configurePreset": "vs2022-x64",
+      "configuration": "Debug"
+    },
+    {
+      "name": "release-ninjabrain-manual-tests",
+      "displayName": "Release Manual Ninjabrain Tests",
+      "configurePreset": "vs2022-x64-ninjabrain-manual-tests",
+      "configuration": "Release"
+    },
+    {
+      "name": "debug-ninjabrain-manual-tests",
+      "displayName": "Debug Manual Ninjabrain Tests",
+      "configurePreset": "vs2022-x64-ninjabrain-manual-tests",
       "configuration": "Debug"
     }
   ],
@@ -49,6 +71,34 @@
       "displayName": "Debug Tests",
       "configurePreset": "vs2022-x64",
       "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release-ninjabrain-manual-tests",
+      "displayName": "Release Manual Ninjabrain Tests",
+      "configurePreset": "vs2022-x64-ninjabrain-manual-tests",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "name": "^toolscreen_ninjabrain_"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "debug-ninjabrain-manual-tests",
+      "displayName": "Debug Manual Ninjabrain Tests",
+      "configurePreset": "vs2022-x64-ninjabrain-manual-tests",
+      "configuration": "Debug",
+      "filter": {
+        "include": {
+          "name": "^toolscreen_ninjabrain_"
+        }
+      },
       "output": {
         "outputOnFailure": true
       }

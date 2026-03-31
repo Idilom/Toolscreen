@@ -68,3 +68,5 @@ Need help or want to share your setup? Join the [Discord server](https://discord
 ## Building
 
 Run `build.bat` to build Toolscreen; output files are in `out/build/bin/Release/`.
+Run `build.bat --test` to execute the regular CTest suite used by normal local and GitHub builds.
+Run `build.bat --manual-ninjabrain-tests` to build and run the opt-in Ninjabrain integration suite in its separate manual test tree.
