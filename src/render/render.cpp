@@ -7406,6 +7406,8 @@ void StartModeTransition(const std::string& fromModeId, const std::string& toMod
     bool transitioningFromEyeZoom = EqualsIgnoreCase(fromModeId, "EyeZoom");
     auto transitionSnap = GetConfigSnapshot();
     const ModeConfig* sourceMode = transitionSnap ? GetModeFromSnapshot(*transitionSnap, fromModeId) : nullptr;
+    const bool sourceSkipAnimateX = sourceMode && sourceMode->skipAnimateX;
+    const bool sourceSkipAnimateY = sourceMode && sourceMode->skipAnimateY;
     const bool preserveEyeZoomSlideOutDuration = transitioningFromEyeZoom && !transitioningToEyeZoom && transitionSnap &&
                                                  transitionSnap->eyezoom.slideMirrorsIn &&
                                                  toMode.overlayTransition != OverlayTransitionType::Cut;
@@ -7433,17 +7435,8 @@ void StartModeTransition(const std::string& fromModeId, const std::string& toMod
     g_modeTransition.bounceIntensity = toMode.bounceIntensity;
     g_modeTransition.bounceDurationMs = toMode.bounceDurationMs;
 
-    if (transitioningFromEyeZoom && !transitioningToEyeZoom) {
-        // Transitioning FROM EyeZoom - look up EyeZoom's skip settings (use snapshot for thread safety)
-        const ModeConfig* eyeZoomMode = transitionSnap ? GetModeFromSnapshot(*transitionSnap, "EyeZoom") : nullptr;
-        if (eyeZoomMode) {
-            g_modeTransition.skipAnimateX = eyeZoomMode->skipAnimateX;
-            g_modeTransition.skipAnimateY = eyeZoomMode->skipAnimateY;
-        }
-    } else {
-        g_modeTransition.skipAnimateX = toMode.skipAnimateX;
-        g_modeTransition.skipAnimateY = toMode.skipAnimateY;
-    }
+    g_modeTransition.skipAnimateX = sourceSkipAnimateX || toMode.skipAnimateX;
+    g_modeTransition.skipAnimateY = sourceSkipAnimateY || toMode.skipAnimateY;
 
     g_modeTransition.fromModeId = fromModeId;
     g_modeTransition.fromWidth = fromWidth;
