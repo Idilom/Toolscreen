@@ -834,28 +834,40 @@ GETRAWINPUTDATAPROC oGetRawInputData = NULL;
 GETRAWINPUTDATAPROC g_oGetRawInputDataThirdParty = NULL;
 std::atomic<void*> g_getRawInputDataThirdPartyHookTarget{ nullptr };
 
+static const RECT* ResolveClipCursorRect(const RECT* lpRect, RECT& resolvedRect) {
+    if (g_config.confineCursor) {
+        HWND hwnd = g_minecraftHwnd.load();
+        if (GetWindowClientRectInScreen(hwnd, resolvedRect)) { return &resolvedRect; }
+    }
+
+    if (g_showGui.load()) { return NULL; }
+
+    if (g_gameVersion < GameVersion(1, 13, 0) && g_config.allowCursorEscape) { return NULL; }
+
+    return lpRect;
+}
+
+BOOL ClipCursorDirect(const RECT* lpRect) {
+    CLIPCURSORPROC directProc = oClipCursor ? oClipCursor : ::ClipCursor;
+    if (!directProc) return FALSE;
+    return directProc(lpRect);
+}
+
+bool ApplyConfineCursorToGameWindow() {
+    if (!g_config.confineCursor) { return false; }
+
+    RECT clipRect{};
+    HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    if (!GetWindowClientRectInScreen(hwnd, clipRect)) { return false; }
+
+    return ClipCursorDirect(&clipRect) != FALSE;
+}
+
 static BOOL ClipCursorHook_Impl(CLIPCURSORPROC next, const RECT* lpRect) {
     if (!next) return FALSE;
 
-    if (g_showGui.load()) { return next(NULL); }
-
-    if (g_config.confineCursor) {
-        HWND hwnd = g_minecraftHwnd.load();
-        if (hwnd) {
-            RECT windowRect;
-            if (GetClientRect(hwnd, &windowRect)) {
-                MapWindowPoints(hwnd, HWND_DESKTOP, reinterpret_cast<POINT*>(&windowRect), 2);
-                return next(&windowRect);
-            }
-        }
-    }
-
-    if (g_gameVersion >= GameVersion(1, 13, 0)) { return next(lpRect); }
-
-    if (g_config.allowCursorEscape) {
-        return next(NULL);
-    }
-    return next(lpRect);
+    RECT resolvedRect{};
+    return next(ResolveClipCursorRect(lpRect, resolvedRect));
 }
 
 BOOL WINAPI hkClipCursor(const RECT* lpRect) { return ClipCursorHook_Impl(oClipCursor, lpRect); }
@@ -1806,7 +1818,11 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
         HWND hwnd = WindowFromDC(hDc);
         if (!hwnd) { return next(hDc); }
-        if (hwnd != g_minecraftHwnd.load()) { g_minecraftHwnd.store(hwnd); }
+        HWND previousHwnd = g_minecraftHwnd.load();
+        if (hwnd != previousHwnd) {
+            g_minecraftHwnd.store(hwnd);
+            ApplyConfineCursorToGameWindow();
+        }
 
         SyncVirtualCameraRuntimeState(frameCfg.debug.virtualCameraEnabled);
 

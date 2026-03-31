@@ -31,7 +31,14 @@
                     HelpMarker(trc("tooptip.let_cursor_escape_window"));
                 }
 
-                if (ImGui::Checkbox(trc("label.confine_cursor"), &g_config.confineCursor)) { g_configIsDirty = true; }
+                if (ImGui::Checkbox(trc("label.confine_cursor"), &g_config.confineCursor)) {
+                    g_configIsDirty = true;
+                    if (g_config.confineCursor) {
+                        ApplyConfineCursorToGameWindow();
+                    } else {
+                        ClipCursorDirect(NULL);
+                    }
+                }
                 ImGui::SameLine();
                 HelpMarker(trc("tooltip.confine_cursor"));
 

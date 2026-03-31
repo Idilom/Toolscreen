@@ -368,6 +368,8 @@ struct ModeViewportInfo {
 bool GetMonitorRectForWindow(HWND hwnd, RECT& outRect);
 bool GetMonitorSizeForWindow(HWND hwnd, int& outW, int& outH);
 bool GetWindowClientRectInScreen(HWND hwnd, RECT& outRect);
+BOOL ClipCursorDirect(const RECT* lpRect);
+bool ApplyConfineCursorToGameWindow();
 
 UINT GetToolscreenBorderlessToggleMessageId();
 bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* source = nullptr);

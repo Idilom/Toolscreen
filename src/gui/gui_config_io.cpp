@@ -760,6 +760,7 @@ void LoadConfig() {
         RequestScreenMetricsRecalculation();
 
         PublishConfigSnapshot();
+        ApplyConfineCursorToGameWindow();
         SetGlobalMirrorGammaMode(g_config.mirrorGammaMode);
         DiscardUnusedUserImageCaches();
 

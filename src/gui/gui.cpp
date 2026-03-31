@@ -209,7 +209,9 @@ void CloseSettingsGuiWindow() {
     ImGuiInputQueue_Clear();
     ImGuiInputQueue_ResetMouseCapture(hwnd);
 
-    if (!g_wasCursorVisible.load(std::memory_order_acquire)) {
+    if (ApplyConfineCursorToGameWindow()) {
+        SetCursor(NULL);
+    } else if (!g_wasCursorVisible.load(std::memory_order_acquire)) {
         RECT clipRect{};
         if (GetWindowClientRectInScreen(hwnd, clipRect)) {
             ClipCursor(&clipRect);

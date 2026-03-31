@@ -773,7 +773,9 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         const bool wasCursorVisible = IsCursorVisible();
         g_wasCursorVisible = wasCursorVisible;
         g_guiNeedsRecenter = true;
-        ClipCursor(NULL);
+        if (!ApplyConfineCursorToGameWindow()) {
+            ClipCursor(NULL);
+        }
         if (!wasCursorVisible && g_gameVersion >= GameVersion(1, 13, 0)) {
             s_forcedShowCursor = true;
             EnsureSystemCursorVisible();
