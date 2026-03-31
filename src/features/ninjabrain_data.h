@@ -1,6 +1,11 @@
 #pragma once
+
+#include <array>
 #include <string>
 #include <mutex>
+
+inline constexpr size_t kNinjabrainPredictionLimit = 5;
+inline constexpr size_t kNinjabrainThrowLimit = 8;
 
 struct NinjabrainPrediction {
     int chunkX = 0;
@@ -9,20 +14,19 @@ struct NinjabrainPrediction {
     double overworldDistance = 0.0;
 };
 
-
 struct NinjabrainThrow {
-    double angle                  = 0.0; 
-    double angleWithoutCorrection = 0.0;  
-    double correction             = 0.0; 
-    int    correctionIncrements   = 0;    // integer step count (NB 1.5.2+)
-    bool   hasCorrectionIncrements = false;
-    std::string type              = "";   
+    double angle = 0.0;
+    double angleWithoutCorrection = 0.0;
+    double correction = 0.0;
+    int correctionIncrements = 0;
+    bool hasCorrectionIncrements = false;
+    std::string type;
 };
- 
+
 struct NinjabrainPredictionAngle {
-    double actualAngle          = 0.0; 
-    double neededCorrection     = 0.0; 
-    bool   valid                = false;
+    double actualAngle = 0.0;
+    double neededCorrection = 0.0;
+    bool valid = false;
 };
 
 struct NinjabrainData {
@@ -31,24 +35,24 @@ struct NinjabrainData {
     double distance = 0.0;
     double certainty = 0.0;
 
-    NinjabrainPrediction predictions[5];
-    NinjabrainPredictionAngle predAngles[5]; 
+    std::array<NinjabrainPrediction, kNinjabrainPredictionLimit> predictions{};
+    std::array<NinjabrainPredictionAngle, kNinjabrainPredictionLimit> predictionAngles{};
     int predictionCount = 0;
 
-    NinjabrainThrow throws[8];
+    std::array<NinjabrainThrow, kNinjabrainThrowLimit> throws{};
     int eyeCount = 0;
 
-    double lastAngle   = 0.0; 
-    double prevAngle   = 0.0;
-    bool   hasAngleChange = false;
+    double lastAngle = 0.0;
+    double prevAngle = 0.0;
+    bool hasAngleChange = false;
 
     double lastCorrection             = 0.0;
     double lastAngleWithoutCorrection = 0.0;
-    bool   hasCorrection              = false; 
-    
-    bool   hasNetherAngle  = false;
-    double netherAngle     = 0.0; 
-    double netherAngleDiff = 0.0; 
+    bool hasCorrection              = false;
+
+    bool hasNetherAngle  = false;
+    double netherAngle     = 0.0;
+    double netherAngleDiff = 0.0;
 
     double playerX = 0.0;
     double playerZ = 0.0;
@@ -71,4 +75,4 @@ struct NinjabrainData {
 };
 
 extern NinjabrainData g_ninjabrainData;
-extern std::mutex g_ninjabrainMutex;
+extern std::mutex g_ninjabrainDataMutex;

@@ -1663,6 +1663,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
         nb.insert("x",                    o.x);
         nb.insert("y",                    o.y);
         nb.insert("relativeTo",           o.relativeTo);
+        nb.insert("apiBaseUrl",           o.apiBaseUrl);
         nb.insert("fontSize",             o.fontSize);
         nb.insert("bgEnabled",            o.bgEnabled);
         nb.insert("bgOpacity",            o.bgOpacity);
@@ -1838,6 +1839,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.x                    = GetOr(*nb, "x",                    5);
         c.y                    = GetOr(*nb, "y",                    -5);
         c.relativeTo           = GetStringOr(*nb, "relativeTo",     "bottomLeftScreen");
+        c.apiBaseUrl           = GetStringOr(*nb, "apiBaseUrl",     ConfigDefaults::CONFIG_NINJABRAIN_API_BASE_URL);
+        c.fontSize             = GetOr(*nb, "fontSize",             64.0f);
         c.bgEnabled            = GetOr(*nb, "bgEnabled",            true);
         c.bgOpacity            = GetOr(*nb, "bgOpacity",            0.6f);
         c.outlineWidth         = GetOr(*nb, "outlineWidth",         1);
@@ -1858,6 +1861,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.overlayScale         = GetOr(*nb, "overlayScale",         0.30f);
         c.onlyOnMyScreen       = GetOr(*nb, "onlyOnMyScreen",       false);
         c.onlyOnObs            = GetOr(*nb, "onlyOnObs",            false);
+        if (c.apiBaseUrl.empty()) { c.apiBaseUrl = ConfigDefaults::CONFIG_NINJABRAIN_API_BASE_URL; }
         if (auto* arr = nb->get_as<toml::array>("allowedModes")) {
             c.allowedModes.clear();
             for (auto& el : *arr) { if (auto* s = el.as_string()) c.allowedModes.push_back(s->get()); }

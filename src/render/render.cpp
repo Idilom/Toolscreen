@@ -6228,7 +6228,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font)
 
     NinjabrainData data;
     {
-        std::lock_guard<std::mutex> lock(g_ninjabrainMutex);
+        std::lock_guard<std::mutex> lock(g_ninjabrainDataMutex);
         data = g_ninjabrainData;
     }
 
@@ -6374,22 +6374,22 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font)
                 initCol(c, colCfg.header.c_str(), totalRows);
 
                 for (int i = 0; i < numRows; i++) {
-                    if (data.predAngles[i].valid) {
-                        double nc    = data.predAngles[i].neededCorrection;
+                    if (data.predictionAngles[i].valid) {
+                        double nc    = data.predictionAngles[i].neededCorrection;
                         double absNc = std::abs(nc);
                         if (absNc < 0.05) {
                             snprintf(c.rows[i].text, sizeof(c.rows[i].text),
-                                     "%.2f", data.predAngles[i].actualAngle);
+                                     "%.2f", data.predictionAngles[i].actualAngle);
                             c.rows[i].color   = dataCol;
                             c.rows[i].xOffset = 0;
                         } else {
                             const char* arrow = (nc > 0) ? "-> " : "<- ";
                             char part1[32];
-                            snprintf(part1, sizeof(part1), "%.2f ", data.predAngles[i].actualAngle);
+                            snprintf(part1, sizeof(part1), "%.2f ", data.predictionAngles[i].actualAngle);
                             c.rows[i].xOffset    = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, part1).x;
                             c.rows[i].part1Color = dataCol;
                             snprintf(c.rows[i].text, sizeof(c.rows[i].text),
-                                     "%.2f (%s%.1f)", data.predAngles[i].actualAngle, arrow, absNc);
+                                     "%.2f (%s%.1f)", data.predictionAngles[i].actualAngle, arrow, absNc);
                             c.rows[i].color = NBGradientColor(1.0 - absNc / 180.0);
                         }
                     } else {

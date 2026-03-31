@@ -192,6 +192,7 @@ constexpr bool CONFIG_BASIC_MODE_ENABLED = false;
 constexpr bool CONFIG_DISABLE_FULLSCREEN_PROMPT = false;
 constexpr bool CONFIG_DISABLE_CONFIGURE_PROMPT = false;
 inline const std::string CONFIG_MIRROR_MATCH_COLORSPACE = "Auto";
+inline const std::string CONFIG_NINJABRAIN_API_BASE_URL = "http://127.0.0.1:52533";
 
 constexpr DWORD CONFIG_GUI_HOTKEY_MODIFIER = VK_LCONTROL;
 constexpr DWORD CONFIG_GUI_HOTKEY_KEY = 'I';

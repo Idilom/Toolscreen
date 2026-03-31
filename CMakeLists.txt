@@ -145,12 +145,11 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
-
 FetchContent_Declare(
-    curl
-    URL https://curl.se/download/curl-8.10.1.tar.gz
-    URL_HASH SHA256=d15ebab765d793e2e96db090f0e172d127859d78ca6f6391d7eafecfd894bbc0
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    cpp_httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib
+    GIT_TAG v0.40.0
+    GIT_SHALLOW TRUE
 )
 
 FetchContent_GetProperties(glew)
@@ -184,25 +183,9 @@ if(NOT nlohmann_json_POPULATED)
     FetchContent_Populate(nlohmann_json)
 endif()
 
-FetchContent_GetProperties(curl)
-if(NOT curl_POPULATED)
-    set(BUILD_CURL_EXE        OFF CACHE BOOL "" FORCE)
-    set(BUILD_TESTING         OFF CACHE BOOL "" FORCE)
-    set(BUILD_SHARED_LIBS     OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_OPENSSL      OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_SCHANNEL     ON  CACHE BOOL "" FORCE)
-    set(HTTP_ONLY             ON  CACHE BOOL "" FORCE)
-    set(CURL_DISABLE_LDAP     ON  CACHE BOOL "" FORCE)
-    set(CURL_DISABLE_LDAPS    ON  CACHE BOOL "" FORCE)
-    set(CURL_STATICLIB        ON  CACHE BOOL "" FORCE)
-    set(CURL_USE_LIBPSL       OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_LIBSSH2      OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_LIBSSH       OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_GSSAPI       OFF CACHE BOOL "" FORCE)
-    set(USE_LIBIDN2           OFF CACHE BOOL "" FORCE)
-    set(CURL_WINDOWS_SSPI     ON  CACHE BOOL "" FORCE)
-    FetchContent_Populate(curl)
-    add_subdirectory(${curl_SOURCE_DIR} ${curl_BINARY_DIR} EXCLUDE_FROM_ALL)
+FetchContent_GetProperties(cpp_httplib)
+if(NOT cpp_httplib_POPULATED)
+    FetchContent_Populate(cpp_httplib)
 endif()
 
 
@@ -301,14 +284,13 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${TOOLSCREEN_GENERATED_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${nlohmann_json_SOURCE_DIR}/single_include
-    ${curl_SOURCE_DIR}/include
+    ${cpp_httplib_SOURCE_DIR}
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     TOOLSCREEN_EXPORTS
     CMAKE_BUILD
     GLEW_STATIC
-    CURL_STATICLIB
     NOMINMAX
     UNICODE
     _UNICODE
@@ -332,7 +314,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     shlwapi
     user32
     version
-    CURL::libcurl
+    ws2_32
 )
 
 if(MSVC)
