@@ -1158,8 +1158,14 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
     const GLuint currentTexture = GetTrackedTextureBindingForViewportHook();
 
-    if (currentTexture == 0 || readFBO != 0) {
-        return next(x, y, width, height);
+    if(g_gameVersion >= GameVersion(1, 17, 0) && g_gameVersion < GameVersion(1, 20, 0)) {
+        if (currentTexture != 0 || readFBO != 0) {
+            return next(x, y, width, height);
+        }
+    } else {
+        if (currentTexture == 0 || readFBO != 0) {
+            return next(x, y, width, height);
+        }
     }
 
     // Track the actual incoming viewport dimensions so tolerant matching remains in sync
@@ -1173,9 +1179,7 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
         return next(x, y, width, height);
     }
 
-    // Check if mode transition animation is active (from snapshot - no lock needed)
     bool useAnimatedDimensions = transitionSnap.active;
-    bool isMoveTransition = transitionSnap.isBounceTransition;
     int animatedX = transitionSnap.currentX;
     int animatedY = transitionSnap.currentY;
     int animatedWidth = transitionSnap.currentWidth;
@@ -1516,21 +1520,69 @@ void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuf
                                        filter);
     }
 
-    void* caller_address = _ReturnAddress();
-    if (!IsDynamicMemoryCaller(caller_address)) {
+    const ViewportTransitionSnapshot& transitionSnap =
+        g_viewportTransitionSnapshots[g_viewportTransitionSnapshotIndex.load(std::memory_order_acquire)];
+    const CachedModeViewport& cachedMode = g_viewportModeCache[g_viewportModeCacheIndex.load(std::memory_order_acquire)];
+    int modeWidth = 0;
+    int modeHeight = 0;
+    bool stretchEnabled = false;
+    int stretchX = 0;
+    int stretchY = 0;
+    int stretchWidth = 0;
+    int stretchHeight = 0;
+
+    if (transitionSnap.active) {
+        modeWidth = transitionSnap.toNativeWidth;
+        modeHeight = transitionSnap.toNativeHeight;
+        stretchEnabled = true;
+        stretchX = transitionSnap.toX;
+        stretchY = transitionSnap.toY;
+        stretchWidth = transitionSnap.toWidth;
+        stretchHeight = transitionSnap.toHeight;
+    } else if (GetLatestViewportForHook(modeWidth, modeHeight, stretchEnabled, stretchX, stretchY, stretchWidth, stretchHeight)) {
+        // Use live, recalculated dimensions so WM_SIZE-driven relative/expression updates
+        // are reflected immediately even before the periodic viewport cache refresh.
+    } else if (cachedMode.valid) {
+        modeWidth = cachedMode.width;
+        modeHeight = cachedMode.height;
+        stretchEnabled = cachedMode.stretchEnabled;
+        stretchX = cachedMode.stretchX;
+        stretchY = cachedMode.stretchY;
+        stretchWidth = cachedMode.stretchWidth;
+        stretchHeight = cachedMode.stretchHeight;
+    } else {
         return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask,
                                        filter);
     }
 
-    ModeViewportInfo viewport = GetCurrentModeViewport();
+    const int screenW = GetCachedWindowWidth();
+    const int screenH = GetCachedWindowHeight();
+    if (screenW > 0 && screenH > 0) {
+        if (transitionSnap.active) {
+            if (g_config.hideAnimationsInGame) {
+                stretchX = transitionSnap.toX;
+                stretchY = transitionSnap.toY;
+                stretchWidth = transitionSnap.toWidth;
+                stretchHeight = transitionSnap.toHeight;
+            } else {
+                stretchX = transitionSnap.currentX;
+                stretchY = transitionSnap.currentY;
+                stretchWidth = transitionSnap.currentWidth;
+                stretchHeight = transitionSnap.currentHeight;
+            }
+        } else if (!stretchEnabled) {
+            stretchX = screenW / 2 - modeWidth / 2;
+            stretchY = screenH / 2 - modeHeight / 2;
+            stretchWidth = modeWidth;
+            stretchHeight = modeHeight;
+        }
 
-    if (viewport.valid) {
         int screenH = GetCachedWindowHeight();
-        int destY0_screen = screenH - viewport.stretchY - viewport.stretchHeight;
-        int destY1_screen = screenH - viewport.stretchY;
+        int destY0_screen = screenH - stretchY - stretchHeight;
+        int destY1_screen = screenH - stretchY;
 
-        return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, viewport.stretchX, destY0_screen,
-                                       viewport.stretchX + viewport.stretchWidth, destY1_screen, mask, filter);
+        return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, stretchX, destY0_screen,
+                                       stretchX + stretchWidth, destY1_screen, mask, filter);
     }
 
     return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
