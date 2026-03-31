@@ -232,6 +232,7 @@ std::vector<DecodedImageData> g_decodedImagesQueue;
 std::mutex g_decodedImagesMutex;
 
 std::atomic<GLuint> g_cachedGameTextureId{ UINT_MAX };
+std::atomic<GLuint> g_lastTrackedGameFramebufferTextureId{ UINT_MAX };
 std::atomic<GLuint> g_lastTrackedGameTextureBindId{ UINT_MAX };
 std::atomic<DWORD> g_lastSwapBuffersThreadId{ 0 };
 
@@ -258,6 +259,7 @@ void AttemptAggressiveGlViewportHook();
 
 void InvalidateTrackedGameTextureId(bool clearSwapThread) {
     g_cachedGameTextureId.store(UINT_MAX, std::memory_order_release);
+    g_lastTrackedGameFramebufferTextureId.store(UINT_MAX, std::memory_order_release);
     g_lastTrackedGameTextureBindId.store(UINT_MAX, std::memory_order_release);
     if (clearSwapThread) {
         g_lastSwapBuffersThreadId.store(0, std::memory_order_release);
@@ -680,6 +682,9 @@ typedef void(WINAPI* GLBLITNAMEDFRAMEBUFFERPROC)(GLuint readFramebuffer, GLuint 
                                                  GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask,
                                                  GLenum filter);
 GLBLITNAMEDFRAMEBUFFERPROC oglBlitNamedFramebuffer = NULL;
+
+typedef void(APIENTRY* GLNAMEDFRAMEBUFFERTEXTUREPROC)(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level);
+GLNAMEDFRAMEBUFFERTEXTUREPROC oglNamedFramebufferTexture = NULL;
 
 typedef void(APIENTRY* PFNGLBLITFRAMEBUFFERPROC_HOOK)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
                                                       GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
@@ -1286,6 +1291,20 @@ void WINAPI hkglViewport_ThirdParty(GLint x, GLint y, GLsizei width, GLsizei hei
 
 void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
+void APIENTRY hkglNamedFramebufferTexture(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level);
+
+static inline void TrackNamedFramebufferTextureAttachment(GLenum attachment, GLuint texture) {
+    if (attachment != GL_COLOR_ATTACHMENT0) {
+        return;
+    }
+
+    const DWORD lastSwapThreadId = g_lastSwapBuffersThreadId.load(std::memory_order_acquire);
+    if (lastSwapThreadId != 0 && GetCurrentThreadId() != lastSwapThreadId) {
+        return;
+    }
+
+    g_lastTrackedGameFramebufferTextureId.store(texture != 0 ? texture : UINT_MAX, std::memory_order_release);
+}
 
 static void AttemptHookGlBlitNamedFramebufferViaGlew() {
     static std::atomic<bool> s_hooked{ false };
@@ -1310,6 +1329,31 @@ static void AttemptHookGlBlitNamedFramebufferViaGlew() {
 
     s_hooked.store(true, std::memory_order_release);
     LogCategory("init", "Successfully hooked glBlitNamedFramebuffer via GLEW");
+}
+
+static void AttemptHookGlNamedFramebufferTextureViaGlew() {
+    static std::atomic<bool> s_hooked{ false };
+    if (s_hooked.load(std::memory_order_acquire)) return;
+    if (oglNamedFramebufferTexture != NULL) {
+        s_hooked.store(true, std::memory_order_release);
+        return;
+    }
+
+    GLNAMEDFRAMEBUFFERTEXTUREPROC pFunc = glNamedFramebufferTexture;
+    if (pFunc == NULL) return;
+
+    MH_STATUS st = MH_CreateHook(reinterpret_cast<void*>(pFunc), reinterpret_cast<void*>(&hkglNamedFramebufferTexture),
+                                 reinterpret_cast<void**>(&oglNamedFramebufferTexture));
+    if (st != MH_OK && st != MH_ERROR_ALREADY_CREATED) {
+        return;
+    }
+    st = MH_EnableHook(reinterpret_cast<void*>(pFunc));
+    if (st != MH_OK && st != MH_ERROR_ENABLED) {
+        return;
+    }
+
+    s_hooked.store(true, std::memory_order_release);
+    LogCategory("init", "Successfully hooked glNamedFramebufferTexture via GLEW");
 }
 
 static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
@@ -1513,6 +1557,20 @@ UINT WINAPI hkGetRawInputData_ThirdParty(HRAWINPUT hRawInput, UINT uiCommand, LP
     return GetRawInputDataHook_Impl(next, hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
 }
 
+void APIENTRY hkglNamedFramebufferTexture(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level) {
+    (void)framebuffer;
+    (void)level;
+
+    void* caller_address = _ReturnAddress();
+    if (IsDynamicMemoryCaller(caller_address)) {
+        TrackNamedFramebufferTextureAttachment(attachment, texture);
+    }
+
+    if (oglNamedFramebufferTexture) {
+        oglNamedFramebufferTexture(framebuffer, attachment, texture, level);
+    }
+}
+
 void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
     if (drawFramebuffer != 0) {
@@ -1688,7 +1746,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
     auto startTime = std::chrono::high_resolution_clock::now();
     _set_se_translator(SEHTranslator);
 
-    const GLuint trackedGameTextureId = g_lastTrackedGameTextureBindId.load(std::memory_order_acquire);
+    const GLuint trackedFramebufferTextureId = g_lastTrackedGameFramebufferTextureId.load(std::memory_order_acquire);
+    const GLuint trackedGameTextureId = (trackedFramebufferTextureId != UINT_MAX)
+                                            ? trackedFramebufferTextureId
+                                            : g_lastTrackedGameTextureBindId.load(std::memory_order_acquire);
     const DWORD currentSwapThreadId = GetCurrentThreadId();
     const DWORD previousSwapThreadId = g_lastSwapBuffersThreadId.exchange(currentSwapThreadId, std::memory_order_acq_rel);
     if (previousSwapThreadId != 0 && previousSwapThreadId != currentSwapThreadId) {
@@ -1720,6 +1781,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 AttemptAggressiveGlViewportHook();
 
                 AttemptHookGlBindTextureViaWgl();
+
+                AttemptHookGlNamedFramebufferTextureViaGlew();
 
                 AttemptHookGlBlitNamedFramebufferViaGlew();
 
