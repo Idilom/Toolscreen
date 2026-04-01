@@ -727,6 +727,7 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         ImGuiInputQueue_Clear();
         ImGuiInputQueue_ResetMouseCapture(hWnd);
 
+        ApplyConfineCursorToGameWindow();
         if (!g_wasCursorVisible.load()) {
             RECT clipRect{};
             if (GetWindowClientRectInScreen(hWnd, clipRect)) {
@@ -1255,6 +1256,7 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
         ApplyWindowsMouseSpeed();
         ApplyKeyRepeatSettings();
+        ApplyConfineCursorToGameWindow();
 
         int clientW = 0;
         int clientH = 0;
