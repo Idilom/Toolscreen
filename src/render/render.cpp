@@ -4221,44 +4221,90 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
 
     std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
 
-    Profiler::ScopedPause profilerPause(Profiler::GetInstance());
+    PROFILE_SCOPE_CAT("Render Same-Thread ImGui", "Rendering");
 
     HWND hwnd = g_minecraftHwnd.load();
     if (!hwnd) return;
-    InitializeImGuiContext(hwnd);
-    if (ImGui::GetCurrentContext() == nullptr) { return; }
+    {
+        PROFILE_SCOPE_CAT("ImGui Setup", "ImGui");
 
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplWin32_NewFrame();
-    SyncImGuiDisplayMetrics(hwnd);
-    ApplyDynamicGuiFontRefresh();
-    ApplyPendingKeyboardLayoutFontRefresh();
+        {
+            PROFILE_SCOPE_CAT("ImGui Context Init", "ImGui");
+            InitializeImGuiContext(hwnd);
+        }
+        if (ImGui::GetCurrentContext() == nullptr) { return; }
 
-    // Feed queued input from the window thread into the main-thread ImGui context.
-    ImGuiInputQueue_DrainToImGui();
-    ImGui::NewFrame();
+        {
+            PROFILE_SCOPE_CAT("ImGui Backend NewFrame", "ImGui");
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplWin32_NewFrame();
+        }
+        {
+            PROFILE_SCOPE_CAT("ImGui Display Metrics Sync", "ImGui");
+            SyncImGuiDisplayMetrics(hwnd);
+        }
+        {
+            PROFILE_SCOPE_CAT("ImGui Main Font Refresh Check", "ImGui");
+            ApplyDynamicGuiFontRefresh();
+        }
+        {
+            PROFILE_SCOPE_CAT("ImGui Keyboard Font Refresh Check", "ImGui");
+            ApplyPendingKeyboardLayoutFontRefresh();
+        }
 
-    if (request.showTextureGrid) { RenderTextureGridOverlay(true, request.textureGridModeWidth, request.textureGridModeHeight); }
+        // Feed queued input from the window thread into the main-thread ImGui context.
+        {
+            PROFILE_SCOPE_CAT("ImGui Input Drain", "ImGui");
+            ImGuiInputQueue_DrainToImGui();
+        }
+        {
+            PROFILE_SCOPE_CAT("ImGui NewFrame", "ImGui");
+            ImGui::NewFrame();
+        }
+    }
 
-    RenderCachedTextureGridLabels();
-    RenderCachedEyeZoomTextLabels();
+    if (request.showTextureGrid) {
+        PROFILE_SCOPE_CAT("ImGui Texture Grid Overlay", "ImGui");
+        RenderTextureGridOverlay(true, request.textureGridModeWidth, request.textureGridModeHeight);
+    }
 
-    RenderPerformanceOverlay(request.showPerformanceOverlay);
+    {
+        PROFILE_SCOPE_CAT("ImGui Cached Labels", "ImGui");
+        RenderCachedTextureGridLabels();
+        RenderCachedEyeZoomTextLabels();
+    }
+
+    if (request.showPerformanceOverlay) {
+        PROFILE_SCOPE_CAT("ImGui Performance Overlay", "ImGui");
+        RenderPerformanceOverlay(true);
+    }
 
     // NinjabrainBot overlay (rendered in ImGui space)
     if (nbOverlayActive) {
+        PROFILE_SCOPE_CAT("ImGui Ninjabrain Overlay", "ImGui");
         auto nbCfg = GetConfigSnapshot();
         if (nbCfg) RenderNinjabrainOverlay(nbCfg->ninjabrainOverlay, GetNinjabrainFont());
     }
 
-    RenderProfilerOverlay(request.showProfiler, request.showPerformanceOverlay);
+    if (request.showProfiler) {
+        PROFILE_SCOPE_CAT("ImGui Profiler Overlay", "ImGui");
+        RenderProfilerOverlay(true, request.showPerformanceOverlay);
+    }
+
     if (request.shouldRenderGui) {
+        PROFILE_SCOPE_CAT("ImGui Settings Window", "ImGui");
         RenderSettingsGUI();
         ImGuiInputQueue_PublishCaptureState();
     }
 
-    ImGui::Render();
-    RenderImGuiWithStateProtection(true);
+    {
+        PROFILE_SCOPE_CAT("ImGui Build Draw Data", "ImGui");
+        ImGui::Render();
+    }
+    {
+        PROFILE_SCOPE_CAT("ImGui Submit Draw Data", "ImGui");
+        RenderImGuiWithStateProtection(true);
+    }
 }
 
 static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, const Config& cfg, const GLState& s) {

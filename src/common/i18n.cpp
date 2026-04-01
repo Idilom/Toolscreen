@@ -3,9 +3,13 @@
 #include "platform/resource.h"
 #include "utils.h"
 
+#include <atomic>
+#include <unordered_map>
+
 inline nlohmann::json                               g_langsJson;
 inline nlohmann::json                               g_translationJson;
 inline std::unordered_map<const char*, std::string> g_translationCache;
+inline std::atomic<uint64_t>                        g_translationGeneration{ 0 };
 
 void LoadLangs() {
     try {
@@ -44,7 +48,7 @@ void LoadLangs() {
     }
 }
 
-nlohmann::json GetLangs() {
+const nlohmann::json& GetLangs() {
     return g_langsJson;
 }
 
@@ -54,9 +58,9 @@ bool LoadTranslation(const std::string& lang) {
         {"zh_CN", MAKEINTRESOURCEW(IDR_LANG_ZH_CN)},
     };
 
-    g_translationCache.clear();
-
     try {
+        nlohmann::json loadedTranslationJson;
+
         HMODULE hModule = nullptr;
         GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -86,12 +90,20 @@ bool LoadTranslation(const std::string& lang) {
             throw std::exception("SizeofResource failed");
         }
 
-        g_translationJson = nlohmann::json::parse((const char*)resPtr, (const char*)resPtr + resSize);
+        loadedTranslationJson = nlohmann::json::parse((const char*)resPtr, (const char*)resPtr + resSize);
+
+        g_translationJson = std::move(loadedTranslationJson);
+        g_translationCache.clear();
+        g_translationGeneration.fetch_add(1, std::memory_order_release);
     } catch (const std::exception& e) {
         Log("Failed to load translations of " + lang + ": " + e.what());
         return false;
     }
     return true;
+}
+
+uint64_t GetTranslationGeneration() {
+    return g_translationGeneration.load(std::memory_order_acquire);
 }
 
 std::vector<ImWchar> BuildTranslationGlyphRanges() {
@@ -130,7 +142,7 @@ std::vector<ImWchar> BuildTranslationGlyphRanges() {
     return std::vector<ImWchar>(imguiRanges.Data, imguiRanges.Data + imguiRanges.Size);
 }
 
-std::string tr(const char* key) {
+const std::string& tr_ref(const char* key) {
     auto cacheIt = g_translationCache.find(key);
     if (cacheIt != g_translationCache.end()) {
         return cacheIt->second;
@@ -138,14 +150,17 @@ std::string tr(const char* key) {
 
     if (!g_translationJson.contains(key)) {
         Log("Missing translation for key: " + std::string(key));
-        return key;
+        return g_translationCache.emplace(key, key).first->second;
     }
     if (!g_translationJson[key].is_string()) {
         Log(std::format("Translation for key '{}' is not a string", key));
-        return key;
+        return g_translationCache.emplace(key, key).first->second;
     }
 
-    std::string result      = g_translationJson[key];
-    g_translationCache[key] = result;
-    return result;
+    const std::string result = g_translationJson[key].get<std::string>();
+    return g_translationCache.emplace(key, result).first->second;
+}
+
+std::string tr(const char* key) {
+    return tr_ref(key);
 }

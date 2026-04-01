@@ -44,7 +44,8 @@ struct KeyboardLayoutFontRefreshState {
 struct MainGuiFontRefreshState {
     bool valid = false;
     float guiScaleFactor = 1.0f;
-    std::string fontPath;
+    std::string requestedFontPath;
+    std::string resolvedFontPath;
 };
 
 struct MainGuiFontRefreshRequest {
@@ -57,6 +58,15 @@ KeyboardLayoutFontRefreshState s_keyboardLayoutFontRefreshState;
 MainGuiFontRefreshState s_mainGuiFontRefreshState;
 MainGuiFontRefreshRequest s_pendingMainGuiFontRefresh;
 
+struct GuiFontPathResolutionCache {
+    bool valid = false;
+    float baseFontSize = 0.0f;
+    std::string requestedFontPath;
+    std::string resolvedFontPath;
+};
+
+GuiFontPathResolutionCache s_guiFontPathResolutionCache;
+
 constexpr std::array<const char*, 5> kLocalizedFallbackFontPaths = {
     "c:\\Windows\\Fonts\\msyh.ttc",
     "c:\\Windows\\Fonts\\msyhbd.ttc",
@@ -68,6 +78,18 @@ constexpr std::array<const char*, 5> kLocalizedFallbackFontPaths = {
 bool FontFileExists(const char* path) {
     const DWORD attrs = GetFileAttributesA(path);
     return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+std::string GetConfiguredGuiFontPath() {
+    return g_config.fontPath.empty() ? ConfigDefaults::CONFIG_FONT_PATH : g_config.fontPath;
+}
+
+bool IsStableGuiFontPath(const std::string& path, float size) {
+    if (path.empty()) return false;
+    ImFontAtlas testAtlas;
+    ImFont* font = testAtlas.AddFontFromFileTTF(path.c_str(), size);
+    if (!font) return false;
+    return testAtlas.Build();
 }
 
 const ImWchar* GetGlyphRangesOrDefault(ImFontAtlas* atlas, const std::vector<ImWchar>& glyphRanges) {
@@ -101,19 +123,23 @@ void AddMergedLocalizedFallbackFont(ImFontAtlas* atlas, float size, const std::v
 std::recursive_mutex& GetImGuiContextMutex() { return s_imguiContextMutex; }
 
 static std::string ResolveGuiFontPath(float baseFontSize) {
-    const std::string configuredFontPath = g_config.fontPath;
+    const std::string requestedFontPath = GetConfiguredGuiFontPath();
+    if (s_guiFontPathResolutionCache.valid &&
+        fabsf(s_guiFontPathResolutionCache.baseFontSize - baseFontSize) <= 0.001f &&
+        s_guiFontPathResolutionCache.requestedFontPath == requestedFontPath) {
+        return s_guiFontPathResolutionCache.resolvedFontPath;
+    }
 
-    auto isStable = [](const std::string& path, float size) -> bool {
-        if (path.empty()) return false;
-        ImFontAtlas testAtlas;
-        ImFont* font = testAtlas.AddFontFromFileTTF(path.c_str(), size);
-        if (!font) return false;
-        return testAtlas.Build();
-    };
+    std::string resolvedFontPath = requestedFontPath;
+    if (!IsStableGuiFontPath(resolvedFontPath, baseFontSize)) {
+        resolvedFontPath = ConfigDefaults::CONFIG_FONT_PATH;
+    }
 
-    std::string usePath = configuredFontPath.empty() ? ConfigDefaults::CONFIG_FONT_PATH : configuredFontPath;
-    if (!isStable(usePath, baseFontSize)) { usePath = ConfigDefaults::CONFIG_FONT_PATH; }
-    return usePath;
+    s_guiFontPathResolutionCache.valid = true;
+    s_guiFontPathResolutionCache.baseFontSize = baseFontSize;
+    s_guiFontPathResolutionCache.requestedFontPath = requestedFontPath;
+    s_guiFontPathResolutionCache.resolvedFontPath = resolvedFontPath;
+    return resolvedFontPath;
 }
 
 static ImFont* AddFontWithFallback(ImFontAtlas* atlas, const std::string& fontPath, float size, const ImFontConfig* config = nullptr,
@@ -134,17 +160,17 @@ static ImFont* AddKeyboardFontWithFallback(ImFontAtlas* atlas, const std::string
     return nullptr;
 }
 
-static void RebuildImGuiFontAtlas(float scaleFactor, float keyboardPrimarySize, float keyboardSecondarySize) {
+static void RebuildImGuiFontAtlas(float scaleFactor, float keyboardPrimarySize, float keyboardSecondarySize,
+                                  const std::string& resolvedFontPath) {
     ImGuiIO& io = ImGui::GetIO();
 
     const float baseFontSize = 16.0f * scaleFactor;
-    const std::string usePath = ResolveGuiFontPath(baseFontSize);
     const std::vector<ImWchar> localizedGlyphRanges = BuildTranslationGlyphRanges();
     const ImWchar* localizedRanges = GetGlyphRangesOrDefault(io.Fonts, localizedGlyphRanges);
 
     io.Fonts->Clear();
 
-    ImFont* baseFont = AddFontWithFallback(io.Fonts, usePath, baseFontSize, nullptr, localizedRanges);
+    ImFont* baseFont = AddFontWithFallback(io.Fonts, resolvedFontPath, baseFontSize, nullptr, localizedRanges);
     if (!baseFont) {
         Log("GUI: Failed to load configured font, using ImGui default font");
         baseFont = io.Fonts->AddFontDefault();
@@ -160,13 +186,13 @@ static void RebuildImGuiFontAtlas(float scaleFactor, float keyboardPrimarySize, 
     const float primarySize = (keyboardPrimarySize > 0.0f) ? keyboardPrimarySize : (baseFontSize * 2.80f);
     const float secondarySize = (keyboardSecondarySize > 0.0f) ? keyboardSecondarySize : (baseFontSize * 2.00f);
 
-    g_keyboardLayoutPrimaryFont = AddKeyboardFontWithFallback(io.Fonts, usePath, primarySize, keyFontCfg);
-    g_keyboardLayoutSecondaryFont = AddKeyboardFontWithFallback(io.Fonts, usePath, secondarySize, keyFontCfg);
+    g_keyboardLayoutPrimaryFont = AddKeyboardFontWithFallback(io.Fonts, resolvedFontPath, primarySize, keyFontCfg);
+    g_keyboardLayoutSecondaryFont = AddKeyboardFontWithFallback(io.Fonts, resolvedFontPath, secondarySize, keyFontCfg);
 
     if (!g_keyboardLayoutPrimaryFont) g_keyboardLayoutPrimaryFont = baseFont;
     if (!g_keyboardLayoutSecondaryFont) g_keyboardLayoutSecondaryFont = baseFont;
 
-    InitializeOverlayTextFont(usePath, 16.0f, scaleFactor);
+    InitializeOverlayTextFont(resolvedFontPath, 16.0f, scaleFactor);
 
     auto nbSnap = GetConfigSnapshot();
     LoadNinjabrainFont(io.Fonts, nbSnap ? nbSnap->ninjabrainOverlay.customFontPath : std::string(), scaleFactor);
@@ -180,7 +206,11 @@ static void RebuildImGuiFontAtlas(float scaleFactor, float keyboardPrimarySize, 
 }
 
 static void ConfigureImGuiFontsAndStyle(float scaleFactor) {
-    RebuildImGuiFontAtlas(scaleFactor, 0.0f, 0.0f);
+    const float baseFontSize = 16.0f * scaleFactor;
+    const std::string requestedFontPath = GetConfiguredGuiFontPath();
+    const std::string resolvedFontPath = ResolveGuiFontPath(baseFontSize);
+
+    RebuildImGuiFontAtlas(scaleFactor, 0.0f, 0.0f, resolvedFontPath);
 
     ImGuiStyle defaultStyle;
     ImGui::GetStyle() = defaultStyle;
@@ -190,7 +220,8 @@ static void ConfigureImGuiFontsAndStyle(float scaleFactor) {
 
     s_mainGuiFontRefreshState.valid = true;
     s_mainGuiFontRefreshState.guiScaleFactor = scaleFactor;
-    s_mainGuiFontRefreshState.fontPath = ResolveGuiFontPath(16.0f * scaleFactor);
+    s_mainGuiFontRefreshState.requestedFontPath = requestedFontPath;
+    s_mainGuiFontRefreshState.resolvedFontPath = resolvedFontPath;
 }
 
 static ImGuiContext* s_mainThreadImGuiContext = nullptr;
@@ -254,12 +285,12 @@ void ApplyDynamicGuiFontRefresh() {
     if (ImGui::GetCurrentContext() == nullptr) { return; }
 
     const float guiScaleFactor = ComputeGuiScaleFactorFromCachedWindowSize();
-    const std::string fontPath = ResolveGuiFontPath(16.0f * guiScaleFactor);
+    const std::string requestedFontPath = GetConfiguredGuiFontPath();
     const bool overlayFontReloadRequested = g_eyeZoomFontNeedsReload.exchange(false, std::memory_order_acq_rel);
     const bool hasPendingRequest = s_pendingMainGuiFontRefresh.pending;
     const bool scaleChanged = !s_mainGuiFontRefreshState.valid || fabsf(guiScaleFactor - s_mainGuiFontRefreshState.guiScaleFactor) > 0.001f;
-    const bool fontPathChanged = !s_mainGuiFontRefreshState.valid || fontPath != s_mainGuiFontRefreshState.fontPath;
-    const bool mustRefresh = s_pendingMainGuiFontRefresh.force || scaleChanged || fontPathChanged || overlayFontReloadRequested;
+    const bool requestedFontPathChanged = !s_mainGuiFontRefreshState.valid || requestedFontPath != s_mainGuiFontRefreshState.requestedFontPath;
+    const bool mustRefresh = s_pendingMainGuiFontRefresh.force || scaleChanged || requestedFontPathChanged || overlayFontReloadRequested;
 
     s_pendingMainGuiFontRefresh.pending = false;
     s_pendingMainGuiFontRefresh.force = false;
@@ -317,7 +348,7 @@ void ApplyPendingKeyboardLayoutFontRefresh() {
         fontPath != s_keyboardLayoutFontRefreshState.fontPath;
     if (!settingsChanged) { return; }
 
-    RebuildImGuiFontAtlas(guiScaleFactor, desiredPrimary, desiredSecondary);
+    RebuildImGuiFontAtlas(guiScaleFactor, desiredPrimary, desiredSecondary, fontPath);
 
     s_keyboardLayoutFontRefreshState.valid = true;
     s_keyboardLayoutFontRefreshState.fontPath = fontPath;
@@ -343,6 +374,7 @@ void HandleImGuiContextReset() {
         s_pendingKeyboardLayoutFontRefresh = {};
         s_keyboardLayoutFontRefreshState = {};
         s_mainGuiFontRefreshState = {};
+            s_guiFontPathResolutionCache = {};
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext(s_mainThreadImGuiContext);
@@ -1263,91 +1295,120 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
 void RenderImGuiWithStateProtection(bool useFullProtection) {
     if (useFullProtection) {
         GLint last_program;
-        glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
         GLint last_vertex_array;
-        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
         GLint last_array_buffer;
-        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
         GLint last_element_buffer;
-        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &last_element_buffer);
         GLint last_texture;
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
         GLint last_active_texture;
-        glGetIntegerv(GL_ACTIVE_TEXTURE, &last_active_texture);
-        GLboolean last_blend = glIsEnabled(GL_BLEND);
+        GLboolean last_blend;
         GLint last_blend_src_rgb, last_blend_dst_rgb, last_blend_src_alpha, last_blend_dst_alpha;
-        glGetIntegerv(GL_BLEND_SRC_RGB, &last_blend_src_rgb);
-        glGetIntegerv(GL_BLEND_DST_RGB, &last_blend_dst_rgb);
-        glGetIntegerv(GL_BLEND_SRC_ALPHA, &last_blend_src_alpha);
-        glGetIntegerv(GL_BLEND_DST_ALPHA, &last_blend_dst_alpha);
         GLint last_viewport[4];
-        glGetIntegerv(GL_VIEWPORT, last_viewport);
-        GLboolean last_depth_test = glIsEnabled(GL_DEPTH_TEST);
-        GLboolean last_cull_face = glIsEnabled(GL_CULL_FACE);
-        GLboolean last_scissor_test = glIsEnabled(GL_SCISSOR_TEST);
+        GLboolean last_depth_test;
+        GLboolean last_cull_face;
+        GLboolean last_scissor_test;
         GLint last_scissor_box[4];
-        glGetIntegerv(GL_SCISSOR_BOX, last_scissor_box);
         GLint last_framebuffer;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &last_framebuffer);
 
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        {
+            PROFILE_SCOPE_CAT("ImGui GL State Snapshot", "ImGui");
 
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+            glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
+            glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
+            glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
+            glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &last_element_buffer);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
+            glGetIntegerv(GL_ACTIVE_TEXTURE, &last_active_texture);
+            last_blend = glIsEnabled(GL_BLEND);
+            glGetIntegerv(GL_BLEND_SRC_RGB, &last_blend_src_rgb);
+            glGetIntegerv(GL_BLEND_DST_RGB, &last_blend_dst_rgb);
+            glGetIntegerv(GL_BLEND_SRC_ALPHA, &last_blend_src_alpha);
+            glGetIntegerv(GL_BLEND_DST_ALPHA, &last_blend_dst_alpha);
+            glGetIntegerv(GL_VIEWPORT, last_viewport);
+            last_depth_test = glIsEnabled(GL_DEPTH_TEST);
+            last_cull_face = glIsEnabled(GL_CULL_FACE);
+            last_scissor_test = glIsEnabled(GL_SCISSOR_TEST);
+            glGetIntegerv(GL_SCISSOR_BOX, last_scissor_box);
+            glGetIntegerv(GL_FRAMEBUFFER_BINDING, &last_framebuffer);
 
-        glUseProgram(last_program);
-        glBindVertexArray(last_vertex_array);
-        glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, last_element_buffer);
-        glActiveTexture(last_active_texture);
-        BindTextureDirect(GL_TEXTURE_2D, last_texture);
-        if (oglViewport)
-            oglViewport(last_viewport[0], last_viewport[1], last_viewport[2], last_viewport[3]);
-        else
-            glViewport(last_viewport[0], last_viewport[1], last_viewport[2], last_viewport[3]);
-        glScissor(last_scissor_box[0], last_scissor_box[1], last_scissor_box[2], last_scissor_box[3]);
-        glBindFramebuffer(GL_FRAMEBUFFER, last_framebuffer);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+            glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+            glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        }
 
-        if (last_depth_test)
-            glEnable(GL_DEPTH_TEST);
-        else
-            glDisable(GL_DEPTH_TEST);
-        if (last_cull_face)
-            glEnable(GL_CULL_FACE);
-        else
-            glDisable(GL_CULL_FACE);
-        if (last_scissor_test)
-            glEnable(GL_SCISSOR_TEST);
-        else
-            glDisable(GL_SCISSOR_TEST);
+        {
+            PROFILE_SCOPE_CAT("ImGui Draw Submission", "ImGui");
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        }
 
-        if (last_blend) {
-            glEnable(GL_BLEND);
-            glBlendFuncSeparate(last_blend_src_rgb, last_blend_dst_rgb, last_blend_src_alpha, last_blend_dst_alpha);
-        } else {
-            glDisable(GL_BLEND);
+        {
+            PROFILE_SCOPE_CAT("ImGui GL State Restore", "ImGui");
+
+            glUseProgram(last_program);
+            glBindVertexArray(last_vertex_array);
+            glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, last_element_buffer);
+            glActiveTexture(last_active_texture);
+            BindTextureDirect(GL_TEXTURE_2D, last_texture);
+            if (oglViewport)
+                oglViewport(last_viewport[0], last_viewport[1], last_viewport[2], last_viewport[3]);
+            else
+                glViewport(last_viewport[0], last_viewport[1], last_viewport[2], last_viewport[3]);
+            glScissor(last_scissor_box[0], last_scissor_box[1], last_scissor_box[2], last_scissor_box[3]);
+            glBindFramebuffer(GL_FRAMEBUFFER, last_framebuffer);
+
+            if (last_depth_test)
+                glEnable(GL_DEPTH_TEST);
+            else
+                glDisable(GL_DEPTH_TEST);
+            if (last_cull_face)
+                glEnable(GL_CULL_FACE);
+            else
+                glDisable(GL_CULL_FACE);
+            if (last_scissor_test)
+                glEnable(GL_SCISSOR_TEST);
+            else
+                glDisable(GL_SCISSOR_TEST);
+
+            if (last_blend) {
+                glEnable(GL_BLEND);
+                glBlendFuncSeparate(last_blend_src_rgb, last_blend_dst_rgb, last_blend_src_alpha, last_blend_dst_alpha);
+            } else {
+                glDisable(GL_BLEND);
+            }
         }
     } else {
         GLint last_program;
-        glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
         GLint last_vertex_array;
-        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
         GLint last_array_buffer;
-        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
-        GLboolean last_blend = glIsEnabled(GL_BLEND);
+        GLboolean last_blend;
 
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        {
+            PROFILE_SCOPE_CAT("ImGui Minimal GL State Snapshot", "ImGui");
 
-        glUseProgram(last_program);
-        glBindVertexArray(last_vertex_array);
-        glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
-        if (last_blend)
-            glEnable(GL_BLEND);
-        else
-            glDisable(GL_BLEND);
+            glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
+            glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
+            glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
+            last_blend = glIsEnabled(GL_BLEND);
+        }
+
+        {
+            PROFILE_SCOPE_CAT("ImGui Draw Submission", "ImGui");
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        }
+
+        {
+            PROFILE_SCOPE_CAT("ImGui Minimal GL State Restore", "ImGui");
+
+            glUseProgram(last_program);
+            glBindVertexArray(last_vertex_array);
+            glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
+            if (last_blend)
+                glEnable(GL_BLEND);
+            else
+                glDisable(GL_BLEND);
+        }
     }
 }
 

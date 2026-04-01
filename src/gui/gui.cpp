@@ -183,6 +183,94 @@ bool BeginSelectableSettingsInputsSubTabItem(const char* label) {
     return ImGui::BeginTabItem(label, nullptr, flags);
 }
 
+const std::vector<std::pair<const char*, const char*>>& GetSettingsRelativeToOptions() {
+    static std::vector<std::pair<const char*, const char*>> options;
+    static uint64_t cachedGeneration = static_cast<uint64_t>(-1);
+
+    const uint64_t generation = GetTranslationGeneration();
+    if (cachedGeneration != generation) {
+        options = {
+            {"topLeftViewport", trc("position.top_left_viewport")},
+            {"topRightViewport", trc("position.top_right_viewport")},
+            {"bottomLeftViewport", trc("position.bottom_left_viewport")},
+            {"bottomRightViewport", trc("position.bottom_right_viewport")},
+            {"centerViewport", trc("position.center_viewport")},
+            {"pieLeft", trc("position.pie_left")},
+            {"pieRight", trc("position.pie_right")},
+            {"topLeftScreen", trc("position.top_left_screen")},
+            {"topRightScreen", trc("position.top_right_screen")},
+            {"bottomLeftScreen", trc("position.bottom_left_screen")},
+            {"bottomRightScreen", trc("position.bottom_right_screen")},
+            {"centerScreen", trc("position.center_screen")}
+        };
+        cachedGeneration = generation;
+    }
+
+    return options;
+}
+
+const std::vector<std::pair<const char*, const char*>>& GetSettingsImageRelativeToOptions() {
+    static std::vector<std::pair<const char*, const char*>> options;
+    static uint64_t cachedGeneration = static_cast<uint64_t>(-1);
+
+    const uint64_t generation = GetTranslationGeneration();
+    if (cachedGeneration != generation) {
+        options = {
+            {"topLeftViewport", trc("position.top_left_viewport")},
+            {"topRightViewport", trc("position.top_right_viewport")},
+            {"bottomLeftViewport", trc("position.bottom_left_viewport")},
+            {"bottomRightViewport", trc("position.bottom_right_viewport")},
+            {"centerViewport", trc("position.center_viewport")},
+            {"topLeftScreen", trc("position.top_left_screen")},
+            {"topRightScreen", trc("position.top_right_screen")},
+            {"bottomLeftScreen", trc("position.bottom_left_screen")},
+            {"bottomRightScreen", trc("position.bottom_right_screen")},
+            {"centerScreen", trc("position.center_screen")}
+        };
+        cachedGeneration = generation;
+    }
+
+    return options;
+}
+
+const char* GetSettingsFriendlyName(const std::string& key, const std::vector<std::pair<const char*, const char*>>& options) {
+    for (const auto& option : options) {
+        if (key == option.first) {
+            return option.second;
+        }
+    }
+    return "Unknown";
+}
+
+const std::vector<std::pair<const char*, const char*>>& GetSettingsGameStateDisplayNames() {
+    static std::vector<std::pair<const char*, const char*>> names;
+    static uint64_t cachedGeneration = static_cast<uint64_t>(-1);
+
+    const uint64_t generation = GetTranslationGeneration();
+    if (cachedGeneration != generation) {
+        names = {
+            {"wall", trc("game_state.wall")},
+            {"inworld,cursor_free", trc("game_state.inworld_free")},
+            {"inworld,cursor_grabbed", trc("game_state.inworld_grabbed")},
+            {"title", trc("game_state.title")},
+            {"waiting", trc("game_state.waiting")},
+            {"generating", trc("game_state.generating")}
+        };
+        cachedGeneration = generation;
+    }
+
+    return names;
+}
+
+const char* GetSettingsGameStateFriendlyName(const std::string& gameState) {
+    for (const auto& pair : GetSettingsGameStateDisplayNames()) {
+        if (gameState == pair.first) {
+            return pair.second;
+        }
+    }
+    return gameState.c_str();
+}
+
 void ResetGuiTransientInteractionState() {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
@@ -369,39 +457,10 @@ void RenderSettingsGUI() {
     ResetGuiTestInteractionRects();
 #endif
 
-    static const std::vector<std::pair<const char*, const char*>>
-        relativeToOptions = {
-            {"topLeftViewport", trc("position.top_left_viewport")},
-            {"topRightViewport", trc("position.top_right_viewport")},
-            {"bottomLeftViewport", trc("position.bottom_left_viewport")},
-            {"bottomRightViewport", trc("position.bottom_right_viewport")},
-            {"centerViewport", trc("position.center_viewport")},
-            {"pieLeft", trc("position.pie_left")},
-            {"pieRight", trc("position.pie_right")},
-            {"topLeftScreen", trc("position.top_left_screen")},
-            {"topRightScreen", trc("position.top_right_screen")},
-            {"bottomLeftScreen", trc("position.bottom_left_screen")},
-            {"bottomRightScreen", trc("position.bottom_right_screen")},
-            {"centerScreen", trc("position.center_screen")}
-        };
-    static const std::vector<std::pair<const char*, const char*>>
-        imageRelativeToOptions = {
-            {"topLeftViewport", trc("position.top_left_viewport")},
-            {"topRightViewport", trc("position.top_right_viewport")},
-            {"bottomLeftViewport", trc("position.bottom_left_viewport")},
-            {"bottomRightViewport", trc("position.bottom_right_viewport")},
-            {"centerViewport", trc("position.center_viewport")},
-            {"topLeftScreen", trc("position.top_left_screen")},
-            {"topRightScreen", trc("position.top_right_screen")},
-            {"bottomLeftScreen", trc("position.bottom_left_screen")},
-            {"bottomRightScreen", trc("position.bottom_right_screen")},
-            {"centerScreen", trc("position.center_screen")}
-        };
-    auto getFriendlyName = [&](const std::string& key, const std::vector<std::pair<const char*, const char*>>& options) {
-        for (const auto& option : options) {
-            if (key == option.first) return option.second;
-        }
-        return "Unknown";
+    const auto& relativeToOptions = GetSettingsRelativeToOptions();
+    const auto& imageRelativeToOptions = GetSettingsImageRelativeToOptions();
+    auto getFriendlyName = [](const std::string& key, const std::vector<std::pair<const char*, const char*>>& options) {
+        return GetSettingsFriendlyName(key, options);
     };
 
     static std::vector<DWORD> s_bindingKeys;
@@ -416,21 +475,8 @@ void RenderSettingsGUI() {
     static const std::vector<const char*> guiGameStates = { "wall", "inworld,cursor_free", "inworld,cursor_grabbed", "title",
                                                             "generating" };
 
-    static const std::vector<std::pair<const char*, const char*>>
-        gameStateDisplayNames = {
-            {"wall", trc("game_state.wall")},
-            {"inworld,cursor_free", trc("game_state.inworld_free")},
-            {"inworld,cursor_grabbed", trc("game_state.inworld_grabbed")},
-            {"title", trc("game_state.title")},
-            {"waiting", trc("game_state.waiting")},
-            {"generating", trc("game_state.generating")}
-        };
-
-    auto getGameStateFriendlyName = [&](const std::string& gameState) {
-        for (const auto& pair : gameStateDisplayNames) {
-            if (gameState == pair.first) return pair.second;
-        }
-        return gameState.c_str();
+    auto getGameStateFriendlyName = [](const std::string& gameState) {
+        return GetSettingsGameStateFriendlyName(gameState);
     };
 
     bool is_binding = IsHotkeyBindingActive_UiState();
@@ -458,6 +504,8 @@ void RenderSettingsGUI() {
     }
 
     if (ImGui::BeginPopupModal(trc("hotkeys.bind_hotkey"), NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+        PROFILE_SCOPE_CAT("Settings Hotkey Binding Popup", "ImGui");
+
         ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.prompt"));
         ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.confirm"));
         ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.clear"));
@@ -750,6 +798,8 @@ void RenderSettingsGUI() {
 
         float headerRightStartX = 0;
         {
+            PROFILE_SCOPE_CAT("Settings Header Controls", "ImGui");
+
             static std::chrono::steady_clock::time_point s_lastScreenshotTime{};
             auto now = std::chrono::steady_clock::now();
             bool showCopied = std::chrono::duration_cast<std::chrono::seconds>(now - s_lastScreenshotTime).count() < 3;
@@ -788,7 +838,9 @@ void RenderSettingsGUI() {
                     ImGui::PopStyleColor(3);
 
                     if (ImGui::BeginPopup("##LanguagePopup")) {
-                        nlohmann::json langs = GetLangs();
+                        PROFILE_SCOPE_CAT("Settings Language Popup", "ImGui");
+
+                        const nlohmann::json& langs = GetLangs();
                         for (const auto& [langCode, langName] : langs.items()) {
                             bool isSelected = (g_config.lang == langCode);
                             if (ImGui::Selectable(langName.get<std::string>().c_str(), isSelected)) {
@@ -1069,17 +1121,20 @@ void RenderSettingsGUI() {
         g_windowOverlayDragMode.store(false, std::memory_order_relaxed);
         g_browserOverlayDragMode.store(false, std::memory_order_relaxed);
 
-        if (g_config.basicModeEnabled) {
-            if (ImGui::BeginTabBar("BasicSettingsTabs")) {
+        {
+            PROFILE_SCOPE_CAT("Settings Tabs", "ImGui");
+
+            if (g_config.basicModeEnabled) {
+                if (ImGui::BeginTabBar("BasicSettingsTabs")) {
 #include "tabs/tab_basic_general.inl"
 #include "tabs/tab_basic_other.inl"
 
 #include "tabs/tab_supporters.inl"
 
-                ImGui::EndTabBar();
-            }
-        } else {
-            if (ImGui::BeginTabBar("SettingsTabs")) {
+                    ImGui::EndTabBar();
+                }
+            } else {
+                if (ImGui::BeginTabBar("SettingsTabs")) {
 #include "tabs/tab_modes.inl"
 #include "tabs/tab_mirrors.inl"
 #include "tabs/tab_images.inl"
@@ -1095,7 +1150,8 @@ void RenderSettingsGUI() {
 
 #include "tabs/tab_supporters.inl"
 
-                ImGui::EndTabBar();
+                    ImGui::EndTabBar();
+                }
             }
         }
 

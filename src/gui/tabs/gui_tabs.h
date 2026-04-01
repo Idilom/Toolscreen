@@ -16,6 +16,7 @@
 #include <Shlwapi.h>
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cctype>
 #include <chrono>
 #include <commdlg.h>
@@ -39,29 +40,45 @@ bool SpinnerFloat(const char* id_label, float* v, float step = 0.1f, float min_v
 
 
 inline const std::vector<std::pair<const char*, const char*>>& GetRelativeToOptions() {
-    static const std::vector<std::pair<const char*, const char*>> options = {
-                                                                                {"topLeftViewport", trc("position.top_left_viewport")},
-                                                                                {"topRightViewport", trc("position.top_right_viewport")},
-                                                                                {"bottomLeftViewport", trc("position.bottom_left_viewport")},
-                                                                                {"bottomRightViewport", trc("position.bottom_right_viewport")},
-                                                                                {"centerViewport", trc("position.center_viewport")},
-                                                                                {"pieLeft", trc("position.pie_left")},
-                                                                                {"pieRight", trc("position.pie_right")},
-                                                                                {"topLeftScreen", trc("position.top_left_screen")},
-                                                                                {"topRightScreen", trc("position.top_right_screen")},
-                                                                                {"bottomLeftScreen", trc("position.bottom_left_screen")},
-                                                                                {"bottomRightScreen", trc("position.bottom_right_screen")},
-                                                                                {"centerScreen", trc("position.center_screen")}
-                                                                            };
+    static std::vector<std::pair<const char*, const char*>> options;
+    static uint64_t cachedGeneration = static_cast<uint64_t>(-1);
+
+    const uint64_t generation = GetTranslationGeneration();
+    if (cachedGeneration != generation) {
+        options = {
+            {"topLeftViewport", trc("position.top_left_viewport")},
+            {"topRightViewport", trc("position.top_right_viewport")},
+            {"bottomLeftViewport", trc("position.bottom_left_viewport")},
+            {"bottomRightViewport", trc("position.bottom_right_viewport")},
+            {"centerViewport", trc("position.center_viewport")},
+            {"pieLeft", trc("position.pie_left")},
+            {"pieRight", trc("position.pie_right")},
+            {"topLeftScreen", trc("position.top_left_screen")},
+            {"topRightScreen", trc("position.top_right_screen")},
+            {"bottomLeftScreen", trc("position.bottom_left_screen")},
+            {"bottomRightScreen", trc("position.bottom_right_screen")},
+            {"centerScreen", trc("position.center_screen")}
+        };
+        cachedGeneration = generation;
+    }
+
     return options;
 }
 
 inline const std::vector<std::pair<const char*, const char*>>& GetImageRelativeToOptions() {
-    static const std::vector<std::pair<const char*, const char*>> options = { { "topLeft", trc("position.top_left") },
-                                                                              { "topRight", trc("position.top_right") },
-                                                                              { "bottomLeft", trc("position.bottom_left") },
-                                                                              { "bottomRight", trc("position.bottom_right") },
-                                                                              { "center", trc("position.center") } };
+    static std::vector<std::pair<const char*, const char*>> options;
+    static uint64_t cachedGeneration = static_cast<uint64_t>(-1);
+
+    const uint64_t generation = GetTranslationGeneration();
+    if (cachedGeneration != generation) {
+        options = { { "topLeft", trc("position.top_left") },
+                    { "topRight", trc("position.top_right") },
+                    { "bottomLeft", trc("position.bottom_left") },
+                    { "bottomRight", trc("position.bottom_right") },
+                    { "center", trc("position.center") } };
+        cachedGeneration = generation;
+    }
+
     return options;
 }
 
@@ -85,12 +102,20 @@ inline const std::vector<const char*>& GetGuiGameStates() {
 }
 
 inline const std::vector<std::pair<const char*, const char*>>& GetGameStateDisplayNames() {
-    static const std::vector<std::pair<const char*, const char*>> names = { { "wall", "Wall Screen" },
-                                                                            { "inworld,cursor_free", "In World (Cursor Free)" },
-                                                                            { "inworld,cursor_grabbed", "In World (Cursor Grabbed)" },
-                                                                            { "title", "Title Screen" },
-                                                                            { "waiting", "Waiting Screen" },
-                                                                            { "generating", "World Generation" } };
+    static std::vector<std::pair<const char*, const char*>> names;
+    static uint64_t cachedGeneration = static_cast<uint64_t>(-1);
+
+    const uint64_t generation = GetTranslationGeneration();
+    if (cachedGeneration != generation) {
+        names = { { "wall", trc("game_state.wall") },
+                  { "inworld,cursor_free", trc("game_state.inworld_free") },
+                  { "inworld,cursor_grabbed", trc("game_state.inworld_grabbed") },
+                  { "title", trc("game_state.title") },
+                  { "waiting", trc("game_state.waiting") },
+                  { "generating", trc("game_state.generating") } };
+        cachedGeneration = generation;
+    }
+
     return names;
 }
 

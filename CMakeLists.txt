@@ -863,6 +863,7 @@ target_include_directories(toolscreen_gui_integration_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${TOOLSCREEN_WEBVIEW2_INCLUDE_DIR}
     ${nlohmann_json_SOURCE_DIR}/single_include
+    ${cpp_httplib_SOURCE_DIR}
 )
 
 target_compile_definitions(toolscreen_gui_integration_tests PRIVATE
