@@ -19,6 +19,7 @@
 #include "third_party/stb_image.h"
 #include "common/utils.h"
 #include "features/browser_overlay.h"
+#include "features/ninjabrain_client.h"
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
 #include "hooks/input_hook.h"

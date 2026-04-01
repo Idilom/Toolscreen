@@ -430,6 +430,48 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         if (nb.enabled) {
         ImGui::Spacing();
 
+        const NinjabrainApiStatus apiStatus = GetNinjabrainClientStatus();
+        ImVec4 statusColor = ImVec4(0.65f, 0.65f, 0.65f, 1.0f);
+        const char* statusKey = "ninjabrain.status_stopped";
+        switch (apiStatus.connectionState) {
+        case NinjabrainApiConnectionState::Connected:
+            statusColor = ImVec4(0.35f, 0.85f, 0.35f, 1.0f);
+            statusKey = "ninjabrain.status_connected";
+            break;
+        case NinjabrainApiConnectionState::Connecting:
+            statusColor = ImVec4(1.0f, 0.8f, 0.35f, 1.0f);
+            statusKey = "ninjabrain.status_connecting";
+            break;
+        case NinjabrainApiConnectionState::Offline:
+            statusColor = ImVec4(1.0f, 0.45f, 0.45f, 1.0f);
+            statusKey = "ninjabrain.status_offline";
+            break;
+        case NinjabrainApiConnectionState::Stopped:
+            break;
+        }
+
+        ImGui::SeparatorText(trc("ninjabrain.api"));
+        ImGui::TextDisabled("%s", trc("label.status"));
+        ImGui::SameLine();
+        ImGui::TextColored(statusColor, "%s", trc(statusKey));
+        if (!apiStatus.apiBaseUrl.empty()) {
+            ImGui::TextDisabled("%s", apiStatus.apiBaseUrl.c_str());
+        }
+        if (apiStatus.connectionState == NinjabrainApiConnectionState::Connecting && !apiStatus.apiBaseUrl.empty()) {
+            ImGui::TextWrapped("%s", trc("ninjabrain.status_connecting_detail", apiStatus.apiBaseUrl));
+        } else if (apiStatus.connectionState == NinjabrainApiConnectionState::Offline &&
+                   !apiStatus.apiBaseUrl.empty() && !apiStatus.error.empty()) {
+            ImGui::TextWrapped("%s", trc("ninjabrain.status_offline_detail", apiStatus.apiBaseUrl, apiStatus.error));
+        }
+        if (apiStatus.connectionState != NinjabrainApiConnectionState::Connected) {
+            if (ImGui::Button(trc("ninjabrain.retry_button"))) {
+                RestartNinjabrainClient();
+            }
+            ImGui::SameLine();
+            ImGui::TextWrapped("%s", trc("ninjabrain.enable_api_hint"));
+        }
+        ImGui::Spacing();
+
         {
             std::string preview = nb.allowedModes.empty() ? trc("ninjabrain.all_modes") : "";
             if (!nb.allowedModes.empty()) {

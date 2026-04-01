@@ -37,7 +37,79 @@ void LogIfPresent(const NinjabrainLogCallback& callback, const std::string& mess
     if (callback) { callback(message); }
 }
 
+template <typename Callback, typename... Args>
+void InvokeIfPresent(const Callback& callback, Args&&... args) {
+    if (callback) { callback(std::forward<Args>(args)...); }
+}
+
 } // namespace
+
+void NinjabrainApiConnectionTracker::Start(std::string apiBaseUrl) {
+    sessionRunning_ = true;
+    apiBaseUrl_ = NormalizeNinjabrainApiBaseUrl(std::move(apiBaseUrl));
+    lastError_.clear();
+    strongholdState_ = StreamState::Connecting;
+    boatState_ = StreamState::Connecting;
+}
+
+void NinjabrainApiConnectionTracker::Stop() {
+    sessionRunning_ = false;
+    lastError_.clear();
+    strongholdState_ = StreamState::Disconnected;
+    boatState_ = StreamState::Disconnected;
+}
+
+void NinjabrainApiConnectionTracker::MarkStrongholdConnected() {
+    MarkStreamConnected(strongholdState_);
+}
+
+void NinjabrainApiConnectionTracker::MarkStrongholdDisconnected(std::string error) {
+    MarkStreamDisconnected(strongholdState_, std::move(error));
+}
+
+void NinjabrainApiConnectionTracker::MarkBoatConnected() {
+    MarkStreamConnected(boatState_);
+}
+
+void NinjabrainApiConnectionTracker::MarkBoatDisconnected(std::string error) {
+    MarkStreamDisconnected(boatState_, std::move(error));
+}
+
+NinjabrainApiStatus NinjabrainApiConnectionTracker::Snapshot() const {
+    NinjabrainApiStatus status;
+    status.apiBaseUrl = apiBaseUrl_;
+
+    if (!sessionRunning_) {
+        status.connectionState = NinjabrainApiConnectionState::Stopped;
+        return status;
+    }
+
+    if (strongholdState_ == StreamState::Connected || boatState_ == StreamState::Connected) {
+        status.connectionState = NinjabrainApiConnectionState::Connected;
+        return status;
+    }
+
+    if (!lastError_.empty()) {
+        status.connectionState = NinjabrainApiConnectionState::Offline;
+        status.error = lastError_;
+        return status;
+    }
+
+    status.connectionState = NinjabrainApiConnectionState::Connecting;
+    return status;
+}
+
+void NinjabrainApiConnectionTracker::MarkStreamConnected(StreamState& streamState) {
+    streamState = StreamState::Connected;
+    if (strongholdState_ == StreamState::Connected && boatState_ == StreamState::Connected) {
+        lastError_.clear();
+    }
+}
+
+void NinjabrainApiConnectionTracker::MarkStreamDisconnected(StreamState& streamState, std::string error) {
+    streamState = StreamState::Disconnected;
+    lastError_ = std::move(error);
+}
 
 void ClearNinjabrainStrongholdData(NinjabrainData& data) {
     const std::string boatState = data.boatState;
@@ -218,10 +290,17 @@ NinjabrainApiSession::NinjabrainApiSession(std::string apiBaseUrl, NinjabrainApi
             "stronghold",
             kStrongholdEventsPath,
             callbacks_.onStrongholdMessage,
+            callbacks_.onStrongholdConnect,
             callbacks_.onStrongholdDisconnect);
     });
     boatThread_ = std::jthread([this](std::stop_token stopToken) {
-        RunStream(stopToken, "boat", kBoatEventsPath, callbacks_.onBoatMessage, callbacks_.onBoatDisconnect);
+        RunStream(
+            stopToken,
+            "boat",
+            kBoatEventsPath,
+            callbacks_.onBoatMessage,
+            callbacks_.onBoatConnect,
+            callbacks_.onBoatDisconnect);
     });
 }
 
@@ -239,7 +318,8 @@ void NinjabrainApiSession::RunStream(
     const char* streamName,
     const char* path,
     const std::function<void(const std::string&)>& onMessage,
-    const std::function<void()>& onDisconnect) const {
+    const std::function<void()>& onConnect,
+    const std::function<void(const std::string&)>& onDisconnect) const {
     httplib::Client client(apiBaseUrl_);
     client.set_keep_alive(true);
     client.set_connection_timeout(
@@ -256,6 +336,7 @@ void NinjabrainApiSession::RunStream(
 
     bool disconnected = false;
     sse.on_open([&, streamName = std::string(streamName)]() {
+        InvokeIfPresent(onConnect);
         if (disconnected) {
             LogIfPresent(callbacks_.onLog, "Reconnected " + streamName + " stream.");
             disconnected = false;
@@ -267,11 +348,13 @@ void NinjabrainApiSession::RunStream(
     sse.on_error([&, streamName = std::string(streamName)](httplib::Error error) {
         if (stopToken.stop_requested() || error == httplib::Error::Canceled) { return; }
 
-        if (onDisconnect) { onDisconnect(); }
+        const std::string errorString = httplib::to_string(error);
+
+        InvokeIfPresent(onDisconnect, errorString);
         if (!disconnected) {
             LogIfPresent(
                 callbacks_.onLog,
-                "Lost " + streamName + " stream: " + httplib::to_string(error) + ". Waiting for reconnect.");
+                "Lost " + streamName + " stream: " + errorString + ". Waiting for reconnect.");
             disconnected = true;
         }
     });

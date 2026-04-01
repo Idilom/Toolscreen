@@ -460,27 +460,65 @@ NinjabrainApiSessionCallbacks CreateSessionCallbacks(SessionState& state) {
         std::lock_guard<std::mutex> lock(state.mutex);
         state.logs.push_back(message);
     };
+    callbacks.onStrongholdConnect = []() {};
     callbacks.onStrongholdMessage = [&](const std::string& payload) {
         std::lock_guard<std::mutex> lock(state.mutex);
         ApplyNinjabrainStrongholdEvent(payload, state.data, [&](const std::string& message) {
             state.logs.push_back(message);
         });
     };
-    callbacks.onStrongholdDisconnect = [&]() {
+    callbacks.onStrongholdDisconnect = [&](const std::string&) {
         std::lock_guard<std::mutex> lock(state.mutex);
         ClearNinjabrainStrongholdData(state.data);
     };
+    callbacks.onBoatConnect = []() {};
     callbacks.onBoatMessage = [&](const std::string& payload) {
         std::lock_guard<std::mutex> lock(state.mutex);
         ApplyNinjabrainBoatEvent(payload, state.data, [&](const std::string& message) {
             state.logs.push_back(message);
         });
     };
-    callbacks.onBoatDisconnect = [&]() {
+    callbacks.onBoatDisconnect = [&](const std::string&) {
         std::lock_guard<std::mutex> lock(state.mutex);
         ClearNinjabrainBoatData(state.data);
     };
     return callbacks;
+}
+
+TOOLSCREEN_TEST(connection_tracker_reports_offline_state) {
+    NinjabrainApiConnectionTracker tracker;
+
+    tracker.Start(std::string(" ") + kServerBaseUrl + "/");
+
+    {
+        const NinjabrainApiStatus status = tracker.Snapshot();
+        REQUIRE(status.connectionState == NinjabrainApiConnectionState::Connecting);
+        RequireEqual(status.apiBaseUrl, std::string(kServerBaseUrl), "apiBaseUrl");
+        REQUIRE(status.error.empty());
+    }
+
+    tracker.MarkStrongholdDisconnected("Connection refused");
+
+    {
+        const NinjabrainApiStatus status = tracker.Snapshot();
+        REQUIRE(status.connectionState == NinjabrainApiConnectionState::Offline);
+        REQUIRE(status.error.find("Connection refused") != std::string::npos);
+    }
+
+    tracker.MarkBoatConnected();
+
+    {
+        const NinjabrainApiStatus status = tracker.Snapshot();
+        REQUIRE(status.connectionState == NinjabrainApiConnectionState::Connected);
+    }
+
+    tracker.Stop();
+
+    {
+        const NinjabrainApiStatus status = tracker.Snapshot();
+        REQUIRE(status.connectionState == NinjabrainApiConnectionState::Stopped);
+        REQUIRE(status.error.empty());
+    }
 }
 
 TOOLSCREEN_TEST(boat_event_parses_snapshot) {

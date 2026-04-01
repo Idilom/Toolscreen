@@ -9,6 +9,48 @@
 
 using NinjabrainLogCallback = std::function<void(const std::string&)>;
 
+enum class NinjabrainApiConnectionState {
+        Stopped,
+        Connecting,
+        Connected,
+        Offline,
+};
+
+struct NinjabrainApiStatus {
+        NinjabrainApiConnectionState connectionState = NinjabrainApiConnectionState::Stopped;
+        std::string apiBaseUrl;
+        std::string error;
+};
+
+class NinjabrainApiConnectionTracker {
+    public:
+        void Start(std::string apiBaseUrl);
+        void Stop();
+
+        void MarkStrongholdConnected();
+        void MarkStrongholdDisconnected(std::string error);
+        void MarkBoatConnected();
+        void MarkBoatDisconnected(std::string error);
+
+        NinjabrainApiStatus Snapshot() const;
+
+    private:
+        enum class StreamState {
+                Connecting,
+                Connected,
+                Disconnected,
+        };
+
+        void MarkStreamConnected(StreamState& streamState);
+        void MarkStreamDisconnected(StreamState& streamState, std::string error);
+
+        bool sessionRunning_ = false;
+        std::string apiBaseUrl_;
+        std::string lastError_;
+        StreamState strongholdState_ = StreamState::Disconnected;
+        StreamState boatState_ = StreamState::Disconnected;
+};
+
 void ClearNinjabrainStrongholdData(NinjabrainData& data);
 void ClearNinjabrainBoatData(NinjabrainData& data);
 
@@ -26,9 +68,11 @@ std::string NormalizeNinjabrainApiBaseUrl(std::string apiBaseUrl);
 
 struct NinjabrainApiSessionCallbacks {
     std::function<void(const std::string&)> onStrongholdMessage;
-    std::function<void()> onStrongholdDisconnect;
+    std::function<void()> onStrongholdConnect;
+    std::function<void(const std::string&)> onStrongholdDisconnect;
     std::function<void(const std::string&)> onBoatMessage;
-    std::function<void()> onBoatDisconnect;
+    std::function<void()> onBoatConnect;
+    std::function<void(const std::string&)> onBoatDisconnect;
     NinjabrainLogCallback onLog;
 };
 
@@ -48,7 +92,8 @@ class NinjabrainApiSession {
         const char* streamName,
         const char* path,
         const std::function<void(const std::string&)>& onMessage,
-        const std::function<void()>& onDisconnect) const;
+        const std::function<void()>& onConnect,
+        const std::function<void(const std::string&)>& onDisconnect) const;
 
     std::string apiBaseUrl_;
     NinjabrainApiSessionCallbacks callbacks_;
