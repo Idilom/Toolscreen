@@ -22,3 +22,4 @@
 #define IDR_BOAT_GREEN         117
 #define IDR_BOAT_RED           118
 #define IDR_MINECRAFT_FONT     119
+#define IDR_OPENSANS_FONT      120

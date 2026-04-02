@@ -18,6 +18,7 @@ struct NinjabrainThrow {
     double angle = 0.0;
     double angleWithoutCorrection = 0.0;
     double correction = 0.0;
+    double error = 0.0;
     int correctionIncrements = 0;
     bool hasCorrectionIncrements = false;
     std::string type;
@@ -47,8 +48,10 @@ struct NinjabrainData {
     bool hasAngleChange = false;
 
     double lastCorrection             = 0.0;
+    double lastThrowError             = 0.0;
     double lastAngleWithoutCorrection = 0.0;
     bool hasCorrection              = false;
+    bool hasThrowError              = false;
 
     bool hasNetherAngle  = false;
     double netherAngle     = 0.0;

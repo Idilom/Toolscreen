@@ -7083,9 +7083,22 @@ void InitializeOverlayTextFont(const std::string& fontPath, float baseFontSize, 
     ImGuiIO& io = ImGui::GetIO();
     const float sizePixels = baseFontSize * 1.5f * scaleFactor;
 
+    auto resolvePath = [](const std::string& path) -> std::string {
+        if (path.empty()) return path;
+
+        std::wstring widePath = Utf8ToWide(path);
+        if (PathIsRelativeW(widePath.c_str()) && !g_toolscreenPath.empty()) {
+            return WideToUtf8(g_toolscreenPath + L"\\" + widePath);
+        }
+        return path;
+    };
+
     const std::string configuredOverlayPath = g_config.eyezoom.textFontPath;
-    std::string usePath = configuredOverlayPath.empty() ? fontPath : configuredOverlayPath;
-    if (usePath.empty()) { usePath = ConfigDefaults::CONFIG_FONT_PATH; }
+    const std::string bundledFontPath = resolvePath(ConfigDefaults::CONFIG_FONT_PATH);
+    const std::string systemFallbackFontPath = ConfigDefaults::CONFIG_FALLBACK_FONT_PATH;
+
+    std::string usePath = resolvePath(configuredOverlayPath.empty() ? fontPath : configuredOverlayPath);
+    if (usePath.empty()) { usePath = bundledFontPath; }
 
     auto isStable = [](const std::string& p, float sz) -> bool {
         if (p.empty()) return false;
@@ -7095,11 +7108,16 @@ void InitializeOverlayTextFont(const std::string& fontPath, float baseFontSize, 
         return testAtlas.Build();
     };
 
-    if (!isStable(usePath, sizePixels)) { usePath = ConfigDefaults::CONFIG_FONT_PATH; }
+    if (!isStable(usePath, sizePixels)) {
+        usePath = isStable(bundledFontPath, sizePixels) ? bundledFontPath : systemFallbackFontPath;
+    }
 
     g_overlayTextFont = io.Fonts->AddFontFromFileTTF(usePath.c_str(), sizePixels);
-    if (!g_overlayTextFont && usePath != ConfigDefaults::CONFIG_FONT_PATH) {
-        g_overlayTextFont = io.Fonts->AddFontFromFileTTF(ConfigDefaults::CONFIG_FONT_PATH.c_str(), sizePixels);
+    if (!g_overlayTextFont && usePath != bundledFontPath) {
+        g_overlayTextFont = io.Fonts->AddFontFromFileTTF(bundledFontPath.c_str(), sizePixels);
+    }
+    if (!g_overlayTextFont && usePath != systemFallbackFontPath) {
+        g_overlayTextFont = io.Fonts->AddFontFromFileTTF(systemFallbackFontPath.c_str(), sizePixels);
     }
     if (!g_overlayTextFont) {
         g_overlayTextFont = io.Fonts->AddFontDefault();
@@ -7954,9 +7972,10 @@ static ImFont* NB_SafeAddFontFromFileTTF(ImFontAtlas* atlas, const char* path, f
     return font;
 }
 
-void LoadNinjabrainFont(ImFontAtlas* atlas, const std::string& customFontPath, float scaleFactor) {
+void LoadNinjabrainFont(ImFontAtlas* atlas, const NinjabrainOverlayConfig& overlay, float scaleFactor) {
     if (!atlas) return;
-    const float nbSize = 64.0f * scaleFactor;
+    const float requestedFontSize = (overlay.fontSize > 1.0f) ? overlay.fontSize : 56.0f;
+    const float nbSize = requestedFontSize * scaleFactor;
 
     ImFontConfig fontCfg;
     fontCfg.OversampleH = 1;
@@ -7971,8 +7990,38 @@ void LoadNinjabrainFont(ImFontAtlas* atlas, const std::string& customFontPath, f
         return p;
     };
 
-    if (!customFontPath.empty()) {
-        std::string resolved = resolvePath(customFontPath);
+    auto tryFontResource = [&](int resourceId) -> bool {
+        HMODULE hModule = NULL;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)&LoadNinjabrainFont, &hModule);
+        if (!hModule) return false;
+
+        HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(resourceId), RT_RCDATA);
+        if (!hResource) return false;
+
+        HGLOBAL hData = LoadResource(hModule, hResource);
+        DWORD dataSize = hData ? SizeofResource(hModule, hResource) : 0;
+        const void* rawData = hData ? LockResource(hData) : nullptr;
+        if (!rawData || dataSize == 0) return false;
+
+        void* buffer = IM_ALLOC(dataSize);
+        if (!buffer) return false;
+
+        memcpy(buffer, rawData, dataSize);
+        fontCfg.FontDataOwnedByAtlas = true;
+        if (ImFont* f = atlas->AddFontFromMemoryTTF(buffer, (int)dataSize, nbSize, &fontCfg)) {
+            g_ninjabrainFont = f;
+            g_ninjabrainFontSize = nbSize;
+            return true;
+        }
+
+        fontCfg.FontDataOwnedByAtlas = false;
+        IM_FREE(buffer);
+        return false;
+    };
+
+    if (!overlay.customFontPath.empty()) {
+        std::string resolved = resolvePath(overlay.customFontPath);
         if (NB_IsFontStable(resolved, nbSize)) {
             if (ImFont* f = NB_SafeAddFontFromFileTTF(atlas, resolved.c_str(), nbSize, &fontCfg)) {
                 g_ninjabrainFont     = f;
@@ -7982,37 +8031,22 @@ void LoadNinjabrainFont(ImFontAtlas* atlas, const std::string& customFontPath, f
         }
     }
 
-    // Try the embedded Minecraft TTF resource
-    HMODULE hModule = NULL;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                       (LPCWSTR)&LoadNinjabrainFont, &hModule);
-    if (hModule) {
-        HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_MINECRAFT_FONT), RT_RCDATA);
-        if (hResource) {
-            HGLOBAL hData    = LoadResource(hModule, hResource);
-            DWORD   dataSize = hData ? SizeofResource(hModule, hResource) : 0;
-            const void* rawData = hData ? LockResource(hData) : nullptr;
-            if (rawData && dataSize > 0) {
-                void* buf = IM_ALLOC(dataSize);
-                if (buf) {
-                    memcpy(buf, rawData, dataSize);
-                    fontCfg.FontDataOwnedByAtlas = true;
-                    if (ImFont* f = atlas->AddFontFromMemoryTTF(buf, (int)dataSize, nbSize, &fontCfg)) {
-                        g_ninjabrainFont     = f;
-                        g_ninjabrainFontSize = nbSize;
-                        return;
-                    }
-                    IM_FREE(buf);
-                }
-            }
+    std::string resolvedBundledDefault = resolvePath(ConfigDefaults::CONFIG_FONT_PATH);
+    if (NB_IsFontStable(resolvedBundledDefault, nbSize)) {
+        if (ImFont* f = NB_SafeAddFontFromFileTTF(atlas, resolvedBundledDefault.c_str(), nbSize, &fontCfg)) {
+            g_ninjabrainFont = f;
+            g_ninjabrainFontSize = nbSize;
+            return;
         }
     }
 
-    // Arial fallback
-    const std::string& arial = ConfigDefaults::CONFIG_FONT_PATH;
-    if (NB_IsFontStable(arial, nbSize)) {
-        if (ImFont* f = NB_SafeAddFontFromFileTTF(atlas, arial.c_str(), nbSize, &fontCfg)) {
-            g_ninjabrainFont     = f;
+    if (tryFontResource(IDR_OPENSANS_FONT)) return;
+    if (tryFontResource(IDR_MINECRAFT_FONT)) return;
+
+    const std::string& fallbackFont = ConfigDefaults::CONFIG_FALLBACK_FONT_PATH;
+    if (NB_IsFontStable(fallbackFont, nbSize)) {
+        if (ImFont* f = NB_SafeAddFontFromFileTTF(atlas, fallbackFont.c_str(), nbSize, &fontCfg)) {
+            g_ninjabrainFont = f;
             g_ninjabrainFontSize = nbSize;
             return;
         }
@@ -8022,50 +8056,22 @@ void LoadNinjabrainFont(ImFontAtlas* atlas, const std::string& customFontPath, f
     g_ninjabrainFontSize = nbSize;
 }
 
-static ImU32 NBGradientColor(double probability)
+static ImU32 ColorToImU32(const Color& color)
 {
-    
-    if (probability < 0.0) probability = 0.0;
-    if (probability > 1.0) probability = 1.0;
+    return IM_COL32((int)(color.r * 255.0f), (int)(color.g * 255.0f), (int)(color.b * 255.0f), (int)(color.a * 255.0f));
+}
 
-    static const float H[3] = { 0.0000f, 0.1667f, 0.3731f };
-    static const float S[3] = { 1.0f,    1.0f,    1.0f    };
-    static const float V[3] = { 1.0f,    1.0f,    0.808f  };
+static ImU32 NBGradientColor(double probability, const Color& lowColor, const Color& midColor, const Color& highColor)
+{
+    const float clampedProbability = (float)std::clamp(probability, 0.0, 1.0);
+    const Color& startColor = (clampedProbability < 0.5f) ? lowColor : midColor;
+    const Color& endColor = (clampedProbability < 0.5f) ? midColor : highColor;
+    const float t = (clampedProbability < 0.5f) ? (clampedProbability * 2.0f) : ((clampedProbability - 0.5f) * 2.0f);
 
-    float p = (float)probability * 2.0f; 
-    int i0 = (int)std::floor(p);
-    int i1 = (int)std::ceil(p);
-    
-    if (i0 < 0) i0 = 0; if (i0 > 2) i0 = 2;
-    if (i1 < 0) i1 = 0; if (i1 > 2) i1 = 2;
-    float t = p - std::floor(p); 
-
-    
-    float h0 = H[i0], h1 = H[i1];
-    float h;
-    if (std::abs(h1 - h0) < 0.5f) {
-        h = h1 * t + h0 * (1.0f - t);
-    } else {
-        if (h1 < h0) h1 += 1.0f; else h0 += 1.0f;
-        h = h1 * t + h0 * (1.0f - t);
-        if (h > 1.0f) h -= 1.0f;
-    }
-    float s = S[i1] * t + S[i0] * (1.0f - t);
-    float v = V[i1] * t + V[i0] * (1.0f - t);
-
-    // HSV -> RGB
-    float c = v * s;
-    float x = c * (1.0f - std::abs(std::fmod(h * 6.0f, 2.0f) - 1.0f));
-    float m = v - c;
-    float r, g, b;
-    int sector = (int)(h * 6.0f);
-    if      (sector == 0) { r=c; g=x; b=0; }
-    else if (sector == 1) { r=x; g=c; b=0; }
-    else if (sector == 2) { r=0; g=c; b=x; }
-    else if (sector == 3) { r=0; g=x; b=c; }
-    else if (sector == 4) { r=x; g=0; b=c; }
-    else                  { r=c; g=0; b=x; }
-    return IM_COL32((int)((r+m)*255.0f), (int)((g+m)*255.0f), (int)((b+m)*255.0f), 255);
+    const float red = startColor.r + (endColor.r - startColor.r) * t;
+    const float green = startColor.g + (endColor.g - startColor.g) * t;
+    const float blue = startColor.b + (endColor.b - startColor.b) * t;
+    return IM_COL32((int)(red * 255.0f), (int)(green * 255.0f), (int)(blue * 255.0f), 255);
 }
 
 
@@ -8086,6 +8092,13 @@ static void EnsureBoatIconsLoaded()
         Log("EnsureBoatIconsLoaded: failed to get module handle");
         return;
     }
+
+    PixelStoreStateGuard pixelStoreGuard;
+    GLint previousTexture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+    // Boat icons are UI resources and should never inherit the global image-loader flip state.
+    stbi_set_flip_vertically_on_load_thread(0);
 
     // Resource IDs for boat icons
     const int resourceIds[4] = {
@@ -8129,17 +8142,21 @@ static void EnsureBoatIconsLoaded()
         
         // Create OpenGL texture
         glGenTextures(1, &s_boatIconTex[i]);
-        glBindTexture(GL_TEXTURE_2D, s_boatIconTex[i]);
+        BindTextureDirect(GL_TEXTURE_2D, s_boatIconTex[i]);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
         stbi_image_free(px);
         Log("Loaded boat icon from resource ID: " + std::to_string(resourceIds[i]));
         
     }
-    glBindTexture(GL_TEXTURE_2D, 0);
+    BindTextureDirect(GL_TEXTURE_2D, previousTexture);
 }
 #include <algorithm>
 
@@ -8162,22 +8179,35 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     if (!HasNinjabrainOverlayContent(nb, data, &hasTriangulation, &showForBoat)) return;
 
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
-    const float scale  = (nb.overlayScale > 0.01f) ? nb.overlayScale : 1.0f;
-    const float fs    = GetNinjabrainFontSize() * scale;
+    const float scale = (nb.overlayScale > 0.01f) ? nb.overlayScale : 1.0f;
+    const float fs = GetNinjabrainFontSize() * scale;
     if (!font || !font->IsLoaded()) font = ImGui::GetFont();
-    const float lineH = fs; 
+    const float lineH = fs;
     const float colGap = nb.colSpacing * scale;
     const int outlineR = nb.outlineWidth;
-    const float padX   = (8.0f + (float)outlineR) * scale;
-    const float padY   = (8.0f + (float)outlineR) * scale;
-    const float rowH   = lineH + nb.rowSpacing * scale;
+    const float contentPadX = (8.0f + (float)outlineR) * scale;
+    const float sidePadX = (std::max)(0.0f, nb.sidePadding) * scale;
+    const float rowH = lineH + nb.rowSpacing * scale;
 
-    auto toImU32 = [](const Color& c) -> ImU32 {
-        return IM_COL32((int)(c.r*255),(int)(c.g*255),(int)(c.b*255),(int)(c.a*255));
+    auto applyAlpha = [](ImU32 col, float alphaMul) -> ImU32 {
+        if (alphaMul >= 1.0f) return col;
+        if (alphaMul <= 0.0f) return col & 0x00FFFFFF;
+        int a = (int)(((col >> 24) & 0xFF) * alphaMul);
+        if (a < 0) a = 0;
+        if (a > 255) a = 255;
+        return (col & 0x00FFFFFF) | ((ImU32)a << 24);
     };
-    ImU32 textCol     = toImU32(nb.textColor);    
-    ImU32 dataCol     = toImU32(nb.dataColor);     
-    ImU32 negCoordCol = toImU32(nb.negCoordColor); 
+    auto colorWithAlpha = [&](const Color& color, float alphaMul) -> ImU32 {
+        return applyAlpha(ColorToImU32(color), alphaMul);
+    };
+
+    const Color bodyTextColor = (data.resultType == "DIVINE") ? nb.divineTextColor : nb.dataColor;
+    ImU32 textCol = ColorToImU32(nb.textColor);
+    ImU32 dataCol = ColorToImU32(bodyTextColor);
+    ImU32 titleTextCol = ColorToImU32(nb.titleTextColor);
+    ImU32 throwsTextCol = ColorToImU32(nb.throwsTextColor);
+    ImU32 versionTextCol = ColorToImU32(nb.versionTextColor);
+    ImU32 negCoordCol = ColorToImU32(nb.subpixelNegativeColor);
 
     int boatIconIdx = 0;
     if      (data.boatState == "MEASURING") boatIconIdx = 1;
@@ -8187,20 +8217,23 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
 
     struct SegRow {
         char  text[80];
-        ImU32 color;       
-        ImU32 part1Color;  
-        float xOffset;     
+        ImU32 color;
+        ImU32 part1Color;
+        float xOffset;
     };
+    static constexpr int kRenderedRowLimit = (int)kNinjabrainPredictionLimit + 1;
     struct Col {
         char   header[32];
-        SegRow rows[4];  
+        SegRow rows[kRenderedRowLimit];
         float  width;
         int    rowCount;
         bool   isBoatIcon;
     };
     Col cols[10];
     int numCols = 0;
-    int numRows = (nb.shownPredictions >= 1 && nb.shownPredictions <= 3) ? nb.shownPredictions : 1;
+    int numRows = nb.shownPredictions;
+    if (numRows < 1) numRows = 1;
+    if (numRows > (int)kNinjabrainPredictionLimit) numRows = (int)kNinjabrainPredictionLimit;
     if (data.predictionCount > 0 && numRows > data.predictionCount) numRows = data.predictionCount;
     const bool boatOnly = !hasTriangulation && showForBoat;
     if (boatOnly) numRows = 1;
@@ -8211,7 +8244,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         c.isBoatIcon = false;
         snprintf(c.header, sizeof(c.header), "%s", hdr);
         c.width = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, c.header).x;
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < kRenderedRowLimit; i++) {
             c.rows[i].text[0]    = 0;
             c.rows[i].color      = dataCol;
             c.rows[i].part1Color = textCol;
@@ -8220,6 +8253,19 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     };
     auto measureRow = [&](Col& c, int ri) {
         c.width = (std::max)(c.width, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, c.rows[ri].text).x);
+    };
+    auto getCoordsDisplay = [&](int chunkX, int chunkZ, int& displayX, int& displayZ) {
+        if (nb.coordsDisplay == "chunk") {
+            displayX = chunkX;
+            displayZ = chunkZ;
+            return;
+        }
+        displayX = chunkX * 16 + 4;
+        displayZ = chunkZ * 16 + 4;
+    };
+    auto getNetherDisplay = [&](int chunkX, int chunkZ, int& displayX, int& displayZ) {
+        displayX = chunkX * 2;
+        displayZ = chunkZ * 2;
     };
 
     for (const auto& colCfg : nb.columns) {
@@ -8233,17 +8279,18 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         if (colCfg.id == "coords") {
             initCol(c, colCfg.header.c_str(), numRows);
             for (int i = 0; i < numRows; i++) {
-                int bx = data.predictions[i].chunkX * 16 + 4;
-                int bz = data.predictions[i].chunkZ * 16 + 4;
-                snprintf(c.rows[i].text, sizeof(c.rows[i].text), "(%d, %d)", bx, bz);
-                if (nb.negCoordColorEnabled && (bx < 0) != (bz < 0)) {
+                int rawX = 0;
+                int rawZ = 0;
+                getCoordsDisplay(data.predictions[i].chunkX, data.predictions[i].chunkZ, rawX, rawZ);
+                snprintf(c.rows[i].text, sizeof(c.rows[i].text), "(%d, %d)", rawX, rawZ);
+                if (nb.negCoordColorEnabled && (rawX < 0) != (rawZ < 0)) {
                     char part1[32];
-                    snprintf(part1, sizeof(part1), "(%d, ", bx);
+                    snprintf(part1, sizeof(part1), "(%d, ", rawX);
                     c.rows[i].xOffset    = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, part1).x;
-                    c.rows[i].part1Color = (bx < 0) ? negCoordCol : dataCol;
-                    c.rows[i].color      = (bz < 0) ? negCoordCol : dataCol;
+                    c.rows[i].part1Color = (rawX < 0) ? negCoordCol : dataCol;
+                    c.rows[i].color      = (rawZ < 0) ? negCoordCol : dataCol;
                 } else {
-                    bool anyNeg = nb.negCoordColorEnabled && (bx < 0 || bz < 0);
+                    bool anyNeg = nb.negCoordColorEnabled && (rawX < 0 || rawZ < 0);
                     c.rows[i].color   = anyNeg ? negCoordCol : dataCol;
                     c.rows[i].xOffset = 0;
                 }
@@ -8253,23 +8300,25 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             initCol(c, colCfg.header.c_str(), numRows);
             for (int i = 0; i < numRows; i++) {
                 snprintf(c.rows[i].text, sizeof(c.rows[i].text), "%.1f%%", data.predictions[i].certainty * 100.0);
-                c.rows[i].color = NBGradientColor(data.predictions[i].certainty);
+                c.rows[i].color = NBGradientColor(data.predictions[i].certainty, nb.certaintyLowColor,
+                                                 nb.certaintyMidColor, nb.certaintyColor);
                 measureRow(c, i);
             }
         } else if (colCfg.id == "distance") {
             initCol(c, colCfg.header.c_str(), numRows);
             for (int i = 0; i < numRows; i++) {
-                snprintf(c.rows[i].text, sizeof(c.rows[i].text), "%.0f", data.predictions[i].overworldDistance);
+                const double distanceValue = data.predictions[i].overworldDistance;
+                const int displayDistance = (int)std::round(distanceValue);
+                snprintf(c.rows[i].text, sizeof(c.rows[i].text), "%d", displayDistance);
                 c.rows[i].color = dataCol;
                 measureRow(c, i);
             }
         } else if (colCfg.id == "nether") {
             initCol(c, colCfg.header.c_str(), numRows);
             for (int i = 0; i < numRows; i++) {
-                int bx = data.predictions[i].chunkX * 16 + 4;
-                int bz = data.predictions[i].chunkZ * 16 + 4;
-                int nx = (int)std::round(bx / 8.0);
-                int nz = (int)std::round(bz / 8.0);
+                int nx = 0;
+                int nz = 0;
+                getNetherDisplay(data.predictions[i].chunkX, data.predictions[i].chunkZ, nx, nz);
                 snprintf(c.rows[i].text, sizeof(c.rows[i].text), "(%d, %d)", nx, nz);
                 if (nb.negCoordColorEnabled && (nx < 0) != (nz < 0)) {
                     char part1[32];
@@ -8292,8 +8341,8 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                 c.rows[0].color = textCol;
                 measureRow(c, 0);
             } else {
-                int totalRows = numRows + 1;
-                if (totalRows > 4) totalRows = 4;
+                int totalRows = numRows + (nb.showThrowDetails ? 0 : 1);
+                if (totalRows > kRenderedRowLimit) totalRows = kRenderedRowLimit;
                 initCol(c, colCfg.header.c_str(), totalRows);
 
                 for (int i = 0; i < numRows; i++) {
@@ -8313,7 +8362,8 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                             c.rows[i].part1Color = dataCol;
                             snprintf(c.rows[i].text, sizeof(c.rows[i].text),
                                      "%.2f (%s%.1f)", data.predictionAngles[i].actualAngle, arrow, absNc);
-                            c.rows[i].color = NBGradientColor(1.0 - absNc / 180.0);
+                            c.rows[i].color = NBGradientColor(1.0 - absNc / 180.0, nb.certaintyLowColor,
+                                                             nb.certaintyMidColor, nb.certaintyColor);
                         }
                     } else {
                         snprintf(c.rows[i].text, sizeof(c.rows[i].text), "%.2f", data.lastAngle);
@@ -8323,39 +8373,31 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                     measureRow(c, i);
                 }
 
-                // NB 1.5.2+: correctionIncrements is in the API JSON directly.
-                // NB 1.5.1:  correctionIncrements not in API — recover via
-                //             round(correction / change_per_click)
-                //             where change_per_click depends on the user's NB adjustment type.
-                {
+                if (!nb.showThrowDetails) {
                     int infoIdx = numRows;
                     auto& ft = data.throws[data.eyeCount - 1];
 
-                    const ImU32 posCol = IM_COL32(0x75, 0xCC, 0x6C, 255); // ADJUSTMENT_POSITIVE
-                    const ImU32 negCol = IM_COL32(0xCC, 0x6E, 0x72, 255); // ADJUSTMENT_NEGATIVE
+                    const ImU32 posCol = ColorToImU32(nb.subpixelPositiveColor);
+                    const ImU32 negCol = ColorToImU32(nb.subpixelNegativeColor);
 
                     int correctionIncrements = 0;
                     if (ft.hasCorrectionIncrements) {
-                        // NB 1.5.2+: integer directly from API
                         correctionIncrements = ft.correctionIncrements;
                     } else {
-                        // NB 1.5.1: integer counter accumulated in client (±1 per SSE event).
-                        // No division, no floating point error, spam-safe.
                         correctionIncrements = data.correctionIncrements151;
                     }
 
                     if (correctionIncrements == 0) {
-                        snprintf(c.rows[infoIdx].text, sizeof(c.rows[infoIdx].text),
-                                 "%.2f", ft.angleWithoutCorrection);
-                        c.rows[infoIdx].color   = textCol;
+                        snprintf(c.rows[infoIdx].text, sizeof(c.rows[infoIdx].text), "%.2f", ft.angleWithoutCorrection);
+                        c.rows[infoIdx].color = textCol;
                         c.rows[infoIdx].xOffset = 0;
                     } else {
                         char basePart[32];
                         snprintf(basePart, sizeof(basePart), "%.2f ", ft.angleWithoutCorrection);
-                        c.rows[infoIdx].xOffset    = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, basePart).x;
+                        c.rows[infoIdx].xOffset = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, basePart).x;
                         c.rows[infoIdx].part1Color = textCol;
-                        snprintf(c.rows[infoIdx].text, sizeof(c.rows[infoIdx].text),
-                                 "%.2f %+d", ft.angleWithoutCorrection, correctionIncrements);
+                        snprintf(c.rows[infoIdx].text, sizeof(c.rows[infoIdx].text), "%.2f %+d", ft.angleWithoutCorrection,
+                                 correctionIncrements);
                         c.rows[infoIdx].color = (correctionIncrements > 0) ? posCol : negCol;
                     }
                     measureRow(c, infoIdx);
@@ -8385,34 +8427,13 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
 
     int maxRows = 0;
     for (int ci = 0; ci < numCols; ci++) maxRows = (std::max)(maxRows, cols[ci].rowCount);
-    float totalW = padX * 2.0f;
-    for (int ci = 0; ci < numCols; ci++) totalW += cols[ci].width + (ci < numCols - 1 ? colGap : 0.0f);
-    float totalH = padY * 2.0f + rowH * (float)(maxRows) + lineH;
 
     int sw = GetCachedWindowWidth();
     int sh = GetCachedWindowHeight();
     const auto& geo = g_lastFrameGeometry;
 
-    int oxI = 0, oyI = 0;
-    GetRelativeCoordsForImageWithViewport(
-        nb.relativeTo, nb.x, nb.y,
-        (int)totalW, (int)totalH,
-        geo.finalX, geo.finalY, geo.finalW, geo.finalH,
-        sw, sh,
-        oxI, oyI);
-    float ox = (float)oxI, oy = (float)oyI;
-
-    if (nb.bgEnabled) {
-        ImU32 bgCol = IM_COL32(0, 0, 0, (int)(nb.bgOpacity * nb.overlayOpacity * 255));
-        drawList->AddRectFilled(ImVec2(ox, oy), ImVec2(ox + totalW, oy + totalH), bgCol, 3.0f);
-    }
-
     const float opacityMul = (nb.overlayOpacity < 1.0f) ? nb.overlayOpacity : 1.0f;
-    auto applyOpacity = [&](ImU32 col) -> ImU32 {
-        if (opacityMul >= 1.0f) return col;
-        int a = (int)(((col >> 24) & 0xFF) * opacityMul);
-        return (col & 0x00FFFFFF) | ((ImU32)a << 24);
-    };
+    auto applyOpacity = [&](ImU32 col) -> ImU32 { return applyAlpha(col, opacityMul); };
 
     auto drawText = [&](float sz, ImVec2 pos, ImU32 col, const char* txt) {
         col = applyOpacity(col);
@@ -8433,54 +8454,225 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         drawList->AddText(font, sz, pos, col, txt);
     };
 
-    float cx = ox + padX;
-    for (int ci = 0; ci < numCols; ci++) {
+    auto calculateOrigin = [&](float totalW, float totalH, float& ox, float& oy) {
+        int oxI = 0;
+        int oyI = 0;
+        GetRelativeCoordsForImageWithViewport(nb.relativeTo, nb.x, nb.y, (int)totalW, (int)totalH, geo.finalX, geo.finalY,
+                                             geo.finalW, geo.finalH, sw, sh, oxI, oyI);
+        ox = (float)oxI;
+        oy = (float)oyI;
+    };
+
+    float topTableW = 0.0f;
+    for (int ci = 0; ci < numCols; ++ci) {
+        topTableW += cols[ci].width;
+        if (ci < numCols - 1) topTableW += colGap;
+    }
+
+    const bool showDetailPanel = nb.showThrowDetails;
+    const bool showTitleBar = false;
+    const float headerBandPadY = (std::max)(2.0f, nb.rowSpacing * 0.4f) * scale;
+    const float headerBandH = lineH + headerBandPadY * 2.0f;
+    const float titleBarH = showTitleBar ? headerBandH : 0.0f;
+    const float cellPadX = 8.0f * scale;
+    const float sectionGap = showDetailPanel ? 4.0f * scale : 0.0f;
+    const float sectionHeaderH = showDetailPanel ? (lineH + 2.0f * scale) : 0.0f;
+    const float detailHeaderH = showDetailPanel ? (lineH + 6.0f * scale) : 0.0f;
+    const float detailRowH = showDetailPanel ? (lineH + 6.0f * scale) : 0.0f;
+
+    struct DetailField {
+        const char* header;
+        char value[64];
+        ImU32 color;
+    };
+    DetailField detailFields[4] = {
+        { "x", "-", throwsTextCol },
+        { "z", "-", throwsTextCol },
+        { "Angle", "-", throwsTextCol },
+        { "Error", "-", throwsTextCol },
+    };
+
+    if (data.hasPlayerPos) {
+        snprintf(detailFields[0].value, sizeof(detailFields[0].value), "%.2f", data.playerX);
+        snprintf(detailFields[1].value, sizeof(detailFields[1].value), "%.2f", data.playerZ);
+        detailFields[0].color = throwsTextCol;
+        detailFields[1].color = throwsTextCol;
+    }
+    if (data.eyeCount > 0) {
+        snprintf(detailFields[2].value, sizeof(detailFields[2].value), "%.2f", data.lastAngleWithoutCorrection);
+        snprintf(detailFields[3].value, sizeof(detailFields[3].value), "%.4f", data.lastThrowError);
+        detailFields[2].color = throwsTextCol;
+        detailFields[3].color = throwsTextCol;
+    }
+
+    float detailMinColWidths[4] = {};
+    float detailTableMinW = 0.0f;
+    if (showDetailPanel) {
+        for (int fi = 0; fi < 4; ++fi) {
+            float headerW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, detailFields[fi].header).x;
+            float valueW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, detailFields[fi].value).x;
+            detailMinColWidths[fi] = (std::max)(headerW, valueW) + cellPadX * 2.0f;
+            detailTableMinW += detailMinColWidths[fi];
+        }
+    }
+
+    const char* throwSectionTitle = "Ender eye throws";
+    const float throwSectionTitleW = showDetailPanel ? font->CalcTextSizeA(fs, FLT_MAX, 0.0f, throwSectionTitle).x : 0.0f;
+    float contentW = topTableW;
+    if (showDetailPanel) {
+        contentW = (std::max)(contentW, detailTableMinW);
+        contentW = (std::max)(contentW, throwSectionTitleW);
+    }
+
+    float detailColWidths[4] = {};
+    if (showDetailPanel) {
+        const float detailExtraPerCol = (std::max)(0.0f, contentW - detailTableMinW) / 4.0f;
+        for (int fi = 0; fi < 4; ++fi) {
+            detailColWidths[fi] = detailMinColWidths[fi] + detailExtraPerCol;
+        }
+    }
+
+    float totalW = (contentPadX + sidePadX) * 2.0f + contentW;
+    float totalH = titleBarH + headerBandH + rowH * (float)maxRows;
+    if (showDetailPanel) totalH += sectionGap + sectionHeaderH + detailHeaderH + detailRowH;
+
+    float ox = 0.0f;
+    float oy = 0.0f;
+    calculateOrigin(totalW, totalH, ox, oy);
+
+    const float surfaceAlpha = (nb.bgEnabled ? nb.bgOpacity * nb.overlayOpacity : nb.overlayOpacity);
+    const ImU32 panelBgCol = colorWithAlpha(nb.bgColor, nb.bgEnabled ? nb.bgOpacity * nb.overlayOpacity : 0.0f);
+    const ImU32 titleBarCol = colorWithAlpha(nb.chromeColor, surfaceAlpha);
+    const ImU32 borderCol = colorWithAlpha(nb.headerDividerColor, nb.overlayOpacity);
+    const ImU32 dividerCol = colorWithAlpha(nb.dividerColor, nb.overlayOpacity);
+    const ImU32 headerDividerCol = colorWithAlpha(nb.headerDividerColor, nb.overlayOpacity);
+    const ImU32 headerFillCol = colorWithAlpha(nb.headerFillColor, surfaceAlpha);
+    const ImU32 throwsBgCol = colorWithAlpha(nb.throwsBackgroundColor, surfaceAlpha);
+
+    if (nb.bgEnabled) {
+        drawList->AddRectFilled(ImVec2(ox, oy), ImVec2(ox + totalW, oy + totalH), panelBgCol, nb.cornerRadius);
+    }
+
+    if (nb.borderWidth > 0) {
+        drawList->AddRect(ImVec2(ox, oy), ImVec2(ox + totalW, oy + totalH), borderCol, nb.cornerRadius, 0,
+                          (float)nb.borderWidth);
+    }
+
+    const float surfaceLeft = ox;
+    const float surfaceRight = ox + totalW;
+    const float contentAreaX = ox + contentPadX + sidePadX;
+    const float contentAreaRight = surfaceRight - contentPadX - sidePadX;
+    const float tableX = contentAreaX + (contentW - topTableW) * 0.5f;
+    const float titleBarY = oy;
+    const float headerBandY = oy + titleBarH;
+    const float headerY = headerBandY + (headerBandH - lineH) * 0.5f;
+    const float headerSeparatorY = headerBandY + headerBandH;
+
+    if (showTitleBar) {
+        const float titleTextY = titleBarY + (titleBarH - lineH) * 0.5f;
+        const std::string versionLabel = "v" + GetToolscreenVersionString();
+        const float versionTextW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, versionLabel.c_str()).x;
+        drawList->AddRectFilled(ImVec2(surfaceLeft, titleBarY), ImVec2(surfaceRight, titleBarY + titleBarH),
+                                titleBarCol, nb.cornerRadius, ImDrawFlags_RoundCornersTop);
+        drawText(fs, ImVec2(contentAreaX, titleTextY), titleTextCol, nb.titleText.c_str());
+        if (versionTextW + 12.0f * scale < contentAreaRight - contentAreaX) {
+            drawText(fs, ImVec2(contentAreaRight - versionTextW, titleTextY), versionTextCol, versionLabel.c_str());
+        }
+        if (nb.showSeparators) {
+            drawList->AddLine(ImVec2(surfaceLeft, titleBarY + titleBarH), ImVec2(surfaceRight, titleBarY + titleBarH),
+                              headerDividerCol, 1.0f);
+        }
+    }
+
+    drawList->AddRectFilled(ImVec2(surfaceLeft, headerBandY), ImVec2(surfaceRight, headerSeparatorY), headerFillCol,
+                            showTitleBar ? 0.0f : nb.cornerRadius,
+                            showTitleBar ? 0 : ImDrawFlags_RoundCornersTop);
+
+    float cx = tableX;
+    for (int ci = 0; ci < numCols; ++ci) {
         Col& col = cols[ci];
-        float hw = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, col.header).x;
-        drawText(fs, ImVec2(cx + (col.width - hw) / 2.0f, oy + padY), textCol, col.header);
+        float headerW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, col.header).x;
+        drawText(fs, ImVec2(cx + (col.width - headerW) * 0.5f, headerY), textCol, col.header);
+        cx += col.width + (ci < numCols - 1 ? colGap : 0.0f);
+    }
 
-        for (int ri = 0; ri < col.rowCount; ri++) {
-            float ry = oy + padY + rowH * (float)(ri + 1);
+    drawList->AddLine(ImVec2(surfaceLeft, headerSeparatorY), ImVec2(surfaceRight, headerSeparatorY), headerDividerCol, 1.0f);
 
-            if (col.isBoatIcon && ri == 0) {
-                float iconSz = rowH;
-                float ix = cx + (col.width - iconSz) / 2.0f;
-                ImU32 iconTint = IM_COL32(255, 255, 255, (int)(255 * opacityMul));
-                drawList->AddImage(
-                    (ImTextureID)(intptr_t)boatTex,
-                    ImVec2(ix, ry), ImVec2(ix + iconSz, ry + iconSz),
-                    ImVec2(0, 1), ImVec2(1, 0),
-                    iconTint
-                );
-            } else {
-                
-                float rw = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, col.rows[ri].text).x;
-                float rx = cx + (col.width - rw) / 2.0f;
-                if (col.rows[ri].xOffset > 0.0f) {
-                    const char* full = col.rows[ri].text;
-                   
-                    const char* splitPtr = full;
-                    while (*splitPtr) {
-                        const char* next = splitPtr + 1;
-                        while ((*next & 0xC0) == 0x80) ++next;
-                        float w = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, full, splitPtr).x;
-                        if (w >= col.rows[ri].xOffset) break;
-                        splitPtr = next;
-                    }
-    
-                    char part1[64] = {};
-                    int len1 = (int)(splitPtr - full);
-                    if (len1 > 63) len1 = 63;
-                    memcpy(part1, full, len1);
-                    drawText(fs, ImVec2(rx, ry), col.rows[ri].part1Color, part1);
+    for (int ri = 0; ri < maxRows; ++ri) {
+        const float rowTop = headerSeparatorY + rowH * (float)ri;
+        const float rowBottom = rowTop + rowH;
+        const float rowTextY = rowTop + (rowH - lineH) * 0.5f;
 
-                    float part1W = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, part1).x;
-                    drawText(fs, ImVec2(rx + part1W, ry), col.rows[ri].color, splitPtr);
+        drawList->AddLine(ImVec2(surfaceLeft, rowBottom), ImVec2(surfaceRight, rowBottom), dividerCol, 1.0f);
+
+        float rowX = tableX;
+        for (int ci = 0; ci < numCols; ++ci) {
+            Col& col = cols[ci];
+            if (ri < col.rowCount) {
+                if (col.isBoatIcon && ri == 0) {
+                    float iconSz = rowH;
+                    float ix = rowX + (col.width - iconSz) / 2.0f;
+                    ImU32 iconTint = IM_COL32(255, 255, 255, (int)(255 * opacityMul));
+                    drawList->AddImage((ImTextureID)(intptr_t)boatTex, ImVec2(ix, rowTextY), ImVec2(ix + iconSz, rowTextY + iconSz),
+                                       ImVec2(0, 0), ImVec2(1, 1), iconTint);
                 } else {
-                    drawText(fs, ImVec2(rx, ry), col.rows[ri].color, col.rows[ri].text);
+                    float rw = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, col.rows[ri].text).x;
+                    float rx = rowX + (col.width - rw) / 2.0f;
+                    if (col.rows[ri].xOffset > 0.0f) {
+                        const char* full = col.rows[ri].text;
+                        const char* splitPtr = full;
+                        while (*splitPtr) {
+                            const char* next = splitPtr + 1;
+                            while ((*next & 0xC0) == 0x80) ++next;
+                            float w = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, full, splitPtr).x;
+                            if (w >= col.rows[ri].xOffset) break;
+                            splitPtr = next;
+                        }
+
+                        char part1[64] = {};
+                        int len1 = (int)(splitPtr - full);
+                        if (len1 > 63) len1 = 63;
+                        memcpy(part1, full, len1);
+                        drawText(fs, ImVec2(rx, rowTextY), col.rows[ri].part1Color, part1);
+
+                        float part1W = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, part1).x;
+                        drawText(fs, ImVec2(rx + part1W, rowTextY), col.rows[ri].color, splitPtr);
+                    } else {
+                        drawText(fs, ImVec2(rx, rowTextY), col.rows[ri].color, col.rows[ri].text);
+                    }
                 }
             }
+            rowX += col.width + (ci < numCols - 1 ? colGap : 0.0f);
         }
-        cx += col.width + colGap;
     }
+
+    if (showDetailPanel) {
+        const float sectionY = oy + titleBarH + headerBandH + rowH * (float)maxRows + sectionGap;
+        const float sectionTextY = sectionY + (sectionHeaderH - lineH) * 0.5f;
+        const float detailTableX = contentAreaX;
+        const float detailHeaderY = sectionY + sectionHeaderH;
+        const float detailRowY = detailHeaderY + detailHeaderH;
+
+        drawList->AddRectFilled(ImVec2(surfaceLeft, sectionY), ImVec2(surfaceRight, detailRowY), headerFillCol, 0.0f);
+        drawList->AddRectFilled(ImVec2(surfaceLeft, detailRowY), ImVec2(surfaceRight, detailRowY + detailRowH), throwsBgCol, 0.0f);
+        drawText(fs, ImVec2(detailTableX, sectionTextY), dataCol, throwSectionTitle);
+
+        float detailX = detailTableX;
+        for (int fi = 0; fi < 4; ++fi) {
+            float headerW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, detailFields[fi].header).x;
+            drawText(fs, ImVec2(detailX + (detailColWidths[fi] - headerW) * 0.5f, detailHeaderY + (detailHeaderH - lineH) * 0.5f),
+                     textCol, detailFields[fi].header);
+
+            float valueW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, detailFields[fi].value).x;
+            drawText(fs, ImVec2(detailX + (detailColWidths[fi] - valueW) * 0.5f, detailRowY + (detailRowH - lineH) * 0.5f),
+                     detailFields[fi].color, detailFields[fi].value);
+            detailX += detailColWidths[fi];
+        }
+
+        drawList->AddLine(ImVec2(surfaceLeft, sectionY), ImVec2(surfaceRight, sectionY), headerDividerCol, 1.0f);
+        drawList->AddLine(ImVec2(surfaceLeft, detailRowY), ImVec2(surfaceRight, detailRowY), headerDividerCol, 1.0f);
+        drawList->AddLine(ImVec2(surfaceLeft, detailRowY + detailRowH), ImVec2(surfaceRight, detailRowY + detailRowH),
+                          dividerCol, 1.0f);
+    }
+
 }

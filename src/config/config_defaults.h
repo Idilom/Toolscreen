@@ -197,7 +197,8 @@ inline std::vector<DWORD> GetDefaultKeyRebindsToggleHotkey() { return {}; }
 
 constexpr int DEFAULT_CONFIG_VERSION = 5;
 inline const std::string CONFIG_DEFAULT_MODE = "Fullscreen";
-inline const std::string CONFIG_FONT_PATH = R"(c:\Windows\Fonts\Arial.ttf)";
+inline const std::string CONFIG_FONT_PATH = "fonts/OpenSans-Regular.ttf";
+inline const std::string CONFIG_FALLBACK_FONT_PATH = R"(c:\Windows\Fonts\Arial.ttf)";
 inline const std::string CONFIG_LANG = "en";
 constexpr int CONFIG_FPS_LIMIT = 0;
 constexpr int CONFIG_FPS_LIMIT_SLEEP_THRESHOLD = 1000;

@@ -75,9 +75,22 @@ constexpr std::array<const char*, 5> kLocalizedFallbackFontPaths = {
     "c:\\Windows\\Fonts\\simsun.ttc",
 };
 
-bool FontFileExists(const char* path) {
-    const DWORD attrs = GetFileAttributesA(path);
-    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
+std::string ResolveRuntimeFontPath(const std::string& path) {
+    if (path.empty()) return path;
+
+    const std::filesystem::path configuredPath = std::filesystem::u8path(path);
+    if (configuredPath.is_absolute() || g_toolscreenPath.empty()) {
+        return path;
+    }
+
+    return WideToUtf8((std::filesystem::path(g_toolscreenPath) / configuredPath).wstring());
+}
+
+bool FontFileExists(const std::string& path) {
+    if (path.empty()) return false;
+
+    std::error_code error;
+    return std::filesystem::is_regular_file(std::filesystem::u8path(ResolveRuntimeFontPath(path)), error);
 }
 
 std::string GetConfiguredGuiFontPath() {
@@ -85,9 +98,10 @@ std::string GetConfiguredGuiFontPath() {
 }
 
 bool IsStableGuiFontPath(const std::string& path, float size) {
-    if (path.empty()) return false;
+    const std::string resolvedPath = ResolveRuntimeFontPath(path);
+    if (resolvedPath.empty()) return false;
     ImFontAtlas testAtlas;
-    ImFont* font = testAtlas.AddFontFromFileTTF(path.c_str(), size);
+    ImFont* font = testAtlas.AddFontFromFileTTF(resolvedPath.c_str(), size);
     if (!font) return false;
     return testAtlas.Build();
 }
@@ -130,9 +144,12 @@ static std::string ResolveGuiFontPath(float baseFontSize) {
         return s_guiFontPathResolutionCache.resolvedFontPath;
     }
 
-    std::string resolvedFontPath = requestedFontPath;
+    std::string resolvedFontPath = ResolveRuntimeFontPath(requestedFontPath);
     if (!IsStableGuiFontPath(resolvedFontPath, baseFontSize)) {
-        resolvedFontPath = ConfigDefaults::CONFIG_FONT_PATH;
+        const std::string bundledFontPath = ResolveRuntimeFontPath(ConfigDefaults::CONFIG_FONT_PATH);
+        resolvedFontPath = IsStableGuiFontPath(bundledFontPath, baseFontSize)
+            ? bundledFontPath
+            : ConfigDefaults::CONFIG_FALLBACK_FONT_PATH;
     }
 
     s_guiFontPathResolutionCache.valid = true;
@@ -144,9 +161,21 @@ static std::string ResolveGuiFontPath(float baseFontSize) {
 
 static ImFont* AddFontWithFallback(ImFontAtlas* atlas, const std::string& fontPath, float size, const ImFontConfig* config = nullptr,
                                    const ImWchar* glyphRanges = nullptr) {
-    ImFont* font = atlas->AddFontFromFileTTF(fontPath.c_str(), size, config, glyphRanges);
-    if (!font && fontPath != ConfigDefaults::CONFIG_FONT_PATH) {
-        font = atlas->AddFontFromFileTTF(ConfigDefaults::CONFIG_FONT_PATH.c_str(), size, config, glyphRanges);
+    const std::string resolvedFontPath = ResolveRuntimeFontPath(fontPath);
+    std::string fallbackFontPath = ResolveRuntimeFontPath(ConfigDefaults::CONFIG_FONT_PATH);
+    if (!FontFileExists(fallbackFontPath)) {
+        fallbackFontPath = ConfigDefaults::CONFIG_FALLBACK_FONT_PATH;
+    }
+
+    ImFont* font = nullptr;
+    if (!resolvedFontPath.empty()) {
+        font = atlas->AddFontFromFileTTF(resolvedFontPath.c_str(), size, config, glyphRanges);
+    }
+    if (!font && resolvedFontPath != fallbackFontPath) {
+        font = atlas->AddFontFromFileTTF(fallbackFontPath.c_str(), size, config, glyphRanges);
+    }
+    if (!font && fallbackFontPath != ConfigDefaults::CONFIG_FALLBACK_FONT_PATH) {
+        font = atlas->AddFontFromFileTTF(ConfigDefaults::CONFIG_FALLBACK_FONT_PATH.c_str(), size, config, glyphRanges);
     }
     return font;
 }
@@ -195,7 +224,8 @@ static void RebuildImGuiFontAtlas(float scaleFactor, float keyboardPrimarySize, 
     InitializeOverlayTextFont(resolvedFontPath, 16.0f, scaleFactor);
 
     auto nbSnap = GetConfigSnapshot();
-    LoadNinjabrainFont(io.Fonts, nbSnap ? nbSnap->ninjabrainOverlay.customFontPath : std::string(), scaleFactor);
+    const NinjabrainOverlayConfig defaultNinjabrainOverlay;
+    LoadNinjabrainFont(io.Fonts, nbSnap ? nbSnap->ninjabrainOverlay : defaultNinjabrainOverlay, scaleFactor);
 
     io.Fonts->Build();
 

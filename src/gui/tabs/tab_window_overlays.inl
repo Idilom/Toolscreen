@@ -418,6 +418,90 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         auto& nb = g_config.ninjabrainOverlay;
         bool changed = false;
 
+        if (nb.layoutStyle != "compact") {
+            nb.layoutStyle = "compact";
+            changed = true;
+        }
+
+        auto setNinjabrainColumns = [](NinjabrainOverlayConfig& overlay, std::initializer_list<NinjabrainColumn> columns) {
+            overlay.columns.assign(columns.begin(), columns.end());
+        };
+
+        auto applyNinjabrainPreset = [&](const char* presetId) {
+            const bool enabled = nb.enabled;
+            const int x = nb.x;
+            const int y = nb.y;
+            const std::string relativeTo = nb.relativeTo;
+            const std::string customFontPath = nb.customFontPath;
+            const std::string apiBaseUrl = nb.apiBaseUrl;
+            const std::vector<std::string> allowedModes = nb.allowedModes;
+            const bool onlyOnMyScreen = nb.onlyOnMyScreen;
+            const bool onlyOnObs = nb.onlyOnObs;
+
+            NinjabrainOverlayConfig preset;
+            preset.layoutStyle = "compact";
+            const std::string presetName = presetId;
+            bool preserveCurrentPlacement = true;
+            if (presetName == "compact") {
+                preset.showTitleBar = false;
+                preset.fontSize = 64.0f;
+                preset.bgEnabled = true;
+                preset.bgOpacity = 0.6f;
+                preset.bgColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+                preset.showThrowDetails = false;
+                preset.showSeparators = false;
+                preset.showRowStripes = false;
+                preset.borderWidth = 0;
+                preset.cornerRadius = 3.0f;
+                preset.headerFillColor = preset.bgColor;
+                preset.coordsDisplay = "block";
+                preset.borderColor = { 0.31f, 0.34f, 0.38f, 1.0f };
+                preset.dividerColor = { 0.24f, 0.27f, 0.31f, 1.0f };
+                preset.headerDividerColor = preset.borderColor;
+                preset.textColor = { 0.549f, 0.549f, 0.549f, 1.0f };
+                preset.dataColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+                preset.titleTextColor = preset.dataColor;
+                preset.throwsTextColor = preset.dataColor;
+                preset.divineTextColor = preset.dataColor;
+                preset.versionTextColor = preset.textColor;
+                preset.throwsBackgroundColor = preset.bgColor;
+                preset.negCoordColorEnabled = false;
+                preset.certaintyMidColor = { 1.0f, 0.74f, 0.17f, 1.0f };
+                preset.certaintyLowColor = { 0.97f, 0.20f, 0.20f, 1.0f };
+                preset.subpixelPositiveColor = { 0.459f, 0.800f, 0.424f, 1.0f };
+                preset.subpixelNegativeColor = { 0.800f, 0.431f, 0.447f, 1.0f };
+                preset.outlineWidth = 1;
+                preset.overlayScale = 0.30f;
+                preset.shownPredictions = 1;
+                preset.rowSpacing = 10.0f;
+                preset.colSpacing = 30.0f;
+                preset.sidePadding = 0.0f;
+                setNinjabrainColumns(preset,
+                                     { { "coords", "Location", true },
+                                       { "certainty", "%", true },
+                                       { "distance", "Dist.", true },
+                                       { "nether", "Nether", true },
+                                       { "angle", "Angle", true },
+                                       { "boat", "Boat", false } });
+            } else if (presetName == "classic_151") {
+                preserveCurrentPlacement = false;
+            }
+
+            if (preserveCurrentPlacement) {
+                preset.enabled = enabled;
+                preset.x = x;
+                preset.y = y;
+                preset.relativeTo = relativeTo;
+                preset.customFontPath = customFontPath;
+                preset.apiBaseUrl = apiBaseUrl;
+                preset.allowedModes = allowedModes;
+                preset.onlyOnMyScreen = onlyOnMyScreen;
+                preset.onlyOnObs = onlyOnObs;
+            }
+            nb = std::move(preset);
+            g_eyeZoomFontNeedsReload.store(true);
+        };
+
         static char nbFontBuf[512] = {};
         static bool nbFontBufInit = false;
         if (!nbFontBufInit || std::string(nbFontBuf) != nb.customFontPath) {
@@ -503,6 +587,19 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         }
         ImGui::Spacing();
 
+        ImGui::SeparatorText(trc("ninjabrain.presets"));
+        ImGui::TextDisabled("%s", trc("ninjabrain.presets_hint"));
+        if (ImGui::Button(trc("ninjabrain.preset_compact"))) {
+            applyNinjabrainPreset("compact");
+            changed = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(trc("ninjabrain.preset_classic_151"))) {
+            applyNinjabrainPreset("classic_151");
+            changed = true;
+        }
+        ImGui::Spacing();
+
         // Rendering
         ImGui::SeparatorText(trc("ninjabrain.rendering"));
 
@@ -533,6 +630,15 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         if (Spinner("##nb_y", &nb.y)) changed = true;
         ImGui::NextColumn();
 
+        ImGui::Text("%s", trc("ninjabrain.font_size"));
+        ImGui::NextColumn();
+        ImGui::SetNextItemWidth(250);
+        if (ImGui::SliderFloat("##nbFontSize", &nb.fontSize, 24.0f, 96.0f, "%.0f px")) {
+            changed = true;
+            g_eyeZoomFontNeedsReload.store(true);
+        }
+        ImGui::NextColumn();
+
         ImGui::Text("%s", trc("ninjabrain.scale"));
         ImGui::NextColumn();
         float scalePercent = nb.overlayScale * 100.0f;
@@ -540,6 +646,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         if (ImGui::SliderFloat("##nbScale", &scalePercent, 5.0f, 100.0f, "%.0f%%")) {
             nb.overlayScale = scalePercent / 100.0f; changed = true;
         }
+        ImGui::NextColumn();
+
+        ImGui::Text("%s", trc("ninjabrain.side_padding"));
+        ImGui::NextColumn();
+        ImGui::SetNextItemWidth(250);
+        if (ImGui::SliderFloat("##nbSidePadding", &nb.sidePadding, 0.0f, 80.0f, "%.0f px")) changed = true;
         ImGui::NextColumn();
 
         ImGui::Text("%s", trc("ninjabrain.relative_to"));
@@ -561,8 +673,23 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         // Appearance
         ImGui::SeparatorText(trc("ninjabrain.appearance"));
 
+        if (ImGui::Checkbox((std::string(trc("ninjabrain.show_throw_details")) + "##nb").c_str(), &nb.showThrowDetails)) changed = true;
+        if (ImGui::Checkbox((std::string(trc("ninjabrain.show_separators")) + "##nb").c_str(), &nb.showSeparators)) changed = true;
+        if (ImGui::Checkbox((std::string(trc("ninjabrain.show_row_stripes")) + "##nb").c_str(), &nb.showRowStripes)) changed = true;
+
         ImGui::Columns(2, "nb_appear_cols", false);
         ImGui::SetColumnWidth(0, 120);
+
+        ImGui::Text("%s", trc("ninjabrain.border_width"));
+        ImGui::NextColumn();
+        if (Spinner("##nbBorderWidth", &nb.borderWidth, 1, 0, 8)) changed = true;
+        ImGui::NextColumn();
+
+        ImGui::Text("%s", trc("ninjabrain.corner_radius"));
+        ImGui::NextColumn();
+        ImGui::SetNextItemWidth(250);
+        if (ImGui::SliderFloat("##nbCornerRadius", &nb.cornerRadius, 0.0f, 16.0f, "%.0f px")) changed = true;
+        ImGui::NextColumn();
 
         ImGui::Text("%s", trc("ninjabrain.outline_width"));
         ImGui::NextColumn();
@@ -590,15 +717,23 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         if (ImGui::SliderFloat((std::string(trc("ninjabrain.bg_opacity")) + "##nb").c_str(), &nb.bgOpacity, 0.f, 1.f, "%.2f")) changed = true;
         ImGui::EndDisabled();
 
-        // Colors
         ImGui::SeparatorText(trc("ninjabrain.colors"));
 
-        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.color_headers")) + "##nb").c_str(), &nb.textColor.r))  changed = true;
-        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.color_data")) + "##nb").c_str(), &nb.dataColor.r))  changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.header_fill")) + "##nb").c_str(), &nb.headerFillColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.bg_color")) + "##nb").c_str(), &nb.bgColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.throws_background")) + "##nb").c_str(), &nb.throwsBackgroundColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.divider_color")) + "##nb").c_str(), &nb.dividerColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.header_divider_color")) + "##nb").c_str(), &nb.headerDividerColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.color_data")) + "##nb").c_str(), &nb.dataColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.throws_text_color")) + "##nb").c_str(), &nb.throwsTextColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.divine_text_color")) + "##nb").c_str(), &nb.divineTextColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.color_headers")) + "##nb").c_str(), &nb.textColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.subpixel_positive_color")) + "##nb").c_str(), &nb.subpixelPositiveColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.subpixel_negative_color")) + "##nb").c_str(), &nb.subpixelNegativeColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.certainty_color")) + "##nb").c_str(), &nb.certaintyColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.certainty_mid_color")) + "##nb").c_str(), &nb.certaintyMidColor.r)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.certainty_low_color")) + "##nb").c_str(), &nb.certaintyLowColor.r)) changed = true;
         if (ImGui::Checkbox((std::string(trc("ninjabrain.color_neg_coords")) + "##nb").c_str(), &nb.negCoordColorEnabled)) changed = true;
-        if (nb.negCoordColorEnabled) {
-            if (ImGui::ColorEdit3((std::string(trc("ninjabrain.color_neg_coords_value")) + "##nb").c_str(), &nb.negCoordColor.r)) changed = true;
-        }
         ImGui::Spacing();
 
         // Eye Throws Overlay
@@ -620,7 +755,38 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         ImGui::SetColumnWidth(0, 120);
         ImGui::Text("%s", trc("ninjabrain.predictions"));
         ImGui::NextColumn();
-        if (Spinner("##nbShownPreds", &nb.shownPredictions, 1, 1, 3)) changed = true;
+        if (Spinner("##nbShownPreds", &nb.shownPredictions, 1, 1, 5)) changed = true;
+        ImGui::NextColumn();
+        ImGui::Text("%s", trc("ninjabrain.coords_display"));
+        ImGui::NextColumn();
+        const char* currentCoordsDisplay = (nb.coordsDisplay == "chunk")
+            ? trc("ninjabrain.coords_display_chunk")
+            : trc("ninjabrain.coords_display_block");
+        ImGui::SetNextItemWidth(180.0f);
+        if (ImGui::BeginCombo("##nbCoordsDisplay", currentCoordsDisplay)) {
+            const bool coordsAreChunk = (nb.coordsDisplay == "chunk");
+            if (ImGui::Selectable(trc("ninjabrain.coords_display_block"), !coordsAreChunk)) {
+                nb.coordsDisplay = "block";
+                for (auto& col : nb.columns) {
+                    if (col.id == "coords" && (col.header.empty() || col.header == "Chunk")) {
+                        col.header = "Location";
+                        break;
+                    }
+                }
+                changed = true;
+            }
+            if (ImGui::Selectable(trc("ninjabrain.coords_display_chunk"), coordsAreChunk)) {
+                nb.coordsDisplay = "chunk";
+                for (auto& col : nb.columns) {
+                    if (col.id == "coords" && (col.header.empty() || col.header == "Location")) {
+                        col.header = "Chunk";
+                        break;
+                    }
+                }
+                changed = true;
+            }
+            ImGui::EndCombo();
+        }
         ImGui::NextColumn();
         ImGui::Text("%s", trc("ninjabrain.row_spacing"));
         ImGui::NextColumn();

@@ -1506,6 +1506,30 @@ void PopulateRichConfigFixture() {
     g_config.appearance.customColors["WindowBg"] = { 0.1f, 0.11f, 0.12f, 1.0f };
     g_config.appearance.customColors["Header"] = { 0.8f, 0.4f, 0.2f, 1.0f };
 
+    g_config.ninjabrainOverlay.showTitleBar = true;
+    g_config.ninjabrainOverlay.titleText = "Stronghold Helper";
+    g_config.ninjabrainOverlay.bgEnabled = true;
+    g_config.ninjabrainOverlay.bgOpacity = 0.83f;
+    g_config.ninjabrainOverlay.bgColor = { 0.11f, 0.12f, 0.13f, 1.0f };
+    g_config.ninjabrainOverlay.chromeColor = { 0.18f, 0.19f, 0.21f, 1.0f };
+    g_config.ninjabrainOverlay.headerFillColor = { 0.22f, 0.23f, 0.25f, 1.0f };
+    g_config.ninjabrainOverlay.throwsBackgroundColor = { 0.14f, 0.15f, 0.16f, 1.0f };
+    g_config.ninjabrainOverlay.dividerColor = { 0.30f, 0.31f, 0.33f, 1.0f };
+    g_config.ninjabrainOverlay.headerDividerColor = { 0.42f, 0.43f, 0.45f, 1.0f };
+    g_config.ninjabrainOverlay.dataColor = { 0.91f, 0.92f, 0.93f, 1.0f };
+    g_config.ninjabrainOverlay.titleTextColor = { 0.97f, 0.98f, 0.99f, 1.0f };
+    g_config.ninjabrainOverlay.throwsTextColor = { 0.84f, 0.85f, 0.86f, 1.0f };
+    g_config.ninjabrainOverlay.divineTextColor = { 0.74f, 0.82f, 0.91f, 1.0f };
+    g_config.ninjabrainOverlay.versionTextColor = { 0.65f, 0.66f, 0.67f, 1.0f };
+    g_config.ninjabrainOverlay.textColor = { 0.55f, 0.56f, 0.57f, 1.0f };
+    g_config.ninjabrainOverlay.certaintyColor = { 0.12f, 0.98f, 0.34f, 1.0f };
+    g_config.ninjabrainOverlay.certaintyMidColor = { 0.94f, 0.88f, 0.20f, 1.0f };
+    g_config.ninjabrainOverlay.certaintyLowColor = { 0.82f, 0.18f, 0.22f, 1.0f };
+    g_config.ninjabrainOverlay.subpixelPositiveColor = { 0.32f, 0.87f, 0.41f, 1.0f };
+    g_config.ninjabrainOverlay.subpixelNegativeColor = { 0.81f, 0.34f, 0.37f, 1.0f };
+    g_config.ninjabrainOverlay.negCoordColorEnabled = false;
+    g_config.ninjabrainOverlay.sidePadding = 18.0f;
+
     MirrorConfig verifierMirror;
     verifierMirror.name = kVerifierMirrorName;
     verifierMirror.captureWidth = 73;
@@ -2012,6 +2036,30 @@ void VerifyRichWindowOverlays() {
     Expect(overlay.forceUpdate, "Expected window overlay forceUpdate to roundtrip.");
     Expect(overlay.enableInteraction, "Expected window overlay enableInteraction to roundtrip.");
     Expect(overlay.border.enabled, "Expected window overlay border.enabled to roundtrip.");
+
+    const NinjabrainOverlayConfig& ninjabrain = g_config.ninjabrainOverlay;
+    Expect(ninjabrain.showTitleBar, "Expected Ninjabrain overlay showTitleBar to roundtrip.");
+    Expect(ninjabrain.titleText == "Stronghold Helper", "Expected Ninjabrain overlay title text to roundtrip.");
+    ExpectFloatNear(ninjabrain.bgOpacity, 0.83f, "Expected Ninjabrain overlay bgOpacity to roundtrip.");
+    ExpectColorNear(ninjabrain.bgColor, { 0.11f, 0.12f, 0.13f, 1.0f }, "Expected Ninjabrain result background color to roundtrip.");
+    ExpectColorNear(ninjabrain.chromeColor, { 0.18f, 0.19f, 0.21f, 1.0f }, "Expected Ninjabrain title bar color to roundtrip.");
+    ExpectColorNear(ninjabrain.headerFillColor, { 0.22f, 0.23f, 0.25f, 1.0f }, "Expected Ninjabrain header background color to roundtrip.");
+    ExpectColorNear(ninjabrain.throwsBackgroundColor, { 0.14f, 0.15f, 0.16f, 1.0f }, "Expected Ninjabrain throws background color to roundtrip.");
+    ExpectColorNear(ninjabrain.dividerColor, { 0.30f, 0.31f, 0.33f, 1.0f }, "Expected Ninjabrain divider color to roundtrip.");
+    ExpectColorNear(ninjabrain.headerDividerColor, { 0.42f, 0.43f, 0.45f, 1.0f }, "Expected Ninjabrain header divider color to roundtrip.");
+    ExpectColorNear(ninjabrain.dataColor, { 0.91f, 0.92f, 0.93f, 1.0f }, "Expected Ninjabrain body text color to roundtrip.");
+    ExpectColorNear(ninjabrain.titleTextColor, { 0.97f, 0.98f, 0.99f, 1.0f }, "Expected Ninjabrain title text color to roundtrip.");
+    ExpectColorNear(ninjabrain.throwsTextColor, { 0.84f, 0.85f, 0.86f, 1.0f }, "Expected Ninjabrain throws text color to roundtrip.");
+    ExpectColorNear(ninjabrain.divineTextColor, { 0.74f, 0.82f, 0.91f, 1.0f }, "Expected Ninjabrain divine text color to roundtrip.");
+    ExpectColorNear(ninjabrain.versionTextColor, { 0.65f, 0.66f, 0.67f, 1.0f }, "Expected Ninjabrain version text color to roundtrip.");
+    ExpectColorNear(ninjabrain.textColor, { 0.55f, 0.56f, 0.57f, 1.0f }, "Expected Ninjabrain header text color to roundtrip.");
+    ExpectColorNear(ninjabrain.certaintyColor, { 0.12f, 0.98f, 0.34f, 1.0f }, "Expected Ninjabrain certainty high color to roundtrip.");
+    ExpectColorNear(ninjabrain.certaintyMidColor, { 0.94f, 0.88f, 0.20f, 1.0f }, "Expected Ninjabrain certainty mid color to roundtrip.");
+    ExpectColorNear(ninjabrain.certaintyLowColor, { 0.82f, 0.18f, 0.22f, 1.0f }, "Expected Ninjabrain certainty low color to roundtrip.");
+    ExpectColorNear(ninjabrain.subpixelPositiveColor, { 0.32f, 0.87f, 0.41f, 1.0f }, "Expected Ninjabrain subpixel positive color to roundtrip.");
+    ExpectColorNear(ninjabrain.subpixelNegativeColor, { 0.81f, 0.34f, 0.37f, 1.0f }, "Expected Ninjabrain subpixel negative color to roundtrip.");
+    Expect(!ninjabrain.negCoordColorEnabled, "Expected Ninjabrain negative coordinate tint toggle to roundtrip.");
+    ExpectFloatNear(ninjabrain.sidePadding, 18.0f, "Expected Ninjabrain sidePadding to roundtrip.");
 }
 
 void VerifyRichBrowserOverlays() {

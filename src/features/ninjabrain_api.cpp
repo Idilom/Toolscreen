@@ -188,6 +188,7 @@ void ApplyNinjabrainStrongholdEvent(
                 currentThrow.angle = throwJson.value("angle", 0.0);
                 currentThrow.angleWithoutCorrection = throwJson.value("angleWithoutCorrection", currentThrow.angle);
                 currentThrow.correction = throwJson.value("correction", 0.0);
+                currentThrow.error = throwJson.value("error", currentThrow.correction);
                 currentThrow.type = throwJson.value("type", "NORMAL");
 
                 const auto correctionIncrements = throwJson.find("correctionIncrements");
@@ -219,7 +220,9 @@ void ApplyNinjabrainStrongholdEvent(
             next.lastAngle = lastThrow.angle;
             next.lastAngleWithoutCorrection = lastThrow.angleWithoutCorrection;
             next.lastCorrection = lastThrow.correction;
+            next.lastThrowError = lastThrow.error;
             next.hasCorrection = std::abs(next.lastCorrection) > 1e-9;
+            next.hasThrowError = std::abs(next.lastThrowError) > 1e-9;
 
             if (next.eyeCount >= 2) {
                 next.prevAngle = next.throws[next.eyeCount - 2].angle;

@@ -572,6 +572,7 @@ TOOLSCREEN_TEST(stronghold_event_parses_prediction_details) {
                     "angle":30.0,
                     "angleWithoutCorrection":29.75,
                     "correction":0.25,
+                    "error":0.0025,
                     "type":"NORMAL",
                     "correctionIncrements":1
                 },
@@ -579,6 +580,7 @@ TOOLSCREEN_TEST(stronghold_event_parses_prediction_details) {
                     "angle":35.5,
                     "angleWithoutCorrection":35.25,
                     "correction":0.25,
+                    "error":-0.0004,
                     "type":"PROJECTED",
                     "correctionIncrements":2
                 }
@@ -607,6 +609,8 @@ TOOLSCREEN_TEST(stronghold_event_parses_prediction_details) {
     RequireEqual(data.eyeCount, 2, "eyeCount");
     RequireNear(data.lastAngle, 35.5, 1e-9, "lastAngle");
     RequireNear(data.lastAngleWithoutCorrection, 35.25, 1e-9, "lastAngleWithoutCorrection");
+    RequireNear(data.lastCorrection, 0.25, 1e-9, "lastCorrection");
+    RequireNear(data.lastThrowError, -0.0004, 1e-9, "lastThrowError");
     RequireNear(data.prevAngle, 30.0, 1e-9, "prevAngle");
     REQUIRE(data.hasAngleChange);
     REQUIRE(data.hasNetherAngle);
@@ -649,6 +653,7 @@ TOOLSCREEN_TEST(stronghold_increment_recovery_without_correction_increments) {
 
     RequireEqual(data.eyeCount, 1, "eyeCount");
     RequireEqual(data.correctionIncrements151, 4, "correctionIncrements151");
+    RequireNear(data.lastThrowError, 0.5, 1e-9, "lastThrowError fallback");
     REQUIRE(!data.throws[0].hasCorrectionIncrements);
 }
 

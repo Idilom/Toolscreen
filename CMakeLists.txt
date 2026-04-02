@@ -326,10 +326,15 @@ add_library(${PROJECT_NAME} SHARED
 )
 
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/fonts"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/Minecraft.ttf"
-        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/Minecraft.ttf"
-    COMMENT "Copying Minecraft.ttf to output directory"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/assets/fonts/Minecraft.ttf"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/fonts/Minecraft.ttf"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/assets/fonts/OpenSans-Regular.ttf"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/fonts/OpenSans-Regular.ttf"
+    COMMENT "Copying bundled fonts to output directory"
 )
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" PREFIX "Source Files" FILES
