@@ -509,7 +509,17 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
             nbFontBufInit = true;
         }
 
-        changed |= ImGui::Checkbox((std::string(trc("ninjabrain.enable")) + "##nb").c_str(), &nb.enabled);
+        {
+            const bool wasEnabled = nb.enabled;
+            changed |= ImGui::Checkbox((std::string(trc("ninjabrain.enable")) + "##nb").c_str(), &nb.enabled);
+            if (nb.enabled != wasEnabled) {
+                if (nb.enabled) {
+                    StartNinjabrainClient();
+                } else {
+                    StopNinjabrainClient();
+                }
+            }
+        }
 
         if (nb.enabled) {
         ImGui::Spacing();

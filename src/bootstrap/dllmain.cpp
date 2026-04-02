@@ -2506,7 +2506,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         // initialization (locale facets, errno, etc.). CreateThread skips CRT init which
         g_monitorThread = std::thread([]() { FileMonitorThread(nullptr); });
         g_imageMonitorThread = std::thread([]() { ImageMonitorThread(nullptr); });
-        StartNinjabrainClient();
+        if (g_config.ninjabrainOverlay.enabled) {
+            StartNinjabrainClient();
+        }
 
         StartWindowCaptureThread();
         StartBrowserOverlayThread();

@@ -1,8 +1,9 @@
 #pragma once
 
 #include <array>
+#include <functional>
+#include <memory>
 #include <string>
-#include <mutex>
 
 inline constexpr size_t kNinjabrainPredictionLimit = 5;
 inline constexpr size_t kNinjabrainThrowLimit = 8;
@@ -77,5 +78,6 @@ struct NinjabrainData {
     bool hasBoatAngle = false;
 };
 
-extern NinjabrainData g_ninjabrainData;
-extern std::mutex g_ninjabrainDataMutex;
+std::shared_ptr<const NinjabrainData> GetNinjabrainDataSnapshot();
+void PublishNinjabrainData(NinjabrainData data);
+void ModifyNinjabrainData(const std::function<void(NinjabrainData&)>& modifier);

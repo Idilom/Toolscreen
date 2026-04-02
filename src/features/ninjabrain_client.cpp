@@ -14,6 +14,14 @@ namespace {
 std::mutex g_ninjabrainClientMutex;
 NinjabrainApiConnectionTracker g_ninjabrainClientStatus;
 
+bool IsNinjabrainOverlayEnabled() {
+    if (const auto configSnapshot = GetConfigSnapshot()) {
+        return configSnapshot->ninjabrainOverlay.enabled;
+    }
+
+    return g_config.ninjabrainOverlay.enabled;
+}
+
 void LogNinjabrainMessage(const std::string& message) {
     LogCategory("ninjabrain", message);
 }
@@ -36,21 +44,19 @@ std::unique_ptr<NinjabrainApiSession> g_ninjabrainClientSession;
 
 void StartNinjabrainClient() {
     std::lock_guard<std::mutex> lock(g_ninjabrainClientMutex);
-    if (g_ninjabrainClientSession) { return; }
+    if (g_ninjabrainClientSession || !IsNinjabrainOverlayEnabled()) { return; }
 
     const std::string apiBaseUrl = ResolveApiBaseUrl();
 
-    {
-        std::lock_guard<std::mutex> dataLock(g_ninjabrainDataMutex);
-        g_ninjabrainData = NinjabrainData{};
-    }
+    PublishNinjabrainData(NinjabrainData{});
 
     g_ninjabrainClientStatus.Start(apiBaseUrl);
 
     NinjabrainApiSessionCallbacks callbacks;
     callbacks.onStrongholdMessage = [](const std::string& payload) {
-        std::lock_guard<std::mutex> lock(g_ninjabrainDataMutex);
-        ApplyNinjabrainStrongholdEvent(payload, g_ninjabrainData, LogNinjabrainMessage);
+        ModifyNinjabrainData([&](NinjabrainData& data) {
+            ApplyNinjabrainStrongholdEvent(payload, data, LogNinjabrainMessage);
+        });
     };
     callbacks.onStrongholdConnect = []() {
         std::lock_guard<std::mutex> lock(g_ninjabrainClientMutex);
@@ -61,12 +67,14 @@ void StartNinjabrainClient() {
             std::lock_guard<std::mutex> lock(g_ninjabrainClientMutex);
             g_ninjabrainClientStatus.MarkStrongholdDisconnected(error);
         }
-        std::lock_guard<std::mutex> lock(g_ninjabrainDataMutex);
-        ClearNinjabrainStrongholdData(g_ninjabrainData);
+        ModifyNinjabrainData([](NinjabrainData& data) {
+            ClearNinjabrainStrongholdData(data);
+        });
     };
     callbacks.onBoatMessage = [](const std::string& payload) {
-        std::lock_guard<std::mutex> lock(g_ninjabrainDataMutex);
-        ApplyNinjabrainBoatEvent(payload, g_ninjabrainData, LogNinjabrainMessage);
+        ModifyNinjabrainData([&](NinjabrainData& data) {
+            ApplyNinjabrainBoatEvent(payload, data, LogNinjabrainMessage);
+        });
     };
     callbacks.onBoatConnect = []() {
         std::lock_guard<std::mutex> lock(g_ninjabrainClientMutex);
@@ -77,8 +85,9 @@ void StartNinjabrainClient() {
             std::lock_guard<std::mutex> lock(g_ninjabrainClientMutex);
             g_ninjabrainClientStatus.MarkBoatDisconnected(error);
         }
-        std::lock_guard<std::mutex> lock(g_ninjabrainDataMutex);
-        ClearNinjabrainBoatData(g_ninjabrainData);
+        ModifyNinjabrainData([](NinjabrainData& data) {
+            ClearNinjabrainBoatData(data);
+        });
     };
     callbacks.onLog = LogNinjabrainMessage;
 

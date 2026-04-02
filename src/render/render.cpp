@@ -4175,12 +4175,10 @@ static bool ShouldRenderNinjabrainOverlayForRequest(const SameThreadOverlayState
     if (!request.excludeOnlyOnMyScreen && nb.onlyOnObs) { return false; }
     if (!IsNinjabrainOverlayModeAllowed(nb, request.modeId)) { return false; }
 
-    NinjabrainData data;
-    {
-        std::lock_guard<std::mutex> lock(g_ninjabrainDataMutex);
-        data = g_ninjabrainData;
-    }
-    return HasNinjabrainOverlayContent(nb, data);
+    const auto dataSnapshot = GetNinjabrainDataSnapshot();
+    if (!dataSnapshot) { return false; }
+
+    return HasNinjabrainOverlayContent(nb, *dataSnapshot);
 }
 
 static bool HasSameThreadOverlayWork(const SameThreadOverlayState& request, const Config& cfg, bool renderNinjabrainOverlay) {
@@ -8168,11 +8166,10 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
 
     EnsureBoatIconsLoaded();
 
-    NinjabrainData data;
-    {
-        std::lock_guard<std::mutex> lock(g_ninjabrainDataMutex);
-        data = g_ninjabrainData;
-    }
+    const auto dataSnapshot = GetNinjabrainDataSnapshot();
+    if (!dataSnapshot) return;
+
+    const NinjabrainData& data = *dataSnapshot;
 
     bool hasTriangulation = false;
     bool showForBoat = false;
