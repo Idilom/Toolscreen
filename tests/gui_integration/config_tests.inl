@@ -85,6 +85,65 @@ void RunConfigRoundtripDebugSettingsTest(TestRunMode runMode = TestRunMode::Auto
     RunRichConfigRoundtripCase("config_roundtrip_debug_settings", &VerifyRichDebugSettings, runMode);
 }
 
+void RunConfigLoadEmbeddedNinjabrainPresetsTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    const std::filesystem::path root = PrepareCaseDirectory("config_load_embedded_ninjabrain_presets");
+    ResetGlobalTestState(root);
+
+    const std::vector<NinjabrainPresetDefinition> presets = GetEmbeddedNinjabrainPresets();
+    Expect(presets.size() == 2, "Expected two embedded Ninjabrain presets.");
+
+    const auto findPreset = [&](const std::string& presetId) -> const NinjabrainPresetDefinition* {
+     for (const NinjabrainPresetDefinition& preset : presets) {
+         if (preset.id == presetId) {
+          return &preset;
+         }
+     }
+     return nullptr;
+    };
+
+    const NinjabrainPresetDefinition* compactPreset = findPreset("compact");
+    const NinjabrainPresetDefinition* ninjabrainBotPreset = findPreset("ninjabrainbot");
+    Expect(compactPreset != nullptr, "Expected the embedded compact preset to be available.");
+    Expect(ninjabrainBotPreset != nullptr, "Expected the embedded Ninjabrain Bot preset to be available.");
+
+    Expect(compactPreset->translationKey == "ninjabrain.preset_compact",
+        "Expected the compact preset to carry its translation key.");
+    Expect(compactPreset->preserveCurrentPlacement,
+        "Expected the compact preset to preserve placement-specific runtime fields.");
+    Expect(compactPreset->overlay.layoutStyle == "compact",
+        "Expected the compact preset overlay to stay on the compact layout.");
+    Expect(compactPreset->overlay.shownPredictions == 1,
+        "Expected the compact preset to show a single prediction row.");
+    Expect(compactPreset->overlay.columns.size() == 6,
+        "Expected the compact preset to define the legacy six-column layout.");
+    Expect(compactPreset->overlay.columns.front().header == "Location",
+        "Expected the compact preset to rename the coords column header to Location.");
+
+    Expect(ninjabrainBotPreset->translationKey == "ninjabrain.preset_ninjabrainbot",
+        "Expected the Ninjabrain Bot preset to carry its translation key.");
+    Expect(!ninjabrainBotPreset->preserveCurrentPlacement,
+        "Expected the Ninjabrain Bot preset to replace placement-specific runtime fields.");
+        Expect(ninjabrainBotPreset->overlay.titleText == "Ninjabrain Bot",
+            "Expected embedded presets to load directly from config-style ninjabrainOverlay TOML.");
+    Expect(ninjabrainBotPreset->overlay.relativeTo == "topLeftScreen",
+        "Expected the Ninjabrain Bot preset to anchor to the top-left screen corner.");
+    Expect(ninjabrainBotPreset->overlay.x == 0 && ninjabrainBotPreset->overlay.y == 0,
+        "Expected the Ninjabrain Bot preset to reset its position.");
+    Expect(!ninjabrainBotPreset->overlay.fontAntialiasing,
+        "Expected the Ninjabrain Bot preset to disable font antialiasing.");
+    ExpectFloatNear(ninjabrainBotPreset->overlay.informationMessagesMinWidth, 285.0f,
+              "Expected the Ninjabrain Bot preset information-message width to come from TOML.");
+    ExpectFloatNear(ninjabrainBotPreset->overlay.failureMarginLeft, 24.0f,
+              "Expected the Ninjabrain Bot preset failed-result left margin to come from TOML.");
+    Expect(!ninjabrainBotPreset->overlay.onlyOnMyScreen,
+        "Expected the Ninjabrain Bot preset to render outside the local-only path.");
+
+    if (runMode == TestRunMode::Visual) {
+     RunVisualLoop(window, "config-load-embedded-ninjabrain-presets", &RenderInteractiveSettingsFrame);
+    }
+}
+
 void RunConfigLoadMissingRequiredModesTest(TestRunMode runMode = TestRunMode::Automated) {
     RunConfigLoadCase("config_load_missing_required_modes",
                       []() {

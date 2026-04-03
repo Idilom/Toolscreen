@@ -2868,42 +2868,105 @@ bool LoadConfigFromTomlFile(const std::wstring& path, Config& config) {
 
 static std::string s_embeddedConfigCache;
 static bool s_embeddedConfigLoaded = false;
+static std::vector<NinjabrainPresetDefinition> s_embeddedNinjabrainPresetsCache;
+static bool s_embeddedNinjabrainPresetsLoaded = false;
 
-std::string GetEmbeddedDefaultConfigString() {
-    if (s_embeddedConfigLoaded) { return s_embeddedConfigCache; }
-
+static std::string LoadEmbeddedRcDataString(int resourceId, const char* debugName) {
     HMODULE hModule = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>(&GetEmbeddedDefaultConfigString), &hModule)) {
-        Log("ERROR: Failed to get module handle for embedded config");
+                            reinterpret_cast<LPCWSTR>(&LoadEmbeddedRcDataString), &hModule)) {
+        Log(std::string("ERROR: Failed to get module handle for ") + debugName);
         return "";
     }
 
-    HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_DEFAULT_CONFIG), RT_RCDATA);
+    HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(resourceId), RT_RCDATA);
     if (!hResource) {
-        Log("ERROR: Failed to find embedded default.toml resource. Error: " + std::to_string(GetLastError()));
+        Log(std::string("ERROR: Failed to find ") + debugName + " resource. Error: " + std::to_string(GetLastError()));
         return "";
     }
 
     HGLOBAL hData = LoadResource(hModule, hResource);
     if (!hData) {
-        Log("ERROR: Failed to load embedded default.toml resource. Error: " + std::to_string(GetLastError()));
+        Log(std::string("ERROR: Failed to load ") + debugName + " resource. Error: " + std::to_string(GetLastError()));
         return "";
     }
 
-    DWORD size = SizeofResource(hModule, hResource);
+    const DWORD size = SizeofResource(hModule, hResource);
     const char* data = static_cast<const char*>(LockResource(hData));
-
     if (!data || size == 0) {
-        Log("ERROR: Failed to lock embedded default.toml resource or resource is empty");
+        Log(std::string("ERROR: Failed to lock ") + debugName + " resource or resource is empty");
         return "";
     }
 
-    s_embeddedConfigCache = std::string(data, size);
+    return std::string(data, size);
+}
+
+std::string GetEmbeddedDefaultConfigString() {
+    if (s_embeddedConfigLoaded) { return s_embeddedConfigCache; }
+
+    s_embeddedConfigCache = LoadEmbeddedRcDataString(IDR_DEFAULT_CONFIG, "embedded default.toml");
+    if (s_embeddedConfigCache.empty()) {
+        return "";
+    }
     s_embeddedConfigLoaded = true;
 
-    Log("Loaded embedded default.toml (" + std::to_string(size) + " bytes)");
+    Log("Loaded embedded default.toml (" + std::to_string(s_embeddedConfigCache.size()) + " bytes)");
     return s_embeddedConfigCache;
+}
+
+std::vector<NinjabrainPresetDefinition> GetEmbeddedNinjabrainPresets() {
+    if (s_embeddedNinjabrainPresetsLoaded) {
+        return s_embeddedNinjabrainPresetsCache;
+    }
+
+    struct EmbeddedPresetResource {
+        int resourceId;
+        const char* presetId;
+        const char* translationKey;
+        bool preserveCurrentPlacement;
+        const char* debugName;
+    };
+
+    static const EmbeddedPresetResource kPresetResources[] = {
+        { IDR_NINJABRAIN_PRESET_COMPACT, "compact", "ninjabrain.preset_compact", true,
+          "embedded Ninjabrain compact preset" },
+        { IDR_NINJABRAIN_PRESET_NINJABRAINBOT, "ninjabrainbot", "ninjabrain.preset_ninjabrainbot", false,
+          "embedded Ninjabrain Bot preset" },
+    };
+
+    s_embeddedNinjabrainPresetsCache.clear();
+
+    for (const EmbeddedPresetResource& resource : kPresetResources) {
+        const std::string presetToml = LoadEmbeddedRcDataString(resource.resourceId, resource.debugName);
+        if (presetToml.empty()) {
+            continue;
+        }
+
+        try {
+            const toml::table tbl = toml::parse(presetToml);
+            const toml::table* overlayTbl = GetTable(tbl, "ninjabrainOverlay");
+            if (!overlayTbl) {
+                Log(std::string("ERROR: Ninjabrain preset TOML is missing [ninjabrainOverlay]: ") + resource.debugName);
+                continue;
+            }
+
+            NinjabrainPresetDefinition preset;
+            preset.id = resource.presetId;
+            preset.translationKey = resource.translationKey;
+            preset.preserveCurrentPlacement = resource.preserveCurrentPlacement;
+
+            Config presetConfig;
+            ConfigFromToml(tbl, presetConfig);
+            preset.overlay = presetConfig.ninjabrainOverlay;
+
+            s_embeddedNinjabrainPresetsCache.push_back(std::move(preset));
+        } catch (const std::exception& e) {
+            Log(std::string("ERROR: Failed to parse ") + resource.debugName + ": " + e.what());
+        }
+    }
+
+    s_embeddedNinjabrainPresetsLoaded = true;
+    return s_embeddedNinjabrainPresetsCache;
 }
 
 bool LoadEmbeddedDefaultConfig(Config& config) {

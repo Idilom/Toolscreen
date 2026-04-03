@@ -3,6 +3,7 @@
 
 #include "third_party/toml.hpp"
 #include <string>
+#include <vector>
 
 #include "gui/gui.h"
 
@@ -32,6 +33,13 @@ struct KeyRebind;
 struct KeyRebindsConfig;
 struct AppearanceConfig;
 struct Config;
+
+struct NinjabrainPresetDefinition {
+	std::string id;
+	std::string translationKey;
+	bool preserveCurrentPlacement = true;
+	NinjabrainOverlayConfig overlay;
+};
 
 
 toml::array ColorToTomlArray(const Color& color);
@@ -98,6 +106,8 @@ bool LoadConfigFromTomlFile(const std::wstring& path, Config& config);
 
 
 std::string GetEmbeddedDefaultConfigString();
+
+std::vector<NinjabrainPresetDefinition> GetEmbeddedNinjabrainPresets();
 
 bool LoadEmbeddedDefaultConfig(Config& config);
 

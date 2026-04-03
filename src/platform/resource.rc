@@ -86,6 +86,8 @@ IDR_BOAT_RED           RCDATA                  "../assets/images/ninjabrainbot/b
 IDR_NINJABRAIN_INFO_ICON RCDATA                "../assets/images/ninjabrainbot/info_icon.png"
 IDR_NINJABRAIN_LOCK_ICON RCDATA                "../assets/images/ninjabrainbot/lock_icon.png"
 IDR_NINJABRAIN_WARNING_ICON RCDATA             "../assets/images/ninjabrainbot/warning_icon.png"
+IDR_NINJABRAIN_PRESET_COMPACT RCDATA           "../config/ninjabrain_preset_compact.toml"
+IDR_NINJABRAIN_PRESET_NINJABRAINBOT RCDATA     "../config/ninjabrain_preset_ninjabrainbot.toml"
 IDR_MINECRAFT_FONT     RCDATA                  "../assets/fonts/Minecraft.ttf"
 IDR_OPENSANS_FONT      RCDATA                  "../assets/fonts/OpenSans-Regular.ttf"
 #endif    // English (United States) resources

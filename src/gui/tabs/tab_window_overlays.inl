@@ -434,11 +434,9 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
             changed = true;
         }
 
-        auto setNinjabrainColumns = [](NinjabrainOverlayConfig& overlay, std::initializer_list<NinjabrainColumn> columns) {
-            overlay.columns.assign(columns.begin(), columns.end());
-        };
+        const std::vector<NinjabrainPresetDefinition> ninjabrainPresets = GetEmbeddedNinjabrainPresets();
 
-        auto applyNinjabrainPreset = [&](const char* presetId) {
+        auto applyNinjabrainPreset = [&](const NinjabrainPresetDefinition& presetDefinition) {
             const bool enabled = nb.enabled;
             const int x = nb.x;
             const int y = nb.y;
@@ -448,170 +446,9 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
             const std::vector<std::string> allowedModes = nb.allowedModes;
             const bool onlyOnMyScreen = nb.onlyOnMyScreen;
             const bool onlyOnObs = nb.onlyOnObs;
-            auto rgb = [](int r, int g, int b) {
-                return Color{ r / 255.0f, g / 255.0f, b / 255.0f, 1.0f };
-            };
+            NinjabrainOverlayConfig preset = presetDefinition.overlay;
 
-            NinjabrainOverlayConfig preset;
-            preset.layoutStyle = "compact";
-            const std::string presetName = presetId;
-            bool preserveCurrentPlacement = true;
-            if (presetName == "compact") {
-                preset.showTitleBar = false;
-                preset.fontSize = 64.0f;
-                preset.bgEnabled = true;
-                preset.bgOpacity = 0.6f;
-                preset.bgColor = { 0.0f, 0.0f, 0.0f, 1.0f };
-                preset.showThrowDetails = false;
-                preset.showSeparators = false;
-                preset.showRowStripes = false;
-                preset.borderWidth = 0;
-                preset.cornerRadius = 3.0f;
-                preset.headerFillColor = preset.bgColor;
-                preset.coordsDisplay = "block";
-                preset.borderColor = { 0.31f, 0.34f, 0.38f, 1.0f };
-                preset.dividerColor = { 0.24f, 0.27f, 0.31f, 1.0f };
-                preset.headerDividerColor = preset.borderColor;
-                preset.textColor = { 0.549f, 0.549f, 0.549f, 1.0f };
-                preset.dataColor = { 1.0f, 1.0f, 1.0f, 1.0f };
-                preset.titleTextColor = preset.dataColor;
-                preset.throwsTextColor = preset.dataColor;
-                preset.divineTextColor = preset.dataColor;
-                preset.versionTextColor = preset.textColor;
-                preset.throwsBackgroundColor = preset.bgColor;
-                preset.coordPositiveColor = preset.dataColor;
-                preset.coordNegativeColor = { 0.800f, 0.431f, 0.447f, 1.0f };
-                preset.certaintyMidColor = { 1.0f, 0.74f, 0.17f, 1.0f };
-                preset.certaintyLowColor = { 0.97f, 0.20f, 0.20f, 1.0f };
-                preset.subpixelPositiveColor = { 0.459f, 0.800f, 0.424f, 1.0f };
-                preset.subpixelNegativeColor = { 0.800f, 0.431f, 0.447f, 1.0f };
-                preset.outlineWidth = 1;
-                preset.overlayScale = 0.30f;
-                preset.shownPredictions = 1;
-                preset.rowSpacing = 10.0f;
-                preset.colSpacing = 30.0f;
-                preset.sidePadding = 0.0f;
-                setNinjabrainColumns(preset,
-                                     { { "coords", "Location", true },
-                                       { "certainty", "%", true },
-                                       { "distance", "Dist.", true },
-                                       { "nether", "Nether", true },
-                                       { "angle", "Angle", true },
-                                       { "boat", "Boat", false } });
-            } else if (presetName == "classic_151") {
-                preserveCurrentPlacement = false;
-                                preset.enabled = true;
-                                preset.x = 0;
-                                preset.y = 0;
-                                preset.relativeTo = "topLeftScreen";
-                                preset.customFontPath = "fonts/OpenSans-Regular.ttf";
-                                preset.apiBaseUrl = "http://127.0.0.1:52533";
-                                preset.fontSize = 64.0f;
-                                preset.fontAntialiasing = false;
-                                preset.bgEnabled = true;
-                                preset.bgOpacity = 1.0f;
-                                preset.bgColor = rgb(55, 60, 66);
-                                preset.titleText = "Ninjabrain Bot";
-                                preset.showTitleBar = false;
-                                preset.showWindowControls = false;
-                                preset.showThrowDetails = true;
-                                preset.showDirectionToStronghold = true;
-                                preset.staticColumnWidths = true;
-                                preset.showSeparators = true;
-                                preset.showRowStripes = true;
-                                preset.borderWidth = 0;
-                                preset.cornerRadius = 0.0f;
-                                preset.headerFillColor = rgb(45, 50, 56);
-                                preset.coordsDisplay = "chunk";
-                                preset.chromeColor = rgb(46, 51, 61);
-                                preset.borderColor = rgb(71, 74, 79);
-                                preset.dividerColor = rgb(42, 46, 50);
-                                preset.headerDividerColor = rgb(33, 37, 41);
-                                preset.accentColor = rgb(0, 255, 0);
-                                preset.buttonColor = rgb(59, 66, 77);
-                                preset.outlineWidth = 0;
-                                preset.textColor = rgb(229, 229, 229);
-                                preset.dataColor = rgb(255, 255, 255);
-                                preset.titleTextColor = rgb(255, 255, 255);
-                                preset.throwsTextColor = rgb(192, 192, 192);
-                                preset.divineTextColor = rgb(229, 229, 229);
-                                preset.versionTextColor = rgb(194, 194, 194);
-                                preset.throwsBackgroundColor = rgb(51, 56, 61);
-                                preset.coordPositiveColor = rgb(255, 255, 255);
-                                preset.coordNegativeColor = rgb(255, 255, 255);
-                                preset.certaintyColor = rgb(0, 206, 41);
-                                preset.certaintyMidColor = rgb(255, 255, 0);
-                                preset.certaintyLowColor = rgb(255, 0, 0);
-                                preset.subpixelPositiveColor = rgb(117, 204, 108);
-                                preset.subpixelNegativeColor = rgb(204, 110, 114);
-                                preset.allowedModes.clear();
-                                preset.overlayOpacity = 1.0f;
-                                preset.overlayScale = 0.30f;
-                                preset.onlyOnMyScreen = false;
-                                preset.onlyOnObs = false;
-                                preset.showEyeOverlay = true;
-                                preset.shownPredictions = 5;
-                                preset.showAllPreds = false;
-                                preset.angleDisplay = 1;
-                                preset.rowSpacing = 4.0f;
-                                preset.colSpacing = 36.0f;
-                                preset.sidePadding = 0.0f;
-                                preset.sectionLayoutMode = "flow";
-                                preset.contentPaddingTop = 0.0f;
-                                preset.contentPaddingBottom = 0.0f;
-                                preset.resultsMarginLeft = 0.0f;
-                                preset.resultsMarginRight = 0.0f;
-                                preset.resultsMarginTop = 0.0f;
-                                preset.resultsMarginBottom = 0.0f;
-                                preset.resultsHeaderPaddingY = 2.0f;
-                                preset.resultsColumnGap = 0.0f;
-                                preset.resultsAnchor = "topLeft";
-                                preset.resultsOffsetX = 0.0f;
-                                preset.resultsOffsetY = 0.0f;
-                                preset.resultsDrawOrder = 0;
-                                preset.informationMessagesPlacement = "middle";
-                                preset.informationMessagesFontScale = 0.75f;
-                                preset.informationMessagesMinWidth = 285.0f;
-                                preset.informationMessagesMarginLeft = 14.0f;
-                                preset.informationMessagesMarginRight = 0.0f;
-                                preset.informationMessagesMarginTop = 0.0f;
-                                preset.informationMessagesMarginBottom = 18.0f;
-                                preset.informationMessagesIconTextMargin = 24.0f;
-                                preset.informationMessagesIconScale = 1.312669277191162f;
-                                preset.informationMessagesAnchor = "topLeft";
-                                preset.informationMessagesOffsetX = 0.0f;
-                                preset.informationMessagesOffsetY = 0.0f;
-                                preset.informationMessagesDrawOrder = 1;
-                                preset.throwsMarginLeft = 0.0f;
-                                preset.throwsMarginRight = 0.0f;
-                                preset.throwsMarginTop = 0.0f;
-                                preset.throwsMarginBottom = 0.0f;
-                                preset.throwsHeaderPaddingY = 3.0f;
-                                preset.throwsRowPaddingY = 3.0f;
-                                preset.throwsAnchor = "topLeft";
-                                preset.throwsOffsetX = 0.0f;
-                                preset.throwsOffsetY = 0.0f;
-                                preset.throwsDrawOrder = 2;
-                                preset.failureMarginLeft = 24.0f;
-                                preset.failureMarginRight = 48.0f;
-                                preset.failureMarginTop = 20.0f;
-                                preset.failureMarginBottom = 32.0f;
-                                preset.failureLineGap = 64.0f;
-                                preset.failureAnchor = "topLeft";
-                                preset.failureOffsetX = 0.0f;
-                                preset.failureOffsetY = 0.0f;
-                                preset.failureDrawOrder = 0;
-                                preset.alwaysShowBoat = false;
-                                setNinjabrainColumns(preset,
-                                                                         { { "coords", "Chunk", true, 0 },
-                                                                             { "certainty", "%", true, 0 },
-                                                                             { "distance", "Dist.", true, 0 },
-                                                                             { "nether", "Nether", true, 0 },
-                                                                             { "angle", "Angle", true, 0 },
-                                                                             { "boat", "Boat", false, 0 } });
-            }
-
-            if (preserveCurrentPlacement) {
+            if (presetDefinition.preserveCurrentPlacement) {
                 preset.enabled = enabled;
                 preset.x = x;
                 preset.y = y;
@@ -777,14 +614,15 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
 
         if (ImGui::CollapsingHeader(trc("ninjabrain.presets"), kNinjabrainSectionFlags)) {
             ImGui::TextDisabled("%s", trc("ninjabrain.presets_hint"));
-            if (ImGui::Button(trc("ninjabrain.preset_compact"))) {
-                applyNinjabrainPreset("compact");
-                changed = true;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button(trc("ninjabrain.preset_classic_151"))) {
-                applyNinjabrainPreset("classic_151");
-                changed = true;
+            for (size_t presetIndex = 0; presetIndex < ninjabrainPresets.size(); ++presetIndex) {
+                const NinjabrainPresetDefinition& presetDefinition = ninjabrainPresets[presetIndex];
+                if (presetIndex > 0) {
+                    ImGui::SameLine();
+                }
+                if (ImGui::Button(trc(presetDefinition.translationKey.c_str()))) {
+                    applyNinjabrainPreset(presetDefinition);
+                    changed = true;
+                }
             }
             ImGui::Spacing();
         }

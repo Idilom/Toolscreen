@@ -1,0 +1,44 @@
+[ninjabrainOverlay]
+layoutStyle = 'compact'
+showTitleBar = false
+fontSize = 64.0
+bgEnabled = true
+bgOpacity = 0.6
+bgColor = [ 0, 0, 0 ]
+showThrowDetails = false
+showSeparators = false
+showRowStripes = false
+borderWidth = 0
+cornerRadius = 3.0
+headerFillColor = [ 0, 0, 0 ]
+coordsDisplay = 'block'
+borderColor = [ 79, 87, 97 ]
+dividerColor = [ 61, 69, 79 ]
+headerDividerColor = [ 79, 87, 97 ]
+textColor = [ 140, 140, 140 ]
+dataColor = [ 255, 255, 255 ]
+titleTextColor = [ 255, 255, 255 ]
+throwsTextColor = [ 255, 255, 255 ]
+divineTextColor = [ 255, 255, 255 ]
+versionTextColor = [ 140, 140, 140 ]
+throwsBackgroundColor = [ 0, 0, 0 ]
+coordPositiveColor = [ 255, 255, 255 ]
+coordNegativeColor = [ 204, 110, 114 ]
+certaintyMidColor = [ 255, 189, 43 ]
+certaintyLowColor = [ 247, 51, 51 ]
+subpixelPositiveColor = [ 117, 204, 108 ]
+subpixelNegativeColor = [ 204, 110, 114 ]
+outlineWidth = 1
+overlayScale = 0.30
+shownPredictions = 1
+rowSpacing = 10.0
+colSpacing = 30.0
+sidePadding = 0.0
+columns = [
+    { id = 'coords', header = 'Location', show = true, staticWidth = 0 },
+    { id = 'certainty', header = '%', show = true, staticWidth = 0 },
+    { id = 'distance', header = 'Dist.', show = true, staticWidth = 0 },
+    { id = 'nether', header = 'Nether', show = true, staticWidth = 0 },
+    { id = 'angle', header = 'Angle', show = true, staticWidth = 0 },
+    { id = 'boat', header = 'Boat', show = false, staticWidth = 0 },
+]

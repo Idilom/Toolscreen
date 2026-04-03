@@ -933,6 +933,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-roundtrip-cursors-eyezoom
     config-roundtrip-key-rebinds-appearance
     config-roundtrip-debug-settings
+    config-load-embedded-ninjabrain-presets
     config-load-missing-required-modes
     config-load-invalid-hotkey-mode-references
     config-load-relative-mode-dimensions
