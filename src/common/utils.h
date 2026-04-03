@@ -328,6 +328,7 @@ void InvalidateTrackedGameTextureId(bool clearSwapThread = false);
 bool AcquireLatestLogSession(const std::wstring& logsDirectory, LogSession& outSession);
 void ReleaseLatestLogSession(LogSession& session);
 std::string BuildLogSessionHeader(const LogSession& session);
+bool GetCurrentProcessLogFilePath(const std::wstring& logsDirectory, std::wstring& outLogFilePath);
 
 void StartLogThread(); // Start background log writer thread
 void StopLogThread();  // Stop background log writer thread (flushes first)

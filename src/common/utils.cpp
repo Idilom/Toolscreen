@@ -983,6 +983,31 @@ void ReleaseLatestLogSession(LogSession& session) {
     session = LogSession{};
 }
 
+bool GetCurrentProcessLogFilePath(const std::wstring& logsDirectory, std::wstring& outLogFilePath) {
+    outLogFilePath.clear();
+    if (logsDirectory.empty()) {
+        return false;
+    }
+
+    const DWORD currentProcessId = GetCurrentProcessId();
+    uint64_t currentProcessStartFileTime = 0;
+    if (!GetProcessStartFileTime(currentProcessId, currentProcessStartFileTime)) {
+        return false;
+    }
+
+    for (const LogInstanceInfo& instance : EnumerateLiveLogInstances(logsDirectory)) {
+        if (instance.processId != currentProcessId || instance.processStartFileTime != currentProcessStartFileTime ||
+            instance.logFilePath.empty()) {
+            continue;
+        }
+
+        outLogFilePath = instance.logFilePath;
+        return true;
+    }
+
+    return false;
+}
+
 std::string BuildLogSessionHeader(const LogSession& session) {
     std::ostringstream stream;
     stream << "========================================\n";

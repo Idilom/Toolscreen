@@ -509,6 +509,7 @@ void ResetGlobalTestState(const std::filesystem::path& root) {
     StageBundledFontAssets(root);
 
     g_config = Config();
+    g_sharedConfig = Config();
     g_configIsDirty.store(false, std::memory_order_release);
     g_configLoadFailed.store(false, std::memory_order_release);
     g_configLoaded.store(false, std::memory_order_release);
@@ -1410,6 +1411,7 @@ std::filesystem::path GetCurrentConfigPath() {
 
 void ResetRuntimeStateForReload() {
     g_config = Config();
+    g_sharedConfig = Config();
     g_configIsDirty.store(false, std::memory_order_release);
     g_configLoadFailed.store(false, std::memory_order_release);
     g_configLoaded.store(false, std::memory_order_release);

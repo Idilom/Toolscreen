@@ -17,6 +17,45 @@
 
 static std::atomic<bool> s_isConfigSaving{ false };
 
+struct ActiveProfileSaveState {
+    bool tracked = false;
+    std::string name;
+    ProfileSectionSelection sections;
+};
+
+static ActiveProfileSaveState PrepareConfigPersistence(Config& sharedSnapshot, Config& profileSnapshot) {
+    ActiveProfileSaveState state;
+    state.name = g_profilesConfig.activeProfile;
+
+    for (const auto& profile : g_profilesConfig.profiles) {
+        if (EqualsIgnoreCase(profile.name, state.name)) {
+            state.tracked = true;
+            state.name = profile.name;
+            state.sections = profile.sections;
+            break;
+        }
+    }
+
+    if (!state.tracked) {
+        g_sharedConfig = g_config;
+        g_sharedConfig.configVersion = GetConfigVersion();
+        sharedSnapshot = g_sharedConfig;
+        profileSnapshot = Config{};
+        return state;
+    }
+
+    Config updatedShared = g_config;
+    ApplyProfileFields(g_sharedConfig, updatedShared, state.sections);
+    updatedShared.configVersion = GetConfigVersion();
+    g_sharedConfig = updatedShared;
+
+    sharedSnapshot = g_sharedConfig;
+    profileSnapshot = Config{};
+    ApplyProfileFields(g_config, profileSnapshot, state.sections);
+    profileSnapshot.configVersion = GetConfigVersion();
+    return state;
+}
+
 bool WaitForConfigSaveIdle(int timeoutMs) {
     const auto startWait = std::chrono::steady_clock::now();
     while (s_isConfigSaving.load(std::memory_order_acquire)) {
@@ -223,12 +262,14 @@ void SaveConfig() {
 
     std::wstring configPath = g_toolscreenPath + L"\\config.toml";
     try {
-        toml::table tbl;
-        ConfigToToml(g_config, tbl);
+        Config sharedSnapshot;
         Config profileSnapshot;
-        ApplyProfileFields(g_config, profileSnapshot);
-        profileSnapshot.configVersion = GetConfigVersion();
-        const std::string activeProfileName = g_profilesConfig.activeProfile;
+        const ActiveProfileSaveState activeProfileState = PrepareConfigPersistence(sharedSnapshot, profileSnapshot);
+
+        toml::table tbl;
+        ConfigToToml(sharedSnapshot, tbl);
+        const std::string activeProfileName = activeProfileState.name;
+        const bool activeProfileTracked = activeProfileState.tracked;
 
         PublishConfigSnapshot();
 
@@ -236,7 +277,8 @@ void SaveConfig() {
         s_lastSaveTime = currentTime;
         s_isConfigSaving = true;
 
-        std::thread([configPath, tbl = std::move(tbl), activeProfileName, profileSnapshot = std::move(profileSnapshot)]() {
+        std::thread([configPath, tbl = std::move(tbl), activeProfileName, activeProfileTracked,
+                     profileSnapshot = std::move(profileSnapshot)]() {
             _set_se_translator(SEHTranslator);
             try {
                 try {
@@ -250,7 +292,7 @@ void SaveConfig() {
                 } catch (const std::exception& e) {
                     Log("ERROR: Failed to write config file: " + std::string(e.what()));
                 }
-                if (!SaveProfileSnapshotIfTracked(activeProfileName, profileSnapshot)) {
+                if (activeProfileTracked && !SaveProfileSnapshotIfTracked(activeProfileName, profileSnapshot)) {
                     Log("INFO: Skipped async profile save for removed or renamed profile '" + activeProfileName + "'.");
                 }
             } catch (const SE_Exception& e) {
@@ -289,8 +331,12 @@ void SaveConfigImmediate() {
     std::wstring configPath = g_toolscreenPath + L"\\config.toml";
     try {
         Log("SaveConfigImmediate: Starting config copy...");
+        Config sharedSnapshot;
+        Config profileSnapshot;
+        const ActiveProfileSaveState activeProfileState = PrepareConfigPersistence(sharedSnapshot, profileSnapshot);
+
         toml::table tbl;
-        ConfigToToml(g_config, tbl);
+        ConfigToToml(sharedSnapshot, tbl);
 
         PublishConfigSnapshot();
 
@@ -302,11 +348,8 @@ void SaveConfigImmediate() {
         o << tbl;
         o.close();
 
-        Config profileSnapshot;
-        ApplyProfileFields(g_config, profileSnapshot);
-        profileSnapshot.configVersion = GetConfigVersion();
-        if (!SaveProfileSnapshotIfTracked(g_profilesConfig.activeProfile, profileSnapshot)) {
-            Log("INFO: Skipped immediate profile save for removed or renamed profile '" + g_profilesConfig.activeProfile + "'.");
+        if (activeProfileState.tracked && !SaveProfileSnapshotIfTracked(activeProfileState.name, profileSnapshot)) {
+            Log("INFO: Skipped immediate profile save for removed or renamed profile '" + activeProfileState.name + "'.");
         }
 
         Log("Configuration saved to file (immediate).");
@@ -460,6 +503,7 @@ void LoadConfig() {
 
     try {
         g_config = Config();
+        g_sharedConfig = Config();
         {
             std::lock_guard<std::mutex> lock(g_hotkeyTimestampsMutex);
             g_hotkeyTimestamps.clear();
@@ -482,6 +526,7 @@ void LoadConfig() {
         tbl = std::move(result).table();
 #endif
         ConfigFromToml(tbl, g_config);
+        g_sharedConfig = g_config;
 
         MigrateToProfiles();
         EnsureProfilesConfigReady();

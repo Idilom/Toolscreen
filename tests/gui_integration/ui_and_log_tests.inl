@@ -355,10 +355,26 @@ void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Autom
     ResetProfileTestState("profile_apply_fields_roundtrip");
 
     g_config.defaultMode = "TestMode";
+    g_config.mirrorGammaMode = MirrorGammaMode::AssumeLinear;
     g_config.mouseSensitivity = 3.5f;
     g_config.windowsMouseSpeed = 7;
+    g_config.allowCursorEscape = true;
+    g_config.confineCursor = true;
+    g_config.keyRepeatStartDelay = 42;
+    g_config.keyRepeatDelay = 24;
     g_config.autoBorderless = true;
     g_config.hideAnimationsInGame = true;
+    g_config.limitCaptureFramerate = false;
+    g_config.obsFramerate = 15;
+    g_config.fpsLimit = 144;
+    g_config.disableHookChaining = true;
+    g_config.basicModeEnabled = true;
+    g_config.fontPath = "fonts/TestFont.ttf";
+    g_config.lang = "zh_CN";
+    g_config.appearance.theme = "Monokai";
+    g_config.guiHotkey = { VK_F8 };
+    g_config.ninjabrainOverlay.enabled = false;
+    g_config.ninjabrainOverlay.apiBaseUrl = "http://127.0.0.1:60000";
 
     ModeConfig mode;
     mode.id = "TestMode";
@@ -374,13 +390,52 @@ void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Autom
     ApplyProfileFields(g_config, dst);
 
     Expect(dst.defaultMode == "TestMode", "defaultMode should roundtrip via ApplyProfileFields.");
+    Expect(dst.mirrorGammaMode == MirrorGammaMode::AssumeLinear, "mirrorGammaMode should roundtrip.");
     Expect(std::abs(dst.mouseSensitivity - 3.5f) < 0.01f, "mouseSensitivity should roundtrip.");
     Expect(dst.windowsMouseSpeed == 7, "windowsMouseSpeed should roundtrip.");
+    Expect(dst.allowCursorEscape, "allowCursorEscape should roundtrip.");
+    Expect(dst.confineCursor, "confineCursor should roundtrip.");
+    Expect(dst.keyRepeatStartDelay == 42, "keyRepeatStartDelay should roundtrip.");
+    Expect(dst.keyRepeatDelay == 24, "keyRepeatDelay should roundtrip.");
     Expect(dst.autoBorderless == true, "autoBorderless should roundtrip.");
     Expect(dst.hideAnimationsInGame == true, "hideAnimationsInGame should roundtrip.");
+    Expect(dst.limitCaptureFramerate == false, "limitCaptureFramerate should roundtrip.");
+    Expect(dst.obsFramerate == 15, "obsFramerate should roundtrip.");
+    Expect(dst.fpsLimit == 144, "fpsLimit should roundtrip.");
+    Expect(dst.disableHookChaining, "disableHookChaining should roundtrip.");
     Expect(dst.modes.size() == g_config.modes.size(), "modes should roundtrip.");
     Expect(dst.mirrors.size() == g_config.mirrors.size(), "mirrors should roundtrip.");
-    Expect(dst.basicModeEnabled == Config().basicModeEnabled, "Non-profile field 'basicModeEnabled' should not be copied.");
+    Expect(dst.basicModeEnabled, "basicModeEnabled should roundtrip.");
+    Expect(dst.fontPath == "fonts/TestFont.ttf", "fontPath should roundtrip.");
+    Expect(dst.lang == "zh_CN", "lang should roundtrip.");
+    Expect(dst.appearance.theme == "Monokai", "appearance should roundtrip.");
+    Expect(dst.guiHotkey.size() == 1 && dst.guiHotkey[0] == VK_F8, "guiHotkey should roundtrip.");
+    Expect(!dst.ninjabrainOverlay.enabled, "ninjabrainOverlay should roundtrip.");
+    Expect(dst.ninjabrainOverlay.apiBaseUrl == "http://127.0.0.1:60000", "ninjabrainOverlay settings should roundtrip.");
+
+    ProfileSectionSelection mirrorsOnly;
+    mirrorsOnly.modes = false;
+    mirrorsOnly.images = false;
+    mirrorsOnly.windowOverlays = false;
+    mirrorsOnly.browserOverlays = false;
+    mirrorsOnly.ninjabrainOverlay = false;
+    mirrorsOnly.hotkeys = false;
+    mirrorsOnly.inputsMouse = false;
+    mirrorsOnly.captureWindow = false;
+    mirrorsOnly.settings = false;
+    mirrorsOnly.appearance = false;
+
+    Config mirrorsOnlyDst;
+    ApplyProfileFields(g_config, mirrorsOnlyDst, mirrorsOnly);
+
+    Expect(mirrorsOnlyDst.mirrors.size() == g_config.mirrors.size(), "Selected mirror fields should copy with section filtering.");
+    Expect(mirrorsOnlyDst.modes.empty(), "Unselected modes should not copy with section filtering.");
+    Expect(mirrorsOnlyDst.windowOverlays.empty(), "Unselected window overlays should not copy with section filtering.");
+    Expect(mirrorsOnlyDst.mouseSensitivity == 1.0f, "Unselected input/mouse settings should remain at defaults.");
+    Expect(mirrorsOnlyDst.fpsLimit == Config().fpsLimit, "Unselected settings should remain at defaults.");
+    Expect(mirrorsOnlyDst.basicModeEnabled == Config().basicModeEnabled, "Unselected appearance settings should remain at defaults.");
+    Expect(mirrorsOnlyDst.ninjabrainOverlay.apiBaseUrl == Config().ninjabrainOverlay.apiBaseUrl,
+        "Unselected Ninjabrain overlay settings should remain at defaults.");
 }
 
 void RunProfilesConfigRoundtripTest(TestRunMode runMode = TestRunMode::Automated) {
@@ -394,12 +449,18 @@ void RunProfilesConfigRoundtripTest(TestRunMode runMode = TestRunMode::Automated
     pm1.color[0] = 0.1f;
     pm1.color[1] = 0.2f;
     pm1.color[2] = 0.3f;
+    pm1.sections.browserOverlays = false;
+    pm1.sections.windowOverlays = false;
+    pm1.sections.ninjabrainOverlay = false;
     g_profilesConfig.profiles.push_back(pm1);
     ProfileMetadata pm2;
     pm2.name = "Custom";
     pm2.color[0] = 0.9f;
     pm2.color[1] = 0.8f;
     pm2.color[2] = 0.7f;
+    pm2.sections.mirrors = false;
+    pm2.sections.inputsMouse = false;
+    pm2.sections.appearance = false;
     g_profilesConfig.profiles.push_back(pm2);
 
     SaveProfilesConfig();
@@ -412,8 +473,19 @@ void RunProfilesConfigRoundtripTest(TestRunMode runMode = TestRunMode::Automated
     Expect(g_profilesConfig.profiles.size() == 2, "profiles count should roundtrip.");
     Expect(g_profilesConfig.profiles[0].name == "Default", "First profile name should roundtrip.");
     Expect(std::abs(g_profilesConfig.profiles[0].color[0] - 0.1f) < 0.01f, "First profile color[0] should roundtrip.");
+        Expect(!g_profilesConfig.profiles[0].sections.browserOverlays,
+            "First profile browser overlay selection should roundtrip.");
+        Expect(!g_profilesConfig.profiles[0].sections.windowOverlays,
+            "First profile window overlay selection should roundtrip.");
+        Expect(!g_profilesConfig.profiles[0].sections.ninjabrainOverlay,
+            "First profile Ninjabrain overlay selection should roundtrip.");
     Expect(g_profilesConfig.profiles[1].name == "Custom", "Second profile name should roundtrip.");
     Expect(std::abs(g_profilesConfig.profiles[1].color[2] - 0.7f) < 0.01f, "Second profile color[2] should roundtrip.");
+        Expect(!g_profilesConfig.profiles[1].sections.mirrors, "Second profile mirror selection should roundtrip.");
+        Expect(!g_profilesConfig.profiles[1].sections.inputsMouse,
+            "Second profile input/mouse selection should roundtrip.");
+        Expect(!g_profilesConfig.profiles[1].sections.appearance,
+            "Second profile appearance selection should roundtrip.");
 }
 
 void RunProfileNameValidationTest(TestRunMode runMode = TestRunMode::Automated) {
@@ -442,10 +514,16 @@ void RunProfileCreateDuplicateDeleteTest(TestRunMode runMode = TestRunMode::Auto
 
     Expect(g_profilesConfig.profiles.size() == 1, "Should start with 1 profile after LoadConfig migration.");
     Expect(g_profilesConfig.profiles[0].name == kDefaultProfileName, "First profile should be Default.");
+    g_config.defaultMode = "CurrentProfileMode";
 
     const bool created = CreateNewProfile("Second");
     Expect(created, "CreateNewProfile should succeed.");
     Expect(g_profilesConfig.profiles.size() == 2, "Should have 2 profiles after create.");
+
+    SwitchProfile("Second");
+    Expect(g_config.defaultMode == "CurrentProfileMode",
+        "CreateNewProfile should seed the new profile from the current merged config so switching is non-destructive.");
+    SwitchProfile(kDefaultProfileName);
 
     const bool dupCreated = CreateNewProfile("Second");
     Expect(!dupCreated, "CreateNewProfile with duplicate name should fail.");
@@ -530,8 +608,12 @@ void RunProfileRenameTest(TestRunMode runMode = TestRunMode::Automated) {
     Expect(found, "Renamed profile should exist in metadata.");
 
     const float renamedColor[3] = { 0.25f, 0.5f, 0.75f };
-    const bool updated = UpdateProfileMetadata("NewName", "newname", renamedColor);
-    Expect(updated, "UpdateProfileMetadata should allow case-only rename and color changes.");
+    ProfileSectionSelection renamedSections;
+    renamedSections.browserOverlays = false;
+    renamedSections.captureWindow = false;
+    renamedSections.settings = false;
+    const bool updated = UpdateProfileMetadata("NewName", "newname", renamedColor, renamedSections);
+    Expect(updated, "UpdateProfileMetadata should allow case-only rename, color changes, and section updates.");
     Expect(g_profilesConfig.activeProfile == "newname", "Active profile should follow case-only rename updates.");
 
     bool foundUpdated = false;
@@ -541,6 +623,9 @@ void RunProfileRenameTest(TestRunMode runMode = TestRunMode::Automated) {
             Expect(std::abs(pm.color[0] - renamedColor[0]) < 0.01f, "Updated profile color[0] should persist.");
             Expect(std::abs(pm.color[1] - renamedColor[1]) < 0.01f, "Updated profile color[1] should persist.");
             Expect(std::abs(pm.color[2] - renamedColor[2]) < 0.01f, "Updated profile color[2] should persist.");
+            Expect(!pm.sections.browserOverlays, "Updated profile browser overlay selection should persist.");
+            Expect(!pm.sections.captureWindow, "Updated profile capture/window selection should persist.");
+            Expect(!pm.sections.settings, "Updated profile settings selection should persist.");
             break;
         }
     }
@@ -552,6 +637,126 @@ void RunProfileRenameTest(TestRunMode runMode = TestRunMode::Automated) {
     const bool invalidRename = RenameProfile("newname", "a/b");
     Expect(!invalidRename, "Rename to invalid name should fail.");
 }
+
+    void RunProfileSelectiveSwitchSharedFallbackTest(TestRunMode runMode = TestRunMode::Automated) {
+        (void)runMode;
+        ResetProfileTestState("profile_selective_switch_shared_fallback");
+
+        auto setSingleMirror = [](const std::string& name) {
+         g_config.mirrors.clear();
+         MirrorConfig mirror;
+         mirror.name = name;
+         g_config.mirrors.push_back(mirror);
+        };
+
+        auto setSingleWindowOverlay = [](const std::string& name) {
+         g_config.windowOverlays.clear();
+         WindowOverlayConfig overlay;
+         overlay.name = name;
+         overlay.windowTitle = name;
+         g_config.windowOverlays.push_back(overlay);
+        };
+
+        setSingleMirror("MirrorA");
+        setSingleWindowOverlay("SharedOverlayA");
+        g_config.ninjabrainOverlay.enabled = false;
+        g_config.ninjabrainOverlay.apiBaseUrl = "http://127.0.0.1:52533";
+
+        const float defaultColor[3] = { kDefaultProfileColor[0], kDefaultProfileColor[1], kDefaultProfileColor[2] };
+        ProfileSectionSelection mirrorsOnly;
+        mirrorsOnly.modes = false;
+        mirrorsOnly.images = false;
+        mirrorsOnly.windowOverlays = false;
+        mirrorsOnly.browserOverlays = false;
+        mirrorsOnly.ninjabrainOverlay = false;
+        mirrorsOnly.hotkeys = false;
+        mirrorsOnly.inputsMouse = false;
+        mirrorsOnly.captureWindow = false;
+        mirrorsOnly.settings = false;
+        mirrorsOnly.appearance = false;
+        Expect(UpdateProfileMetadata(kDefaultProfileName, kDefaultProfileName, defaultColor, mirrorsOnly),
+            "Default profile should support narrowing its override sections.");
+        Expect(g_sharedConfig.windowOverlays.size() == 1 && g_sharedConfig.windowOverlays[0].name == "SharedOverlayA",
+            "Unselected window overlays should move into the shared config.");
+        Expect(!g_sharedConfig.ninjabrainOverlay.enabled,
+            "Unselected Ninjabrain overlay settings should stay in the shared config.");
+
+        Expect(CreateNewProfile("OverlayOnly"), "CreateNewProfile should create the selective overlay profile.");
+        SwitchProfile("OverlayOnly");
+
+        setSingleMirror("MirrorSharedB");
+        setSingleWindowOverlay("OverlayB");
+        g_config.ninjabrainOverlay.enabled = true;
+        g_config.ninjabrainOverlay.apiBaseUrl = "http://127.0.0.1:60000";
+
+        const float overlayColor[3] = { 0.6f, 0.7f, 0.8f };
+        ProfileSectionSelection overlayOnly;
+        overlayOnly.modes = false;
+        overlayOnly.mirrors = false;
+        overlayOnly.images = false;
+        overlayOnly.windowOverlays = true;
+        overlayOnly.browserOverlays = false;
+        overlayOnly.ninjabrainOverlay = true;
+        overlayOnly.hotkeys = false;
+        overlayOnly.inputsMouse = false;
+        overlayOnly.captureWindow = false;
+        overlayOnly.settings = false;
+        overlayOnly.appearance = false;
+        Expect(UpdateProfileMetadata("OverlayOnly", "OverlayOnly", overlayColor, overlayOnly),
+            "Overlay-only profile should support selective overlay overrides.");
+
+        Expect(g_sharedConfig.mirrors.size() == 1 && g_sharedConfig.mirrors[0].name == "MirrorSharedB",
+            "Mirrors excluded from the active profile should remain in the shared config.");
+        Expect(g_sharedConfig.windowOverlays.size() == 1 && g_sharedConfig.windowOverlays[0].name == "SharedOverlayA",
+            "Window overlays still owned by the active profile should keep their shared fallback values.");
+        Expect(!g_sharedConfig.ninjabrainOverlay.enabled,
+            "Shared Ninjabrain overlay settings should remain untouched when the active profile owns them.");
+
+        SwitchProfile(kDefaultProfileName);
+        Expect(g_config.mirrors.size() == 1 && g_config.mirrors[0].name == "MirrorA",
+            "Switching back to the mirrors-only profile should restore its mirror override.");
+        Expect(g_config.windowOverlays.size() == 1 && g_config.windowOverlays[0].name == "SharedOverlayA",
+            "Switching back to the mirrors-only profile should keep shared window overlays.");
+        Expect(!g_config.ninjabrainOverlay.enabled,
+            "Switching back to the mirrors-only profile should keep shared Ninjabrain overlay settings.");
+
+        SwitchProfile("OverlayOnly");
+        Expect(g_config.mirrors.size() == 1 && g_config.mirrors[0].name == "MirrorSharedB",
+            "Switching to the overlay-only profile should fall back to shared mirrors.");
+        Expect(g_config.windowOverlays.size() == 1 && g_config.windowOverlays[0].name == "OverlayB",
+            "Switching to the overlay-only profile should apply its window overlay override.");
+        Expect(g_config.ninjabrainOverlay.enabled, "Switching to the overlay-only profile should apply its Ninjabrain override.");
+        Expect(g_config.ninjabrainOverlay.apiBaseUrl == "http://127.0.0.1:60000",
+            "Switching to the overlay-only profile should restore its Ninjabrain overlay settings.");
+
+        SaveConfigImmediate();
+
+        Config diskConfig;
+        Expect(LoadConfigFromTomlFile(GetCurrentConfigPath().wstring(), diskConfig), "Shared config TOML should remain loadable.");
+        Expect(diskConfig.mirrors.size() == 1 && diskConfig.mirrors[0].name == "MirrorSharedB",
+            "config.toml should persist shared mirror values rather than the active profile override.");
+        Expect(diskConfig.windowOverlays.size() == 1 && diskConfig.windowOverlays[0].name == "SharedOverlayA",
+            "config.toml should persist shared window overlay values.");
+        Expect(!diskConfig.ninjabrainOverlay.enabled,
+            "config.toml should persist shared Ninjabrain overlay values.");
+
+        ReloadConfigFromDisk();
+        Expect(g_profilesConfig.activeProfile == "OverlayOnly", "Reload should preserve the active profile.");
+        Expect(g_config.mirrors.size() == 1 && g_config.mirrors[0].name == "MirrorSharedB",
+            "Reload should keep shared mirrors visible in the overlay-only profile.");
+        Expect(g_config.windowOverlays.size() == 1 && g_config.windowOverlays[0].name == "OverlayB",
+            "Reload should restore the overlay-only profile window overlay override.");
+        Expect(g_config.ninjabrainOverlay.enabled,
+            "Reload should restore the overlay-only profile Ninjabrain overlay override.");
+
+        SwitchProfile(kDefaultProfileName);
+        Expect(g_config.mirrors.size() == 1 && g_config.mirrors[0].name == "MirrorA",
+            "Switching after reload should still restore the mirrors-only profile override.");
+        Expect(g_config.windowOverlays.size() == 1 && g_config.windowOverlays[0].name == "SharedOverlayA",
+            "Switching after reload should still use shared window overlays for the mirrors-only profile.");
+        Expect(!g_config.ninjabrainOverlay.enabled,
+            "Switching after reload should still use shared Ninjabrain overlay settings for the mirrors-only profile.");
+    }
 
 void RunProfileCaseInsensitiveCollisionTest(TestRunMode runMode = TestRunMode::Automated) {
     (void)runMode;
@@ -730,7 +935,7 @@ void RunProfileSwitchConcurrentLifecycleTest(TestRunMode runMode = TestRunMode::
                     0.2f + (0.01f * static_cast<float>(i)),
                     0.3f + (0.015f * static_cast<float>(i)),
                 };
-                if (!UpdateProfileMetadata(duplicateName, renamedName, color)) {
+                if (!UpdateProfileMetadata(duplicateName, renamedName, color, ProfileSectionSelection{})) {
                     throw std::runtime_error("UpdateProfileMetadata should succeed for lifecycle stress rename '" + renamedName + "'.");
                 }
 

@@ -1042,6 +1042,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     profile-migrate
     profile-delete-guards
     profile-rename
+    profile-selective-switch-shared-fallback
     profile-case-insensitive-collisions
     profile-recover-missing-metadata
     profile-async-save-skip-deleted-profile

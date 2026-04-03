@@ -36,6 +36,7 @@
 #include <commdlg.h>
 #include <cstring>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -74,6 +75,594 @@ namespace {
 
 const char* s_forcedSettingsTopTabLabel = nullptr;
 const char* s_forcedSettingsInputsSubTabLabel = nullptr;
+
+enum class ConfigStateUploadStatus {
+    Idle,
+    Uploading,
+    Success,
+    Error,
+};
+
+enum class ConfigStateUploadClipboardTarget {
+    None,
+    ShareUrl,
+};
+
+struct ConfigStateUploadUiState {
+    ConfigStateUploadStatus status = ConfigStateUploadStatus::Idle;
+    std::string shareUrl;
+    std::string error;
+    bool shareUrlAutoCopied = false;
+    ConfigStateUploadClipboardTarget clipboardTarget = ConfigStateUploadClipboardTarget::None;
+};
+
+enum class UploadUiKind {
+    ConfigState,
+    MegaDebug,
+};
+
+std::mutex s_uploadUiMutex;
+ConfigStateUploadUiState s_configStateUploadUiState;
+ConfigStateUploadUiState s_megaDebugUploadUiState;
+
+constexpr const wchar_t* kConfigStateUploadApiUrl = L"https://api.mclogs.minestrator.com/1/log";
+constexpr const char* kConfigStateUploadServiceName = "mclogs.minestrator.com";
+constexpr size_t kMclogsMaxContentBytes = 10u * 1024u * 1024u;
+constexpr size_t kMclogsMaxContentLines = 25000u;
+
+struct HttpJsonResponse {
+    DWORD statusCode = 0;
+    std::string contentType;
+    std::string body;
+};
+
+size_t CountTextLines(const std::string& text) {
+    if (text.empty()) {
+        return 0;
+    }
+    return static_cast<size_t>(std::count(text.begin(), text.end(), '\n')) + 1;
+}
+
+std::string QueryWinHttpHeaderString(HINTERNET request, DWORD headerQuery) {
+    DWORD bufferSize = 0;
+    if (WinHttpQueryHeaders(request, headerQuery, WINHTTP_HEADER_NAME_BY_INDEX, WINHTTP_NO_OUTPUT_BUFFER, &bufferSize,
+                            WINHTTP_NO_HEADER_INDEX)) {
+        return std::string();
+    }
+
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || bufferSize == 0) {
+        return std::string();
+    }
+
+    std::wstring buffer(bufferSize / sizeof(wchar_t), L'\0');
+    if (!WinHttpQueryHeaders(request, headerQuery, WINHTTP_HEADER_NAME_BY_INDEX, buffer.data(), &bufferSize,
+                             WINHTTP_NO_HEADER_INDEX)) {
+        return std::string();
+    }
+
+    if (!buffer.empty() && buffer.back() == L'\0') {
+        buffer.pop_back();
+    }
+    return WideToUtf8(buffer);
+}
+
+std::string UrlEncodeFormField(const std::string& value) {
+    static constexpr char kHexDigits[] = "0123456789ABCDEF";
+
+    std::string encoded;
+    encoded.reserve(value.size() * 3);
+    for (unsigned char ch : value) {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' ||
+            ch == '.' || ch == '~') {
+            encoded.push_back(static_cast<char>(ch));
+        } else if (ch == ' ') {
+            encoded.push_back('+');
+        } else {
+            encoded.push_back('%');
+            encoded.push_back(kHexDigits[(ch >> 4) & 0x0F]);
+            encoded.push_back(kHexDigits[ch & 0x0F]);
+        }
+    }
+    return encoded;
+}
+
+std::string FormatResponseBodyForLog(const std::string& responseBody) {
+    if (responseBody.empty()) {
+        return "<empty>";
+    }
+    return responseBody;
+}
+
+void LogMclogsHttpResponse(const HttpJsonResponse& response) {
+    Log(std::string(kConfigStateUploadServiceName) + " response HTTP status: " +
+        (response.statusCode == 0 ? std::string("<unavailable>") : std::to_string(response.statusCode)));
+    Log(std::string(kConfigStateUploadServiceName) + " response content type: " +
+        (response.contentType.empty() ? std::string("<unavailable>") : response.contentType));
+    Log(std::string(kConfigStateUploadServiceName) + " response body: " + FormatResponseBodyForLog(response.body));
+}
+
+ConfigStateUploadUiState& SelectUploadUiState(UploadUiKind kind) {
+    if (kind == UploadUiKind::MegaDebug) {
+        return s_megaDebugUploadUiState;
+    }
+    return s_configStateUploadUiState;
+}
+
+ConfigStateUploadUiState GetUploadUiState(UploadUiKind kind) {
+    std::lock_guard<std::mutex> lock(s_uploadUiMutex);
+    return SelectUploadUiState(kind);
+}
+
+void SetUploadUiStateUploading(UploadUiKind kind) {
+    std::lock_guard<std::mutex> lock(s_uploadUiMutex);
+    ConfigStateUploadUiState& state = SelectUploadUiState(kind);
+    state = {};
+    state.status = ConfigStateUploadStatus::Uploading;
+}
+
+void SetUploadUiStateSuccess(UploadUiKind kind, std::string shareUrl) {
+    std::lock_guard<std::mutex> lock(s_uploadUiMutex);
+    ConfigStateUploadUiState& state = SelectUploadUiState(kind);
+    state = {};
+    state.status = ConfigStateUploadStatus::Success;
+    state.shareUrl = std::move(shareUrl);
+}
+
+void SetUploadUiStateError(UploadUiKind kind, std::string error) {
+    std::lock_guard<std::mutex> lock(s_uploadUiMutex);
+    ConfigStateUploadUiState& state = SelectUploadUiState(kind);
+    state = {};
+    state.status = ConfigStateUploadStatus::Error;
+    state.error = std::move(error);
+}
+
+void MarkUploadShareUrlAutoCopied(UploadUiKind kind) {
+    std::lock_guard<std::mutex> lock(s_uploadUiMutex);
+    ConfigStateUploadUiState& state = SelectUploadUiState(kind);
+    state.shareUrlAutoCopied = true;
+    state.clipboardTarget = ConfigStateUploadClipboardTarget::ShareUrl;
+}
+
+void SetUploadClipboardTarget(UploadUiKind kind, ConfigStateUploadClipboardTarget target) {
+    std::lock_guard<std::mutex> lock(s_uploadUiMutex);
+    SelectUploadUiState(kind).clipboardTarget = target;
+}
+
+ConfigStateUploadUiState GetConfigStateUploadUiState() {
+    return GetUploadUiState(UploadUiKind::ConfigState);
+}
+
+void SetConfigStateUploadUiStateUploading() {
+    SetUploadUiStateUploading(UploadUiKind::ConfigState);
+}
+
+void SetConfigStateUploadUiStateSuccess(std::string shareUrl) {
+    SetUploadUiStateSuccess(UploadUiKind::ConfigState, std::move(shareUrl));
+}
+
+void SetConfigStateUploadUiStateError(std::string error) {
+    SetUploadUiStateError(UploadUiKind::ConfigState, std::move(error));
+}
+
+void MarkConfigStateUploadShareUrlAutoCopied() {
+    MarkUploadShareUrlAutoCopied(UploadUiKind::ConfigState);
+}
+
+void SetConfigStateUploadClipboardTarget(ConfigStateUploadClipboardTarget target) {
+    SetUploadClipboardTarget(UploadUiKind::ConfigState, target);
+}
+
+ConfigStateUploadUiState GetMegaDebugUploadUiState() {
+    return GetUploadUiState(UploadUiKind::MegaDebug);
+}
+
+void SetMegaDebugUploadUiStateUploading() {
+    SetUploadUiStateUploading(UploadUiKind::MegaDebug);
+}
+
+void SetMegaDebugUploadUiStateSuccess(std::string shareUrl) {
+    SetUploadUiStateSuccess(UploadUiKind::MegaDebug, std::move(shareUrl));
+}
+
+void SetMegaDebugUploadUiStateError(std::string error) {
+    SetUploadUiStateError(UploadUiKind::MegaDebug, std::move(error));
+}
+
+void MarkMegaDebugUploadShareUrlAutoCopied() {
+    MarkUploadShareUrlAutoCopied(UploadUiKind::MegaDebug);
+}
+
+void SetMegaDebugUploadClipboardTarget(ConfigStateUploadClipboardTarget target) {
+    SetUploadClipboardTarget(UploadUiKind::MegaDebug, target);
+}
+
+std::string ExtractMclogsErrorMessage(const std::string& responseBody) {
+    if (responseBody.empty()) {
+        return std::string();
+    }
+
+    try {
+        const nlohmann::json parsed = nlohmann::json::parse(responseBody);
+        if (parsed.is_object()) {
+            const std::string error = parsed.value("error", std::string());
+            if (!error.empty()) {
+                return error;
+            }
+        }
+    } catch (...) {
+    }
+
+    constexpr size_t kMaxErrorLength = 240;
+    if (responseBody.size() <= kMaxErrorLength) {
+        return responseBody;
+    }
+    return responseBody.substr(0, kMaxErrorLength) + "...";
+}
+
+bool HttpPostToString(const std::wstring& url, const std::wstring& requestHeaders, const std::string& requestBody,
+                      HttpJsonResponse& outResponse, std::string& outError) {
+    outResponse = {};
+    URL_COMPONENTS urlComp{};
+    urlComp.dwStructSize = sizeof(urlComp);
+    urlComp.dwSchemeLength = static_cast<DWORD>(-1);
+    urlComp.dwHostNameLength = static_cast<DWORD>(-1);
+    urlComp.dwUrlPathLength = static_cast<DWORD>(-1);
+    urlComp.dwExtraInfoLength = static_cast<DWORD>(-1);
+
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &urlComp)) {
+        outError = "WinHttpCrackUrl failed";
+        return false;
+    }
+
+    const std::wstring host(urlComp.lpszHostName, urlComp.dwHostNameLength);
+    std::wstring path(urlComp.lpszUrlPath ? std::wstring(urlComp.lpszUrlPath, urlComp.dwUrlPathLength) : L"/");
+    if (urlComp.lpszExtraInfo && urlComp.dwExtraInfoLength > 0) {
+        path.append(urlComp.lpszExtraInfo, urlComp.dwExtraInfoLength);
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"Toolscreen/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+                                     WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        outError = "WinHttpOpen failed";
+        return false;
+    }
+
+    WinHttpSetTimeouts(hSession, 5000, 5000, 10000, 10000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        outError = "WinHttpConnect failed";
+        return false;
+    }
+
+    DWORD requestFlags = 0;
+    if (urlComp.nScheme == INTERNET_SCHEME_HTTPS) {
+        requestFlags |= WINHTTP_FLAG_SECURE;
+    }
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", path.c_str(), nullptr, WINHTTP_NO_REFERER,
+                                            WINHTTP_DEFAULT_ACCEPT_TYPES, requestFlags);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        outError = "WinHttpOpenRequest failed";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        const DWORD requestSize = static_cast<DWORD>(requestBody.size());
+        if (!WinHttpSendRequest(hRequest, requestHeaders.c_str(), static_cast<DWORD>(-1L), const_cast<char*>(requestBody.data()), requestSize,
+                                requestSize, 0)) {
+            outError = "WinHttpSendRequest failed";
+            break;
+        }
+
+        if (!WinHttpReceiveResponse(hRequest, nullptr)) {
+            outError = "WinHttpReceiveResponse failed";
+            break;
+        }
+
+        DWORD statusCode = 0;
+        DWORD statusCodeSize = sizeof(statusCode);
+        if (!WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+                                 &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX)) {
+            outError = "WinHttpQueryHeaders(status) failed";
+            break;
+        }
+
+        outResponse.statusCode = statusCode;
+        outResponse.contentType = QueryWinHttpHeaderString(hRequest, WINHTTP_QUERY_CONTENT_TYPE);
+
+        outResponse.body.clear();
+        while (true) {
+            DWORD bytesAvailable = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable)) {
+                outError = "WinHttpQueryDataAvailable failed";
+                break;
+            }
+            if (bytesAvailable == 0) {
+                break;
+            }
+
+            std::string chunk;
+            chunk.resize(bytesAvailable);
+            DWORD bytesRead = 0;
+            if (!WinHttpReadData(hRequest, chunk.data(), bytesAvailable, &bytesRead)) {
+                outError = "WinHttpReadData failed";
+                break;
+            }
+
+            chunk.resize(bytesRead);
+            outResponse.body += chunk;
+        }
+
+        if (!outError.empty()) {
+            break;
+        }
+
+        if (statusCode < 200 || statusCode >= 300) {
+            const std::string responseError = ExtractMclogsErrorMessage(outResponse.body);
+            outError = "HTTP status " + std::to_string(statusCode);
+            if (!outResponse.contentType.empty()) {
+                outError += " (" + outResponse.contentType + ")";
+            }
+            if (!responseError.empty()) {
+                outError += ": " + responseError;
+            }
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return ok;
+}
+
+bool ReadTextFileToString(const std::wstring& path, std::string& outContents, std::string& outError) {
+    outContents.clear();
+    outError.clear();
+
+    try {
+        std::ifstream in(std::filesystem::path(path), std::ios::binary | std::ios::ate);
+        if (!in.is_open()) {
+            outError = "Failed to open file: " + WideToUtf8(path);
+            return false;
+        }
+
+        const std::streamoff size = in.tellg();
+        if (size < 0) {
+            outError = "Failed to determine file size: " + WideToUtf8(path);
+            return false;
+        }
+
+        outContents.resize(static_cast<size_t>(size));
+        in.seekg(0, std::ios::beg);
+        if (!outContents.empty()) {
+            in.read(outContents.data(), size);
+            if (!in) {
+                outError = "Failed to read file: " + WideToUtf8(path);
+                return false;
+            }
+        }
+
+        return true;
+    } catch (const std::exception& e) {
+        outError = std::string("Failed to read file '") + WideToUtf8(path) + "': " + e.what();
+        return false;
+    }
+}
+
+bool GetMinecraftInstanceDirectory(std::wstring& outDirectory, std::string& outError) {
+    outDirectory.clear();
+    outError.clear();
+
+    size_t valueLength = 0;
+    if (getenv_s(&valueLength, nullptr, 0, "INST_MC_DIR") != 0 || valueLength <= 1) {
+        outError = "INST_MC_DIR is not set.";
+        return false;
+    }
+
+    std::string instMcDir(valueLength - 1, '\0');
+    if (getenv_s(&valueLength, instMcDir.data(), valueLength, "INST_MC_DIR") != 0 || instMcDir.empty()) {
+        outError = "Failed to read INST_MC_DIR.";
+        return false;
+    }
+
+    outDirectory = Utf8ToWide(instMcDir);
+    if (outDirectory.empty()) {
+        outError = "INST_MC_DIR resolved to an empty path.";
+        return false;
+    }
+
+    return true;
+}
+
+void AppendMegaDebugSection(std::string& outBundle, const std::string& title, const std::wstring& path, const std::string& body) {
+    outBundle += "========================================\n";
+    outBundle += title + "\n";
+    if (!path.empty()) {
+        outBundle += "Path: " + WideToUtf8(path) + "\n";
+    }
+    outBundle += "========================================\n";
+    outBundle += body.empty() ? std::string("<empty>\n") : body;
+    if (outBundle.empty() || outBundle.back() != '\n') {
+        outBundle.push_back('\n');
+    }
+    outBundle.push_back('\n');
+}
+
+bool BuildMegaDebugUploadText(std::string& outBundle, std::string& outError) {
+    outBundle.clear();
+    outError.clear();
+
+    Config configSnapshot = g_config;
+    configSnapshot.configVersion = GetConfigVersion();
+
+    std::string configToml;
+    if (!SerializeConfigToTomlString(configSnapshot, configToml)) {
+        outError = "Failed to generate config TOML.";
+        return false;
+    }
+
+    Log("Preparing mega debug upload bundle.");
+    FlushLogs();
+
+    std::wstring toolscreenLogPath;
+    std::string toolscreenLogText;
+    if (g_toolscreenPath.empty()) {
+        toolscreenLogText = "[Unavailable] Toolscreen path is empty.\n";
+    } else {
+        const std::wstring toolscreenLogsDirectory = (std::filesystem::path(g_toolscreenPath) / L"logs").wstring();
+        if (!GetCurrentProcessLogFilePath(toolscreenLogsDirectory, toolscreenLogPath)) {
+            toolscreenLogText = "[Unavailable] Could not resolve the active Toolscreen log file for this process.\n";
+        } else {
+            std::string readError;
+            if (!ReadTextFileToString(toolscreenLogPath, toolscreenLogText, readError)) {
+                toolscreenLogText = "[Unavailable] " + readError + "\n";
+            }
+        }
+    }
+
+    std::wstring minecraftInstanceDirectory;
+    std::wstring minecraftLogPath;
+    std::string minecraftLogText;
+    std::string minecraftInstanceError;
+    if (!GetMinecraftInstanceDirectory(minecraftInstanceDirectory, minecraftInstanceError)) {
+        minecraftLogText = "[Unavailable] " + minecraftInstanceError + "\n";
+    } else {
+        minecraftLogPath = (std::filesystem::path(minecraftInstanceDirectory) / L"logs" / L"latest.log").wstring();
+        std::string readError;
+        if (!ReadTextFileToString(minecraftLogPath, minecraftLogText, readError)) {
+            minecraftLogText = "[Unavailable] " + readError + "\n";
+        }
+    }
+
+    outBundle += "========================================\n";
+    outBundle += "Toolscreen Mega Debug Upload\n";
+    outBundle += "Toolscreen Version: " + GetToolscreenVersionString() + "\n";
+    outBundle += "Config Version: " + std::to_string(GetConfigVersion()) + "\n";
+    outBundle += "Toolscreen Directory: " + (g_toolscreenPath.empty() ? std::string("<unavailable>") : WideToUtf8(g_toolscreenPath)) + "\n";
+    outBundle += "Minecraft Instance Directory: " +
+                 (minecraftInstanceDirectory.empty() ? std::string("<unavailable>") : WideToUtf8(minecraftInstanceDirectory)) + "\n";
+    outBundle += "========================================\n\n";
+
+    AppendMegaDebugSection(outBundle, "Toolscreen Log", toolscreenLogPath, toolscreenLogText);
+    AppendMegaDebugSection(outBundle, "Minecraft latest.log", minecraftLogPath, minecraftLogText);
+    AppendMegaDebugSection(outBundle, "Effective Config State", std::wstring(), configToml);
+    return true;
+}
+
+bool UploadTextToMclogs(const std::string& uploadLabel, const std::string& textContent, std::string& outShareUrl, std::string& outError) {
+    try {
+        const size_t textLineCount = CountTextLines(textContent);
+        if (textContent.size() > kMclogsMaxContentBytes || textLineCount > kMclogsMaxContentLines) {
+            Log("WARNING: " + uploadLabel + " exceeds documented " + std::string(kConfigStateUploadServiceName) + " limits (" +
+                std::to_string(textContent.size()) +
+                " bytes, " + std::to_string(textLineCount) + " lines; documented limits are " +
+                std::to_string(kMclogsMaxContentBytes) + " bytes and " + std::to_string(kMclogsMaxContentLines) + " lines).");
+        }
+
+        const std::string requestBody = "content=" + UrlEncodeFormField(textContent);
+        const std::wstring requestHeaders = L"Content-Type: application/x-www-form-urlencoded\r\nAccept: application/json\r\n";
+        Log("Uploading " + uploadLabel + " to " + std::string(kConfigStateUploadServiceName) + " (content " +
+            std::to_string(textContent.size()) + " bytes, " +
+            std::to_string(textLineCount) + " lines; HTTP payload " + std::to_string(requestBody.size()) + " bytes).");
+
+        HttpJsonResponse response;
+        if (!HttpPostToString(kConfigStateUploadApiUrl, requestHeaders, requestBody, response, outError)) {
+            LogMclogsHttpResponse(response);
+            return false;
+        }
+
+        LogMclogsHttpResponse(response);
+
+        const nlohmann::json responseJson = nlohmann::json::parse(response.body);
+        if (!responseJson.value("success", false)) {
+            outError = responseJson.value("error", std::string("Upload failed."));
+            return false;
+        }
+
+        outShareUrl = responseJson.value("url", std::string());
+        if (outShareUrl.empty()) {
+            outError = "Upload succeeded but no URL was returned.";
+            return false;
+        }
+
+        return true;
+    } catch (const std::exception& e) {
+        outError = std::string("Failed to parse upload response: ") + e.what();
+        return false;
+    }
+}
+
+bool UploadConfigStateToMclogs(const std::string& configToml, std::string& outShareUrl, std::string& outError) {
+    return UploadTextToMclogs("config state", configToml, outShareUrl, outError);
+}
+
+bool UploadMegaDebugToMclogs(const std::string& megaDebugText, std::string& outShareUrl, std::string& outError) {
+    return UploadTextToMclogs("mega debug bundle", megaDebugText, outShareUrl, outError);
+}
+
+void StartConfigStateUpload() {
+    if (GetConfigStateUploadUiState().status == ConfigStateUploadStatus::Uploading) {
+        return;
+    }
+
+    Config configSnapshot = g_config;
+    configSnapshot.configVersion = GetConfigVersion();
+
+    std::string configToml;
+    if (!SerializeConfigToTomlString(configSnapshot, configToml)) {
+        SetConfigStateUploadUiStateError("Failed to generate config TOML.");
+        return;
+    }
+
+    SetConfigStateUploadUiStateUploading();
+    std::thread([configToml = std::move(configToml)]() {
+        std::string shareUrl;
+        std::string error;
+        if (!UploadConfigStateToMclogs(configToml, shareUrl, error)) {
+            Log("ERROR: Failed to upload config state: " + error);
+            SetConfigStateUploadUiStateError(std::move(error));
+            return;
+        }
+
+        Log("Uploaded config state to " + shareUrl);
+        SetConfigStateUploadUiStateSuccess(std::move(shareUrl));
+    }).detach();
+}
+
+void StartMegaDebugUpload() {
+    if (GetMegaDebugUploadUiState().status == ConfigStateUploadStatus::Uploading) {
+        return;
+    }
+
+    std::string megaDebugText;
+    std::string buildError;
+    if (!BuildMegaDebugUploadText(megaDebugText, buildError)) {
+        SetMegaDebugUploadUiStateError(buildError.empty() ? std::string("Failed to generate mega debug bundle.") : std::move(buildError));
+        return;
+    }
+
+    SetMegaDebugUploadUiStateUploading();
+    std::thread([megaDebugText = std::move(megaDebugText)]() {
+        std::string shareUrl;
+        std::string error;
+        if (!UploadMegaDebugToMclogs(megaDebugText, shareUrl, error)) {
+            Log("ERROR: Failed to upload mega debug bundle: " + error);
+            SetMegaDebugUploadUiStateError(std::move(error));
+            return;
+        }
+
+        Log("Uploaded mega debug bundle to " + shareUrl);
+        SetMegaDebugUploadUiStateSuccess(std::move(shareUrl));
+    }).detach();
+}
 
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
 std::unordered_map<std::string, GuiTestInteractionRect> s_guiTestInteractionRects;
@@ -941,6 +1530,7 @@ void RenderSettingsGUI() {
             static std::string s_renameBuffer;
             static std::string s_newProfileName;
             static float s_renameColor[3] = { kDefaultProfileColor[0], kDefaultProfileColor[1], kDefaultProfileColor[2] };
+            static ProfileSectionSelection s_editSections;
 
             static GLuint s_iconAdd = 0, s_iconDuplicate = 0, s_iconRename = 0, s_iconDelete = 0;
             static HGLRC s_iconLastCtx = NULL;
@@ -1032,6 +1622,7 @@ void RenderSettingsGUI() {
                             s_renameColor[0] = pm.color[0];
                             s_renameColor[1] = pm.color[1];
                             s_renameColor[2] = pm.color[2];
+                            s_editSections = pm.sections;
                             break;
                         }
                     }
@@ -1089,14 +1680,38 @@ void RenderSettingsGUI() {
                     (activeProfile->color[0] != s_renameColor[0] ||
                      activeProfile->color[1] != s_renameColor[1] ||
                      activeProfile->color[2] != s_renameColor[2]);
-                const bool renameValid = (nameChanged ? nameValid : true) && (nameChanged || colorChanged);
+                const bool sectionsChanged = activeProfile != nullptr && !(activeProfile->sections == s_editSections);
+                const bool renameValid = (nameChanged ? nameValid : true) && (nameChanged || colorChanged || sectionsChanged);
 
                 if (nameChanged && !nameValid)
                     ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", trc("profiles.invalid_name"));
                 ImGui::ColorEdit3(trc("profiles.color"), s_renameColor, ImGuiColorEditFlags_NoInputs);
+                ImGui::Separator();
+                ImGui::TextUnformatted(trc("profiles.sections"));
+                ImGui::TextWrapped("%s", trc("profiles.sections_hint"));
+                if (ImGui::BeginTable("##profileSections", 2, ImGuiTableFlags_SizingStretchSame)) {
+                    auto drawSectionCheckbox = [](const char* label, bool* value) {
+                        ImGui::TableNextColumn();
+                        ImGui::Checkbox(label, value);
+                    };
+
+                    drawSectionCheckbox(trc("profiles.section.modes"), &s_editSections.modes);
+                    drawSectionCheckbox(trc("profiles.section.mirrors"), &s_editSections.mirrors);
+                    drawSectionCheckbox(trc("profiles.section.images"), &s_editSections.images);
+                    drawSectionCheckbox(trc("profiles.section.window_overlays"), &s_editSections.windowOverlays);
+                    drawSectionCheckbox(trc("profiles.section.browser_overlays"), &s_editSections.browserOverlays);
+                    drawSectionCheckbox(trc("profiles.section.ninjabrain_overlay"), &s_editSections.ninjabrainOverlay);
+                    drawSectionCheckbox(trc("profiles.section.hotkeys"), &s_editSections.hotkeys);
+                    drawSectionCheckbox(trc("profiles.section.inputs_mouse"), &s_editSections.inputsMouse);
+                    drawSectionCheckbox(trc("profiles.section.capture_window"), &s_editSections.captureWindow);
+                    drawSectionCheckbox(trc("profiles.section.settings"), &s_editSections.settings);
+                    drawSectionCheckbox(trc("profiles.section.appearance"), &s_editSections.appearance);
+
+                    ImGui::EndTable();
+                }
                 ImGui::BeginDisabled(!renameValid);
                 if (ImGui::Button(trc("button.ok"), ImVec2(80, 0))) {
-                    if (UpdateProfileMetadata(g_profilesConfig.activeProfile, s_renameBuffer, s_renameColor)) {
+                    if (UpdateProfileMetadata(g_profilesConfig.activeProfile, s_renameBuffer, s_renameColor, s_editSections)) {
                         ImGui::CloseCurrentPopup();
                     }
                 }

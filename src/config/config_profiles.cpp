@@ -1,5 +1,7 @@
 #include "config_toml.h"
+#include "common/i18n.h"
 #include "common/utils.h"
+#include "features/ninjabrain_client.h"
 #include "gui/gui.h"
 #include "render/mirror_thread.h"
 #include "render/render.h"
@@ -14,6 +16,8 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+
+void ApplyKeyRepeatSettings();
 
 ProfilesConfig g_profilesConfig;
 
@@ -45,6 +49,64 @@ static void CopyColor(float dst[3], const float src[3]) {
 
 static bool ColorsEqual(const float a[3], const float b[3]) {
     return a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
+}
+
+static bool ProfileSectionsEqual(const ProfileSectionSelection& a, const ProfileSectionSelection& b) {
+    return a == b;
+}
+
+static toml::array ProfileSectionsToTomlArray(const ProfileSectionSelection& sections) {
+    toml::array values;
+    if (sections.modes) values.push_back("modes");
+    if (sections.mirrors) values.push_back("mirrors");
+    if (sections.images) values.push_back("images");
+    if (sections.windowOverlays) values.push_back("window_overlays");
+    if (sections.browserOverlays) values.push_back("browser_overlays");
+    if (sections.ninjabrainOverlay) values.push_back("ninjabrain_overlay");
+    if (sections.hotkeys) values.push_back("hotkeys");
+    if (sections.inputsMouse) values.push_back("inputs_mouse");
+    if (sections.captureWindow) values.push_back("capture_window");
+    if (sections.settings) values.push_back("settings");
+    if (sections.appearance) values.push_back("appearance");
+    return values;
+}
+
+static ProfileSectionSelection ProfileSectionsFromToml(const toml::node* node) {
+    ProfileSectionSelection sections;
+    const toml::array* arr = node != nullptr ? node->as_array() : nullptr;
+    if (arr == nullptr) {
+        return sections;
+    }
+
+    sections = ProfileSectionSelection{};
+    sections.modes = false;
+    sections.mirrors = false;
+    sections.images = false;
+    sections.windowOverlays = false;
+    sections.browserOverlays = false;
+    sections.ninjabrainOverlay = false;
+    sections.hotkeys = false;
+    sections.inputsMouse = false;
+    sections.captureWindow = false;
+    sections.settings = false;
+    sections.appearance = false;
+
+    for (const auto& entry : *arr) {
+        const std::string value = entry.value_or(std::string());
+        if (value == "modes") sections.modes = true;
+        else if (value == "mirrors") sections.mirrors = true;
+        else if (value == "images") sections.images = true;
+        else if (value == "window_overlays") sections.windowOverlays = true;
+        else if (value == "browser_overlays") sections.browserOverlays = true;
+        else if (value == "ninjabrain_overlay") sections.ninjabrainOverlay = true;
+        else if (value == "hotkeys") sections.hotkeys = true;
+        else if (value == "inputs_mouse") sections.inputsMouse = true;
+        else if (value == "capture_window") sections.captureWindow = true;
+        else if (value == "settings") sections.settings = true;
+        else if (value == "appearance") sections.appearance = true;
+    }
+
+    return sections;
 }
 
 static std::wstring MakeTempSiblingPath(const std::wstring& finalPath, const wchar_t* suffix) {
@@ -167,6 +229,14 @@ static std::string ResolveTrackedProfileNameLocked(const std::string& name) {
     return pm ? pm->name : std::string();
 }
 
+static bool TryGetProfileMetadataLocked(const std::string& name, ProfileMetadata& outMetadata) {
+    if (const ProfileMetadata* pm = FindProfileMetadataLockedConst(name)) {
+        outMetadata = *pm;
+        return true;
+    }
+    return false;
+}
+
 static bool ProfileNameExistsLocked(const std::string& name, const std::string& excludeName = std::string()) {
     for (const auto& pm : g_profilesConfig.profiles) {
         if (!excludeName.empty() && ProfileNamesEqual(pm.name, excludeName)) {
@@ -238,6 +308,7 @@ static bool LoadProfilesConfigLocked() {
                         pm.color[1] = (*colorArr)[1].value_or(kDefaultProfileColor[1]);
                         pm.color[2] = (*colorArr)[2].value_or(kDefaultProfileColor[2]);
                     }
+                    pm.sections = ProfileSectionsFromToml((*t).get("sections"));
                     if (!pm.name.empty() && !ProfileNameExistsLocked(pm.name)) {
                         g_profilesConfig.profiles.push_back(pm);
                     }
@@ -264,6 +335,7 @@ static void BuildProfilesConfigToml(toml::table& tbl) {
         colorArr.push_back(pm.color[1]);
         colorArr.push_back(pm.color[2]);
         pt.insert("color", colorArr);
+        pt.insert("sections", ProfileSectionsToTomlArray(pm.sections));
         profilesArr.push_back(pt);
     }
     tbl.insert("profile", profilesArr);
@@ -288,6 +360,9 @@ static bool ProfilesConfigMatchesLocked(const std::vector<ProfileMetadata>& prof
             return false;
         }
         if (!ColorsEqual(g_profilesConfig.profiles[i].color, profiles[i].color)) {
+            return false;
+        }
+        if (!ProfileSectionsEqual(g_profilesConfig.profiles[i].sections, profiles[i].sections)) {
             return false;
         }
     }
@@ -323,6 +398,7 @@ static bool SyncProfilesConfigWithDiskLocked(bool seedFromCurrentConfigIfEmpty) 
         normalized.name = profileName;
         if (const ProfileMetadata* existing = FindProfileMetadataLockedConst(profileName)) {
             CopyColor(normalized.color, existing->color);
+            normalized.sections = existing->sections;
         }
         normalizedProfiles.push_back(normalized);
     }
@@ -383,67 +459,143 @@ bool IsValidProfileName(const std::string& name) {
 }
 
 void ApplyProfileFields(const Config& src, Config& dst) {
-    dst.mirrors = src.mirrors;
-    dst.mirrorGroups = src.mirrorGroups;
-    dst.images = src.images;
-    dst.windowOverlays = src.windowOverlays;
-    dst.browserOverlays = src.browserOverlays;
-    dst.modes = src.modes;
-    dst.hotkeys = src.hotkeys;
-    dst.sensitivityHotkeys = src.sensitivityHotkeys;
-    dst.eyezoom = src.eyezoom;
-    dst.defaultMode = src.defaultMode;
-    dst.keyRebinds = src.keyRebinds;
-    dst.cursors = src.cursors;
-    dst.mouseSensitivity = src.mouseSensitivity;
-    dst.windowsMouseSpeed = src.windowsMouseSpeed;
-    dst.borderlessHotkey = src.borderlessHotkey;
-    dst.autoBorderless = src.autoBorderless;
-    dst.imageOverlaysHotkey = src.imageOverlaysHotkey;
-    dst.windowOverlaysHotkey = src.windowOverlaysHotkey;
-    dst.hideAnimationsInGame = src.hideAnimationsInGame;
+    ApplyProfileFields(src, dst, ProfileSectionSelection{});
 }
 
-static void MoveProfileFields(Config& src, Config& dst) {
-    dst.mirrors = std::move(src.mirrors);
-    dst.mirrorGroups = std::move(src.mirrorGroups);
-    dst.images = std::move(src.images);
-    dst.windowOverlays = std::move(src.windowOverlays);
-    dst.browserOverlays = std::move(src.browserOverlays);
-    dst.modes = std::move(src.modes);
-    dst.hotkeys = std::move(src.hotkeys);
-    dst.sensitivityHotkeys = std::move(src.sensitivityHotkeys);
-    dst.eyezoom = std::move(src.eyezoom);
-    dst.defaultMode = std::move(src.defaultMode);
-    dst.keyRebinds = std::move(src.keyRebinds);
-    dst.cursors = std::move(src.cursors);
-    dst.mouseSensitivity = src.mouseSensitivity;
-    dst.windowsMouseSpeed = src.windowsMouseSpeed;
-    dst.borderlessHotkey = std::move(src.borderlessHotkey);
-    dst.autoBorderless = src.autoBorderless;
-    dst.imageOverlaysHotkey = std::move(src.imageOverlaysHotkey);
-    dst.windowOverlaysHotkey = std::move(src.windowOverlaysHotkey);
-    dst.hideAnimationsInGame = src.hideAnimationsInGame;
+void ApplyProfileFields(const Config& src, Config& dst, const ProfileSectionSelection& sections) {
+    if (sections.mirrors) {
+        dst.mirrors = src.mirrors;
+        dst.mirrorGroups = src.mirrorGroups;
+        dst.mirrorGammaMode = src.mirrorGammaMode;
+    }
+    if (sections.images) {
+        dst.images = src.images;
+    }
+    if (sections.windowOverlays) {
+        dst.windowOverlays = src.windowOverlays;
+    }
+    if (sections.browserOverlays) {
+        dst.browserOverlays = src.browserOverlays;
+    }
+    if (sections.ninjabrainOverlay) {
+        dst.ninjabrainOverlay = src.ninjabrainOverlay;
+    }
+    if (sections.modes) {
+        dst.modes = src.modes;
+        dst.eyezoom = src.eyezoom;
+        dst.defaultMode = src.defaultMode;
+    }
+    if (sections.hotkeys) {
+        dst.hotkeys = src.hotkeys;
+        dst.sensitivityHotkeys = src.sensitivityHotkeys;
+        dst.guiHotkey = src.guiHotkey;
+        dst.borderlessHotkey = src.borderlessHotkey;
+        dst.imageOverlaysHotkey = src.imageOverlaysHotkey;
+        dst.windowOverlaysHotkey = src.windowOverlaysHotkey;
+    }
+    if (sections.inputsMouse) {
+        dst.keyRebinds = src.keyRebinds;
+        dst.cursors = src.cursors;
+        dst.allowCursorEscape = src.allowCursorEscape;
+        dst.confineCursor = src.confineCursor;
+        dst.mouseSensitivity = src.mouseSensitivity;
+        dst.windowsMouseSpeed = src.windowsMouseSpeed;
+        dst.keyRepeatStartDelay = src.keyRepeatStartDelay;
+        dst.keyRepeatDelay = src.keyRepeatDelay;
+    }
+    if (sections.captureWindow) {
+        dst.autoBorderless = src.autoBorderless;
+        dst.hideAnimationsInGame = src.hideAnimationsInGame;
+        dst.limitCaptureFramerate = src.limitCaptureFramerate;
+        dst.obsFramerate = src.obsFramerate;
+        dst.restoreWindowedModeOnFullscreenExit = src.restoreWindowedModeOnFullscreenExit;
+        dst.disableFullscreenPrompt = src.disableFullscreenPrompt;
+        dst.disableConfigurePrompt = src.disableConfigurePrompt;
+    }
+    if (sections.settings) {
+        dst.debug = src.debug;
+        dst.fpsLimit = src.fpsLimit;
+        dst.fpsLimitSleepThreshold = src.fpsLimitSleepThreshold;
+        dst.disableHookChaining = src.disableHookChaining;
+    }
+    if (sections.appearance) {
+        dst.fontPath = src.fontPath;
+        dst.lang = src.lang;
+        dst.appearance = src.appearance;
+        dst.basicModeEnabled = src.basicModeEnabled;
+    }
 }
 
-static void ExtractProfileConfig(const Config& full, Config& profile) {
+static void ExtractProfileConfig(const Config& full, const ProfileSectionSelection& sections, Config& profile) {
     profile = Config{};
-    ApplyProfileFields(full, profile);
+    ApplyProfileFields(full, profile, sections);
     profile.configVersion = GetConfigVersion();
 }
 
-static void ExtractProfileConfigMove(Config&& full, Config& profile) {
-    profile = Config{};
-    MoveProfileFields(full, profile);
-    profile.configVersion = GetConfigVersion();
+static void UpdateSharedConfigFromMergedConfig(const Config& mergedConfig, const ProfileSectionSelection& activeSections) {
+    Config updatedShared = mergedConfig;
+    ApplyProfileFields(g_sharedConfig, updatedShared, activeSections);
+    updatedShared.configVersion = GetConfigVersion();
+    g_sharedConfig = std::move(updatedShared);
+}
+
+static void ApplyProfileSwitchRuntimeConfig(const Config& previousConfig) {
+    if (!LoadTranslation(g_config.lang)) {
+        Log("SwitchProfile: failed to load translations for '" + g_config.lang + "'");
+    }
+
+    SaveTheme();
+    if (ImGui::GetCurrentContext() != nullptr) {
+        ApplyAppearanceConfig();
+    }
+    RequestDynamicGuiFontRefresh(true);
+
+    ApplyKeyRepeatSettings();
+    if (g_config.confineCursor) {
+        ApplyConfineCursorToGameWindow();
+    } else {
+        ClipCursorDirect(NULL);
+    }
+    SetGlobalMirrorGammaMode(g_config.mirrorGammaMode);
+
+    const bool previousNinjabrainEnabled = previousConfig.ninjabrainOverlay.enabled;
+    const bool currentNinjabrainEnabled = g_config.ninjabrainOverlay.enabled;
+    if (!currentNinjabrainEnabled) {
+        if (previousNinjabrainEnabled) {
+            StopNinjabrainClient();
+        }
+        return;
+    }
+
+    if (!previousNinjabrainEnabled) {
+        StartNinjabrainClient();
+        return;
+    }
+
+    if (previousConfig.ninjabrainOverlay.apiBaseUrl != g_config.ninjabrainOverlay.apiBaseUrl) {
+        RestartNinjabrainClient();
+    }
 }
 
 void SaveProfile(const std::string& name) {
+    ProfileMetadata metadata;
+    std::string resolvedName = name;
+    {
+        std::lock_guard<std::mutex> lock(g_profilesMutex);
+        const std::string trackedName = ResolveTrackedProfileNameLocked(name);
+        if (!trackedName.empty()) {
+            resolvedName = trackedName;
+        }
+        metadata.name = resolvedName;
+        (void)TryGetProfileMetadataLocked(resolvedName, metadata);
+    }
+
     Config profileConfig;
-    ExtractProfileConfig(g_config, profileConfig);
+    ExtractProfileConfig(g_config, metadata.sections, profileConfig);
+
     std::lock_guard<std::mutex> lock(g_profilesMutex);
-    if (!SaveProfileSnapshotLocked(name, profileConfig)) {
-        Log("SaveProfile: failed to write profile '" + name + "'");
+    if (!SaveProfileSnapshotLocked(resolvedName, profileConfig)) {
+        Log("SaveProfile: failed to write profile '" + resolvedName + "'");
     }
 }
 
@@ -463,10 +615,14 @@ bool SaveProfileSnapshotIfTracked(const std::string& name, const Config& configS
 
 bool LoadProfile(const std::string& name) {
     std::wstring path;
+    ProfileMetadata metadata;
     {
         std::lock_guard<std::mutex> lock(g_profilesMutex);
         const std::string trackedName = ResolveTrackedProfileNameLocked(name);
-        path = GetProfilePath(trackedName.empty() ? name : trackedName);
+        const std::string resolvedName = trackedName.empty() ? name : trackedName;
+        metadata.name = resolvedName;
+        (void)TryGetProfileMetadataLocked(resolvedName, metadata);
+        path = GetProfilePath(resolvedName);
     }
 
     Config profileConfig;
@@ -475,7 +631,9 @@ bool LoadProfile(const std::string& name) {
         return false;
     }
 
-    ApplyProfileFields(profileConfig, g_config);
+    Config mergedConfig = g_sharedConfig;
+    ApplyProfileFields(profileConfig, mergedConfig, metadata.sections);
+    g_config = std::move(mergedConfig);
     return true;
 }
 
@@ -498,11 +656,15 @@ bool EnsureProfilesConfigReady() {
 }
 
 void SwitchProfile(const std::string& newProfileName) {
+    const Config previousConfig = g_config;
     Config oldProfileConfig;
     Config newProfileConfig;
+    ProfileMetadata previousProfileMetadata;
+    ProfileMetadata newProfileMetadata;
     std::string resolvedNewProfileName;
     bool failedToSavePreviousProfile = false;
     bool failedToSaveProfilesMetadata = false;
+    const bool pendingConfigSave = g_configIsDirty.load(std::memory_order_acquire);
 
     {
         std::lock_guard<std::mutex> lock(g_profilesMutex);
@@ -511,14 +673,24 @@ void SwitchProfile(const std::string& newProfileName) {
             resolvedNewProfileName = newProfileName;
         }
 
+        newProfileMetadata.name = resolvedNewProfileName;
+        (void)TryGetProfileMetadataLocked(resolvedNewProfileName, newProfileMetadata);
+
         if (!LoadProfileConfigFromPath(GetProfilePath(resolvedNewProfileName), newProfileConfig)) {
             Log("LoadProfile: failed to parse profile '" + resolvedNewProfileName + "', using current config");
             return;
         }
 
-        ExtractProfileConfig(g_config, oldProfileConfig);
         const std::string previousTrackedProfileName = ResolveTrackedProfileNameLocked(g_profilesConfig.activeProfile);
         const std::string previousProfileName = previousTrackedProfileName.empty() ? g_profilesConfig.activeProfile : previousTrackedProfileName;
+
+        previousProfileMetadata.name = previousProfileName;
+        (void)TryGetProfileMetadataLocked(previousProfileName, previousProfileMetadata);
+
+        if (!previousProfileName.empty()) {
+            UpdateSharedConfigFromMergedConfig(g_config, previousProfileMetadata.sections);
+            ExtractProfileConfig(g_config, previousProfileMetadata.sections, oldProfileConfig);
+        }
 
         if (!previousProfileName.empty() && !SaveProfileSnapshotLocked(previousProfileName, oldProfileConfig)) {
             failedToSavePreviousProfile = true;
@@ -537,7 +709,8 @@ void SwitchProfile(const std::string& newProfileName) {
         Log("SwitchProfile: failed to save profiles metadata");
     }
 
-    ApplyProfileFields(newProfileConfig, g_config);
+    g_config = g_sharedConfig;
+    ApplyProfileFields(newProfileConfig, g_config, newProfileMetadata.sections);
 
     RemoveInvalidHotkeyModeReferences(g_config);
     ResetAllHotkeySecondaryModes(g_config);
@@ -579,17 +752,16 @@ void SwitchProfile(const std::string& newProfileName) {
     RequestScreenMetricsRecalculation();
     PublishConfigSnapshot();
 
-    g_configIsDirty = false;
+    ApplyProfileSwitchRuntimeConfig(previousConfig);
+
+    g_configIsDirty.store(pendingConfigSave, std::memory_order_release);
 }
 
 bool CreateNewProfile(const std::string& name) {
     if (!IsValidProfileName(name)) return false;
 
-    Config defaultConfig;
-    LoadEmbeddedDefaultConfig(defaultConfig);
-
     Config profileConfig;
-    ExtractProfileConfigMove(std::move(defaultConfig), profileConfig);
+    ExtractProfileConfig(g_config, ProfileSectionSelection{}, profileConfig);
 
     std::lock_guard<std::mutex> lock(g_profilesMutex);
     if (ProfileNameExistsLocked(name)) return false;
@@ -616,9 +788,13 @@ bool DuplicateProfile(const std::string& srcName, const std::string& dstName) {
 
     const std::string resolvedSourceName = ResolveTrackedProfileNameLocked(srcName);
     const std::string trackedSourceName = resolvedSourceName.empty() ? srcName : resolvedSourceName;
+    ProfileMetadata sourceMetadata;
+    sourceMetadata.name = trackedSourceName;
+    (void)TryGetProfileMetadataLocked(trackedSourceName, sourceMetadata);
+
     if (ProfileNamesEqual(trackedSourceName, g_profilesConfig.activeProfile)) {
         Config activeSnapshot;
-        ExtractProfileConfig(g_config, activeSnapshot);
+        ExtractProfileConfig(g_config, sourceMetadata.sections, activeSnapshot);
         if (!SaveProfileSnapshotLocked(trackedSourceName, activeSnapshot)) {
             return false;
         }
@@ -636,6 +812,7 @@ bool DuplicateProfile(const std::string& srcName, const std::string& dstName) {
     pm.name = dstName;
     if (const ProfileMetadata* existing = FindProfileMetadataLockedConst(trackedSourceName)) {
         CopyColor(pm.color, existing->color);
+        pm.sections = existing->sections;
     }
     g_profilesConfig.profiles.push_back(pm);
     if (!SaveProfilesConfigLocked()) {
@@ -680,7 +857,8 @@ void DeleteProfile(const std::string& name) {
     }
 }
 
-bool UpdateProfileMetadata(const std::string& currentName, const std::string& newName, const float color[3]) {
+bool UpdateProfileMetadata(const std::string& currentName, const std::string& newName, const float color[3],
+                           const ProfileSectionSelection& sections) {
     if (!IsValidProfileName(newName)) return false;
 
     std::lock_guard<std::mutex> lock(g_profilesMutex);
@@ -691,28 +869,55 @@ bool UpdateProfileMetadata(const std::string& currentName, const std::string& ne
     const ProfileMetadata previousMetadata = *existing;
     const std::string previousActiveProfile = g_profilesConfig.activeProfile;
     const bool renameRequested = previousMetadata.name != newName;
+    const bool wasActive = ProfileNamesEqual(g_profilesConfig.activeProfile, previousMetadata.name);
+    const bool sectionsChanged = !ProfileSectionsEqual(previousMetadata.sections, sections);
 
-    if (renameRequested) {
-        const std::wstring oldPath = GetProfilePath(previousMetadata.name);
-        const std::wstring newPath = GetProfilePath(newName);
-        if (!RenamePathReplacingExisting(oldPath, newPath)) {
-            return false;
-        }
+    if (sectionsChanged && !wasActive) {
+        return false;
+    }
+
+    Config updatedSharedConfig;
+    Config updatedProfileSnapshot;
+    if (wasActive && sectionsChanged) {
+        updatedSharedConfig = g_config;
+        ApplyProfileFields(g_sharedConfig, updatedSharedConfig, sections);
+        updatedSharedConfig.configVersion = GetConfigVersion();
+        ExtractProfileConfig(g_config, sections, updatedProfileSnapshot);
     }
 
     existing->name = newName;
     CopyColor(existing->color, color);
-    if (ProfileNamesEqual(g_profilesConfig.activeProfile, previousMetadata.name)) {
+    existing->sections = sections;
+    if (wasActive) {
         g_profilesConfig.activeProfile = newName;
     }
 
     if (!SaveProfilesConfigLocked()) {
+        *existing = previousMetadata;
+        g_profilesConfig.activeProfile = previousActiveProfile;
+        return false;
+    }
+
+    if (renameRequested && !RenamePathReplacingExisting(GetProfilePath(previousMetadata.name), GetProfilePath(newName))) {
+        *existing = previousMetadata;
+        g_profilesConfig.activeProfile = previousActiveProfile;
+        SaveProfilesConfigLocked();
+        return false;
+    }
+
+    if (wasActive && sectionsChanged && !SaveProfileSnapshotLocked(newName, updatedProfileSnapshot)) {
         if (renameRequested) {
             RenamePathReplacingExisting(GetProfilePath(newName), GetProfilePath(previousMetadata.name));
         }
         *existing = previousMetadata;
         g_profilesConfig.activeProfile = previousActiveProfile;
+        SaveProfilesConfigLocked();
         return false;
+    }
+
+    if (wasActive && sectionsChanged) {
+        g_sharedConfig = std::move(updatedSharedConfig);
+        g_configIsDirty.store(true, std::memory_order_release);
     }
 
     return true;
@@ -720,13 +925,15 @@ bool UpdateProfileMetadata(const std::string& currentName, const std::string& ne
 
 bool RenameProfile(const std::string& oldName, const std::string& newName) {
     float color[3] = { kDefaultProfileColor[0], kDefaultProfileColor[1], kDefaultProfileColor[2] };
+    ProfileSectionSelection sections;
     {
         std::lock_guard<std::mutex> lock(g_profilesMutex);
         const ProfileMetadata* existing = FindProfileMetadataLockedConst(oldName);
         if (!existing) return false;
         CopyColor(color, existing->color);
+        sections = existing->sections;
     }
-    return UpdateProfileMetadata(oldName, newName, color);
+    return UpdateProfileMetadata(oldName, newName, color, sections);
 }
 
 bool MigrateToProfiles() {
@@ -740,7 +947,7 @@ bool MigrateToProfiles() {
     }
 
     Config defaultProfile;
-    ExtractProfileConfig(g_config, defaultProfile);
+    ExtractProfileConfig(g_config, ProfileSectionSelection{}, defaultProfile);
     if (!SaveProfileSnapshotLocked(kDefaultProfileName, defaultProfile)) {
         Log("MigrateToProfiles: failed to save default profile");
         return false;

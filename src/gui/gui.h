@@ -719,9 +719,26 @@ struct Config {
 inline constexpr const char* kDefaultProfileName = "Default";
 inline constexpr float kDefaultProfileColor[3] = { 0.4f, 0.8f, 0.4f };
 
+struct ProfileSectionSelection {
+    bool modes = true;
+    bool mirrors = true;
+    bool images = true;
+    bool windowOverlays = true;
+    bool browserOverlays = true;
+    bool ninjabrainOverlay = true;
+    bool hotkeys = true;
+    bool inputsMouse = true;
+    bool captureWindow = true;
+    bool settings = true;
+    bool appearance = true;
+
+    bool operator==(const ProfileSectionSelection&) const = default;
+};
+
 struct ProfileMetadata {
     std::string name;
     float color[3] = { kDefaultProfileColor[0], kDefaultProfileColor[1], kDefaultProfileColor[2] };
+    ProfileSectionSelection sections;
 };
 
 struct ProfilesConfig {
@@ -736,6 +753,7 @@ void SaveProfile(const std::string& name);
 bool LoadProfile(const std::string& name);
 void SwitchProfile(const std::string& newProfileName);
 void ApplyProfileFields(const Config& src, Config& dst);
+void ApplyProfileFields(const Config& src, Config& dst, const ProfileSectionSelection& sections);
 bool LoadProfilesConfig();
 void SaveProfilesConfig();
 bool EnsureProfilesConfigReady();
@@ -743,7 +761,8 @@ bool CreateNewProfile(const std::string& name);
 bool DuplicateProfile(const std::string& srcName, const std::string& dstName);
 void DeleteProfile(const std::string& name);
 bool RenameProfile(const std::string& oldName, const std::string& newName);
-bool UpdateProfileMetadata(const std::string& currentName, const std::string& newName, const float color[3]);
+bool UpdateProfileMetadata(const std::string& currentName, const std::string& newName, const float color[3],
+                           const ProfileSectionSelection& sections);
 bool SaveProfileSnapshot(const std::string& name, const Config& configSnapshot);
 bool SaveProfileSnapshotIfTracked(const std::string& name, const Config& configSnapshot);
 bool MigrateToProfiles();
@@ -801,6 +820,7 @@ struct ModeTransitionAnimation {
 };
 
 extern Config g_config;
+extern Config g_sharedConfig;
 extern std::atomic<bool> g_configIsDirty;
 
 // g_config is the mutable draft, only touched by the GUI/main thread.

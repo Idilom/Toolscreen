@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <sstream>
 
 template <typename T> T GetOr(const toml::table& tbl, const std::string& key, T defaultValue) {
     if (auto node = tbl.get(key)) {
@@ -392,10 +393,8 @@ static void WriteNode(std::ostream& out, const std::string& key, const toml::nod
         } else {
             out << "[" << key << "]\n";
             for (const auto& [subKey, subNode] : *subtbl) {
-                std::string subKeyStr(subKey.str());
-                if (subNode.is_table()) {
-                    WriteNode(out, key + "." + subKeyStr, subNode, false);
-                } else {
+                if (!subNode.is_table()) {
+                    std::string subKeyStr(subKey.str());
                     out << subKeyStr << " = ";
                     if (subNode.is_array()) {
                         out << *subNode.as_array();
@@ -403,6 +402,12 @@ static void WriteNode(std::ostream& out, const std::string& key, const toml::nod
                         subNode.visit([&out](auto&& val) { out << val; });
                     }
                     out << "\n";
+                }
+            }
+
+            for (const auto& [subKey, subNode] : *subtbl) {
+                if (subNode.is_table()) {
+                    WriteNode(out, key + "." + std::string(subKey.str()), subNode, false);
                 }
             }
         }
@@ -2625,210 +2630,329 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     }
 }
 
+namespace {
+
+const std::vector<std::string>& GetConfigTomlOrderedKeys() {
+    static const std::vector<std::string> orderedKeys = {
+        "configVersion",
+        "disableHookChaining",
+        "defaultMode",
+        "fontPath",
+        "lang",
+        "fpsLimit",
+        "fpsLimitSleepThreshold",
+        "mirrorMatchColorspace",
+        "allowCursorEscape",
+        "mouseSensitivity",
+        "windowsMouseSpeed",
+        "hideAnimationsInGame",
+        "limitCaptureFramerate",
+        "obsFramerate",
+        "keyRepeatStartDelay",
+        "keyRepeatDelay",
+        "basicModeEnabled",
+        "restoreWindowedModeOnFullscreenExit",
+        "disableFullscreenPrompt",
+        "disableConfigurePrompt",
+        "guiHotkey",
+        "borderlessHotkey",
+        "autoBorderless",
+        "imageOverlaysHotkey",
+        "windowOverlaysHotkey",
+        "debug",
+        "eyezoom",
+        "cursors",
+        "keyRebinds",
+        "appearance",
+        "mode",
+        "mirror",
+        "mirrorGroup",
+        "image",
+        "windowOverlay",
+        "browserOverlay",
+        "hotkey",
+        "sensitivityHotkey",
+    };
+    return orderedKeys;
+}
+
+const std::vector<std::string>& GetModeTomlKeys() {
+    static const std::vector<std::string> keys = {
+        "id",
+        "width",
+        "height",
+        "useRelativeSize",
+        "relativeWidth",
+        "relativeHeight",
+        "background",
+        "mirrorIds",
+        "mirrorGroupIds",
+        "imageIds",
+        "windowOverlayIds",
+        "browserOverlayIds",
+        "stretch",
+        "gameTransition",
+        "overlayTransition",
+        "backgroundTransition",
+        "transitionDurationMs",
+        "easeInPower",
+        "easeOutPower",
+        "bounceCount",
+        "bounceIntensity",
+        "bounceDurationMs",
+        "relativeStretching",
+        "skipAnimateX",
+        "skipAnimateY",
+        "border",
+        "sensitivityOverrideEnabled",
+        "modeSensitivity",
+        "separateXYSensitivity",
+        "modeSensitivityX",
+        "modeSensitivityY",
+    };
+    return keys;
+}
+
+const std::vector<std::string>& GetMirrorTomlKeys() {
+    static const std::vector<std::string> keys = {
+        "name",
+        "captureWidth",
+        "captureHeight",
+        "input",
+        "output",
+        "colors",
+        "colorSensitivity",
+        "border",
+        "fps",
+        "rawOutput",
+        "colorPassthrough",
+        "gradientOutput",
+        "gradient",
+        "onlyOnMyScreen",
+        "debug",
+    };
+    return keys;
+}
+
+const std::vector<std::string>& GetMirrorGroupTomlKeys() {
+    static const std::vector<std::string> keys = { "name", "output", "mirrorIds" };
+    return keys;
+}
+
+const std::vector<std::string>& GetImageTomlKeys() {
+    static const std::vector<std::string> keys = {
+        "name",
+        "path",
+        "x",
+        "y",
+        "scale",
+        "relativeTo",
+        "crop_top",
+        "crop_bottom",
+        "crop_left",
+        "crop_right",
+        "enableColorKey",
+        "colorKeys",
+        "opacity",
+        "background",
+        "pixelatedScaling",
+        "onlyOnMyScreen",
+        "border",
+    };
+    return keys;
+}
+
+const std::vector<std::string>& GetWindowOverlayTomlKeys() {
+    static const std::vector<std::string> keys = {
+        "name",
+        "windowTitle",
+        "windowClass",
+        "executableName",
+        "windowMatchPriority",
+        "x",
+        "y",
+        "scale",
+        "relativeTo",
+        "crop_top",
+        "crop_bottom",
+        "crop_left",
+        "crop_right",
+        "enableColorKey",
+        "colorKeys",
+        "opacity",
+        "background",
+        "pixelatedScaling",
+        "onlyOnMyScreen",
+        "fps",
+        "searchInterval",
+        "captureMethod",
+        "forceUpdate",
+        "enableInteraction",
+        "border",
+    };
+    return keys;
+}
+
+const std::vector<std::string>& GetBrowserOverlayTomlKeys() {
+    static const std::vector<std::string> keys = {
+        "name",
+        "url",
+        "customCss",
+        "browserWidth",
+        "browserHeight",
+        "x",
+        "y",
+        "scale",
+        "relativeTo",
+        "crop_top",
+        "crop_bottom",
+        "crop_left",
+        "crop_right",
+        "enableColorKey",
+        "colorKeys",
+        "opacity",
+        "background",
+        "pixelatedScaling",
+        "onlyOnMyScreen",
+        "fps",
+        "transparentBackground",
+        "muteAudio",
+        "hardwareAcceleration",
+        "allowSystemMediaKeys",
+        "reloadOnUpdate",
+        "reloadInterval",
+        "border",
+    };
+    return keys;
+}
+
+const std::vector<std::string>& GetHotkeyTomlKeys() {
+    static const std::vector<std::string> keys = {
+        "keys",
+        "mainMode",
+        "secondaryMode",
+        "altSecondaryModes",
+        "conditions",
+        "debounce",
+        "allowExitToFullscreenRegardlessOfGameState",
+        "blockKeyFromGame",
+        "triggerOnHold",
+        "triggerOnRelease",
+    };
+    return keys;
+}
+
+const std::vector<std::string>* GetConfigTomlArrayItemKeyOrder(const std::string& arrayKey) {
+    if (arrayKey == "mode") return &GetModeTomlKeys();
+    if (arrayKey == "mirror") return &GetMirrorTomlKeys();
+    if (arrayKey == "mirrorGroup") return &GetMirrorGroupTomlKeys();
+    if (arrayKey == "image") return &GetImageTomlKeys();
+    if (arrayKey == "windowOverlay") return &GetWindowOverlayTomlKeys();
+    if (arrayKey == "browserOverlay") return &GetBrowserOverlayTomlKeys();
+    if (arrayKey == "hotkey") return &GetHotkeyTomlKeys();
+    return nullptr;
+}
+
+bool WriteConfigTomlDocument(std::ostream& out, const Config& config) {
+    toml::table tbl;
+    ConfigToToml(config, tbl);
+
+    const auto& orderedKeys = GetConfigTomlOrderedKeys();
+    static const std::vector<std::string> emptyOrder;
+
+    for (const auto& key : orderedKeys) {
+        if (!tbl.contains(key)) {
+            continue;
+        }
+
+        const toml::node* nodePtr = tbl.get(key);
+        if (nodePtr == nullptr) {
+            continue;
+        }
+
+        if (nodePtr->is_array()) {
+            const toml::array* arr = nodePtr->as_array();
+            if (arr && !arr->empty() && (*arr)[0].is_table()) {
+                const std::vector<std::string>* itemKeyOrder = GetConfigTomlArrayItemKeyOrder(key);
+                for (const auto& elem : *arr) {
+                    out << "\n[[" << key << "]]\n";
+                    const toml::table* elemTbl = elem.as_table();
+                    if (elemTbl) {
+                        WriteTableOrdered(out, *elemTbl, itemKeyOrder ? *itemKeyOrder : emptyOrder, true);
+                    }
+                }
+            } else if (arr) {
+                out << key << " = " << *arr << "\n";
+            }
+        } else if (nodePtr->is_table()) {
+            out << "\n";
+            WriteNode(out, key, *nodePtr, false);
+        } else {
+            out << key << " = ";
+            nodePtr->visit([&out](auto&& val) { out << val; });
+            out << "\n";
+        }
+    }
+
+    for (const auto& [key, node] : tbl) {
+        const std::string keyStr(key.str());
+        if (std::find(orderedKeys.begin(), orderedKeys.end(), keyStr) != orderedKeys.end()) {
+            continue;
+        }
+
+        if (node.is_array()) {
+            const toml::array* arr = node.as_array();
+            if (arr && !arr->empty() && (*arr)[0].is_table()) {
+                for (const auto& elem : *arr) {
+                    out << "\n[[" << keyStr << "]]\n";
+                    if (const toml::table* elemTbl = elem.as_table()) {
+                        WriteTableOrdered(out, *elemTbl, emptyOrder, true);
+                    }
+                }
+            } else if (arr) {
+                out << keyStr << " = " << *arr << "\n";
+            }
+        } else if (node.is_table()) {
+            out << "\n";
+            WriteNode(out, keyStr, node, false);
+        } else {
+            out << keyStr << " = ";
+            node.visit([&out](auto&& val) { out << val; });
+            out << "\n";
+        }
+    }
+
+    return out.good();
+}
+
+} // namespace
+
+bool SerializeConfigToTomlString(const Config& config, std::string& outToml) {
+    try {
+        std::ostringstream out;
+        if (!WriteConfigTomlDocument(out, config)) {
+            return false;
+        }
+        outToml = out.str();
+        return true;
+    } catch (const std::exception& e) {
+        Log("ERROR: Failed to serialize config to TOML: " + std::string(e.what()));
+        return false;
+    }
+}
+
 bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
     try {
-        toml::table tbl;
-        ConfigToToml(config, tbl);
-
         // Do not pass UTF-8 narrow strings to std::ofstream.
         // Use std::filesystem::path so the wide Win32 APIs are used under the hood.
         std::ofstream file(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
         if (!file.is_open()) { return false; }
-
-        std::vector<std::string> orderedKeys = { "configVersion",
-                     "disableHookChaining",
-                             "defaultMode",
-                                                 "fontPath",
-                             "lang",
-                                                 "fpsLimit",
-                                                 "fpsLimitSleepThreshold",
-                             "mirrorMatchColorspace",
-                                                 "allowCursorEscape",
-                                                 "mouseSensitivity",
-                                                 "windowsMouseSpeed",
-                                                 "hideAnimationsInGame",
-                                                 "limitCaptureFramerate",
-                             "obsFramerate",
-                                                 "keyRepeatStartDelay",
-                                                 "keyRepeatDelay",
-                                                 "basicModeEnabled",
-                                                 "restoreWindowedModeOnFullscreenExit",
-                                                 "disableFullscreenPrompt",
-                                                 "disableConfigurePrompt",
-                                                 "guiHotkey",
-                                                 "borderlessHotkey",
-                                                 "autoBorderless",
-                                                 "imageOverlaysHotkey",
-                                                 "windowOverlaysHotkey",
-                                                 "debug",
-                                                 "eyezoom",
-                                                 "cursors",
-                                                 "keyRebinds",
-                                                 "appearance",
-                                                 "mode",
-                                                 "mirror",
-                                                 "mirrorGroup",
-                                                 "image",
-                                                 "windowOverlay",
-                                                 "browserOverlay",
-                                                 "hotkey",
-                                                 "sensitivityHotkey" };
-
-        std::vector<std::string> modeKeys = { "id",
-                                              "width",
-                                              "height",
-                                              "useRelativeSize",
-                                              "relativeWidth",
-                                              "relativeHeight",
-                                              "background",
-                                              "mirrorIds",
-                                              "mirrorGroupIds",
-                                              "imageIds",
-                                              "windowOverlayIds",
-                                              "browserOverlayIds",
-                                              "stretch",
-                                              "gameTransition",
-                                              "overlayTransition",
-                                              "backgroundTransition",
-                                              "transitionDurationMs",
-                                              "easeInPower",
-                                              "easeOutPower",
-                                              "bounceCount",
-                                              "bounceIntensity",
-                                              "bounceDurationMs",
-                                              "relativeStretching",
-                                              "skipAnimateX",
-                                              "skipAnimateY",
-                                              "border",
-                                              "sensitivityOverrideEnabled",
-                                              "modeSensitivity",
-                                              "separateXYSensitivity",
-                                              "modeSensitivityX",
-                                              "modeSensitivityY" };
-        std::vector<std::string> mirrorKeys = { "name",   "captureWidth", "captureHeight",    "input",
-                            "output", "colors",       "colorSensitivity", "border",
-                            "fps",    "rawOutput",    "colorPassthrough", "gradientOutput",
-                            "gradient", "onlyOnMyScreen",
-                                                "debug" };
-        std::vector<std::string> mirrorGroupKeys = { "name", "output", "mirrorIds" };
-        std::vector<std::string> imageKeys = { "name",           "path",      "x",           "y",          "scale",
-                                               "relativeTo",     "crop_top",  "crop_bottom", "crop_left",  "crop_right",
-                                               "enableColorKey", "colorKeys", "opacity",     "background", "pixelatedScaling",
-                                               "onlyOnMyScreen", "border" };
-        std::vector<std::string> windowOverlayKeys = { "name",
-                                                       "windowTitle",
-                                                       "windowClass",
-                                                       "executableName",
-                                                       "windowMatchPriority",
-                                                       "x",
-                                                       "y",
-                                                       "scale",
-                                                       "relativeTo",
-                                                       "crop_top",
-                                                       "crop_bottom",
-                                                       "crop_left",
-                                                       "crop_right",
-                                                       "enableColorKey",
-                                                       "colorKeys",
-                                                       "opacity",
-                                                       "background",
-                                                       "pixelatedScaling",
-                                                       "onlyOnMyScreen",
-                                                       "fps",
-                                                       "searchInterval",
-                                                       "captureMethod",
-                                                       "forceUpdate",
-                                                       "enableInteraction",
-                                                       "border" };
-        std::vector<std::string> browserOverlayKeys = { "name",
-                                                        "url",
-                                                        "customCss",
-                                                        "browserWidth",
-                                                        "browserHeight",
-                                                        "x",
-                                                        "y",
-                                                        "scale",
-                                                        "relativeTo",
-                                                        "crop_top",
-                                                        "crop_bottom",
-                                                        "crop_left",
-                                                        "crop_right",
-                                                        "enableColorKey",
-                                                        "colorKeys",
-                                                        "opacity",
-                                                        "background",
-                                                        "pixelatedScaling",
-                                                        "onlyOnMyScreen",
-                                                        "fps",
-                                                        "transparentBackground",
-                                                        "muteAudio",
-                                                        "hardwareAcceleration",
-                                                        "allowSystemMediaKeys",
-                                                        "reloadOnUpdate",
-                                                        "reloadInterval",
-                                                        "border" };
-        std::vector<std::string> hotkeyKeys = { "keys", "mainMode", "secondaryMode", "altSecondaryModes",
-                                                       "conditions", "debounce",
-                                                       "allowExitToFullscreenRegardlessOfGameState",
-                                                       "blockKeyFromGame", "triggerOnHold", "triggerOnRelease" };
-
-        auto getKeyOrder = [&](const std::string& arrayKey) -> const std::vector<std::string>* {
-            if (arrayKey == "mode") return &modeKeys;
-            if (arrayKey == "mirror") return &mirrorKeys;
-            if (arrayKey == "mirrorGroup") return &mirrorGroupKeys;
-            if (arrayKey == "image") return &imageKeys;
-            if (arrayKey == "windowOverlay") return &windowOverlayKeys;
-            if (arrayKey == "browserOverlay") return &browserOverlayKeys;
-            if (arrayKey == "hotkey") return &hotkeyKeys;
-            return nullptr;
-        };
-
-        for (const auto& key : orderedKeys) {
-            if (tbl.contains(key)) {
-                const toml::node* nodePtr = tbl.get(key);
-                if (!nodePtr) continue;
-
-                if (nodePtr->is_array()) {
-                    const toml::array* arr = nodePtr->as_array();
-                    if (arr && !arr->empty() && (*arr)[0].is_table()) {
-                        const std::vector<std::string>* itemKeyOrder = getKeyOrder(key);
-                        for (const auto& elem : *arr) {
-                            file << "\n[[" << key << "]]\n";
-                            const toml::table* elemTbl = elem.as_table();
-                            if (elemTbl) {
-                                if (itemKeyOrder) {
-                                    WriteTableOrdered(file, *elemTbl, *itemKeyOrder, true);
-                                } else {
-                                    static const std::vector<std::string> emptyOrder;
-                                    WriteTableOrdered(file, *elemTbl, emptyOrder, true);
-                                }
-                            }
-                        }
-                    } else if (arr) {
-                        file << key << " = " << *arr << "\n";
-                    }
-                } else if (nodePtr->is_table()) {
-                    file << "\n";
-                    WriteNode(file, key, *nodePtr, false);
-                } else {
-                    file << key << " = ";
-                    nodePtr->visit([&file](auto&& val) { file << val; });
-                    file << "\n";
-                }
-            }
-        }
-
-        for (const auto& [key, node] : tbl) {
-            std::string keyStr(key.str());
-            if (std::find(orderedKeys.begin(), orderedKeys.end(), keyStr) == orderedKeys.end()) {
-                file << keyStr << " = ";
-                node.visit([&file](auto&& val) { file << val; });
-                file << "\n";
-            }
+        if (!WriteConfigTomlDocument(file, config)) {
+            return false;
         }
 
         file.close();
-        return true;
+        return file.good();
     } catch (const std::exception& e) {
         Log("ERROR: Failed to save config to TOML: " + std::string(e.what()));
         return false;

@@ -70,6 +70,7 @@ void KeyRebindToToml(const KeyRebind& cfg, toml::table& out);
 void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out);
 void AppearanceConfigToToml(const AppearanceConfig& cfg, toml::table& out);
 void ConfigToToml(const Config& config, toml::table& out);
+bool SerializeConfigToTomlString(const Config& config, std::string& outToml);
 
 
 void BackgroundConfigFromToml(const toml::table& tbl, BackgroundConfig& cfg);

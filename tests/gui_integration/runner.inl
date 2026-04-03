@@ -133,6 +133,7 @@ const auto& GetTestCaseDefinitions() {
         {"profile-migrate", &RunProfileMigrateTest},
         {"profile-delete-guards", &RunProfileDeleteGuardsTest},
         {"profile-rename", &RunProfileRenameTest},
+        {"profile-selective-switch-shared-fallback", &RunProfileSelectiveSwitchSharedFallbackTest},
         {"profile-case-insensitive-collisions", &RunProfileCaseInsensitiveCollisionTest},
         {"profile-recover-missing-metadata", &RunProfileRecoverMissingMetadataTest},
         {"profile-async-save-skip-deleted-profile", &RunProfileAsyncSaveSkipDeletedProfileTest},

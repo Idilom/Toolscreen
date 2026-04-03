@@ -27,6 +27,90 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.misc"))) {
     ImGui::SameLine();
     HelpMarker(trc("tooltip.open_config_folder"));
 
+    ImGui::Spacing();
+
+    ConfigStateUploadUiState configStateUpload = GetConfigStateUploadUiState();
+    if (configStateUpload.status == ConfigStateUploadStatus::Success && !configStateUpload.shareUrlAutoCopied && !configStateUpload.shareUrl.empty()) {
+        CopyToClipboard(g_minecraftHwnd.load(std::memory_order_relaxed), configStateUpload.shareUrl);
+        MarkConfigStateUploadShareUrlAutoCopied();
+        configStateUpload = GetConfigStateUploadUiState();
+    }
+
+    ImGui::BeginDisabled(configStateUpload.status == ConfigStateUploadStatus::Uploading);
+    if (ImGui::Button(trc("button.upload_config_state"))) {
+        StartConfigStateUpload();
+        configStateUpload = GetConfigStateUploadUiState();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    HelpMarker(trc("tooltip.upload_config_state"));
+
+    if (configStateUpload.status == ConfigStateUploadStatus::Uploading) {
+        ImGui::TextDisabled("%s", trc("misc.upload_config_state.uploading"));
+    } else if (configStateUpload.status == ConfigStateUploadStatus::Success) {
+        ImGui::TextWrapped("%s", trc("misc.upload_config_state.success"));
+
+        if (!configStateUpload.shareUrl.empty()) {
+            ImGui::TextUnformatted(trc("misc.upload_config_state.share_link"));
+            ImGui::SameLine();
+            ImGui::TextLinkOpenURL(configStateUpload.shareUrl.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton(trc("button.copy_share_link"))) {
+                CopyToClipboard(g_minecraftHwnd.load(std::memory_order_relaxed), configStateUpload.shareUrl);
+                SetConfigStateUploadClipboardTarget(ConfigStateUploadClipboardTarget::ShareUrl);
+                configStateUpload = GetConfigStateUploadUiState();
+            }
+        }
+
+        if (configStateUpload.clipboardTarget == ConfigStateUploadClipboardTarget::ShareUrl) {
+            ImGui::TextDisabled("%s", trc("misc.upload_config_state.copied_share"));
+        }
+    } else if (configStateUpload.status == ConfigStateUploadStatus::Error) {
+        ImGui::TextWrapped("%s", trc("misc.upload_config_state.error", configStateUpload.error));
+    }
+
+    ImGui::Spacing();
+
+    ConfigStateUploadUiState megaDebugUpload = GetMegaDebugUploadUiState();
+    if (megaDebugUpload.status == ConfigStateUploadStatus::Success && !megaDebugUpload.shareUrlAutoCopied && !megaDebugUpload.shareUrl.empty()) {
+        CopyToClipboard(g_minecraftHwnd.load(std::memory_order_relaxed), megaDebugUpload.shareUrl);
+        MarkMegaDebugUploadShareUrlAutoCopied();
+        megaDebugUpload = GetMegaDebugUploadUiState();
+    }
+
+    ImGui::BeginDisabled(megaDebugUpload.status == ConfigStateUploadStatus::Uploading);
+    if (ImGui::Button(trc("button.mega_debug_upload"))) {
+        StartMegaDebugUpload();
+        megaDebugUpload = GetMegaDebugUploadUiState();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    HelpMarker(trc("tooltip.mega_debug_upload"));
+
+    if (megaDebugUpload.status == ConfigStateUploadStatus::Uploading) {
+        ImGui::TextDisabled("%s", trc("misc.mega_debug_upload.uploading"));
+    } else if (megaDebugUpload.status == ConfigStateUploadStatus::Success) {
+        ImGui::TextWrapped("%s", trc("misc.mega_debug_upload.success"));
+
+        if (!megaDebugUpload.shareUrl.empty()) {
+            ImGui::TextUnformatted(trc("misc.upload_config_state.share_link"));
+            ImGui::SameLine();
+            ImGui::TextLinkOpenURL(megaDebugUpload.shareUrl.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton(trc("button.copy_share_link"))) {
+                CopyToClipboard(g_minecraftHwnd.load(std::memory_order_relaxed), megaDebugUpload.shareUrl);
+                SetMegaDebugUploadClipboardTarget(ConfigStateUploadClipboardTarget::ShareUrl);
+                megaDebugUpload = GetMegaDebugUploadUiState();
+            }
+        }
+
+        if (megaDebugUpload.clipboardTarget == ConfigStateUploadClipboardTarget::ShareUrl) {
+            ImGui::TextDisabled("%s", trc("misc.upload_config_state.copied_share"));
+        }
+    } else if (megaDebugUpload.status == ConfigStateUploadStatus::Error) {
+        ImGui::TextWrapped("%s", trc("misc.mega_debug_upload.error", megaDebugUpload.error));
+    }
+
     // License popup modal
     if (s_showLicensesPopup) { ImGui::OpenPopup(trc("popup.licenses")); }
 

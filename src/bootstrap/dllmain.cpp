@@ -53,6 +53,7 @@
 extern "C" NTSYSAPI PVOID NTAPI RtlPcToFileHeader(PVOID PcValue, PVOID* BaseOfImage);
 
 Config g_config;
+Config g_sharedConfig;
 std::atomic<bool> g_configIsDirty{ false };
 
 std::atomic<uint64_t> g_configSnapshotVersion{ 0 };
