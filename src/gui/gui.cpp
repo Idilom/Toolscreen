@@ -76,6 +76,78 @@ namespace {
 const char* s_forcedSettingsTopTabLabel = nullptr;
 const char* s_forcedSettingsInputsSubTabLabel = nullptr;
 
+struct SettingsTopTabBounceState {
+    std::string activeLabel;
+    double animationStartTime = 0.0;
+    bool initialized = false;
+};
+
+SettingsTopTabBounceState s_settingsTopTabBounceState;
+
+constexpr float kSettingsTopTabBounceDurationSeconds = 0.0f;
+constexpr float kSettingsTopTabBounceOvershoot = 0.0f;
+constexpr float kSettingsTopTabBounceMinOffset = 0.0f;
+constexpr float kSettingsTopTabBounceLineHeightScale = 0.0f;
+
+std::string GetProfileButtonGlyph(const std::string& profileName) {
+    if (profileName.empty()) {
+        return "P";
+    }
+
+    const std::wstring wideName = Utf8ToWide(profileName);
+    if (wideName.empty()) {
+        return "P";
+    }
+
+    return WideToUtf8(wideName.substr(0, 1));
+}
+
+float ComputeSettingsTopTabBounceOffsetY() {
+    if (!s_settingsTopTabBounceState.initialized) {
+        return 0.0f;
+    }
+
+    const float elapsedSeconds = static_cast<float>(ImGui::GetTime() - s_settingsTopTabBounceState.animationStartTime);
+    if (elapsedSeconds <= 0.0f) {
+        return (std::max)(kSettingsTopTabBounceMinOffset, ImGui::GetTextLineHeightWithSpacing() * kSettingsTopTabBounceLineHeightScale);
+    }
+
+    const float progress = (std::clamp)(elapsedSeconds / kSettingsTopTabBounceDurationSeconds, 0.0f, 1.0f);
+    if (progress >= 1.0f) {
+        return 0.0f;
+    }
+
+    const float t = progress - 1.0f;
+    const float c1 = kSettingsTopTabBounceOvershoot;
+    const float c3 = c1 + 1.0f;
+    const float eased = 1.0f + c3 * t * t * t + c1 * t * t;
+    const float startOffset =
+        (std::max)(kSettingsTopTabBounceMinOffset, ImGui::GetTextLineHeightWithSpacing() * kSettingsTopTabBounceLineHeightScale);
+    return startOffset * (1.0f - eased);
+}
+
+void ApplySettingsTopTabBounceAnimation(const char* label) {
+    if (label == nullptr || label[0] == '\0') {
+        return;
+    }
+
+    if (!s_settingsTopTabBounceState.initialized) {
+        s_settingsTopTabBounceState.activeLabel = label;
+        s_settingsTopTabBounceState.initialized = true;
+        return;
+    }
+
+    if (s_settingsTopTabBounceState.activeLabel != label) {
+        s_settingsTopTabBounceState.activeLabel = label;
+        s_settingsTopTabBounceState.animationStartTime = ImGui::GetTime();
+    }
+
+    const float offsetY = ComputeSettingsTopTabBounceOffsetY();
+    if (std::fabs(offsetY) > 0.01f) {
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offsetY);
+    }
+}
+
 enum class UploadStatus {
     Idle,
     Uploading,
@@ -710,7 +782,16 @@ bool BeginSelectableSettingsTopTabItem(const char* label) {
     if (s_forcedSettingsTopTabLabel != nullptr && std::strcmp(s_forcedSettingsTopTabLabel, label) == 0) {
         flags |= ImGuiTabItemFlags_SetSelected;
     }
-    return ImGui::BeginTabItem(label, nullptr, flags);
+
+    const bool open = ImGui::BeginTabItem(label, nullptr, flags);
+    if (open) {
+        ApplySettingsTopTabBounceAnimation(label);
+    }
+    return open;
+}
+
+bool BeginSelectableSettingsNestedTabItem(const char* label) {
+    return ImGui::BeginTabItem(label, nullptr, ImGuiTabItemFlags_None);
 }
 
 bool BeginSelectableSettingsInputsSubTabItem(const char* label) {
@@ -1353,8 +1434,9 @@ void RenderSettingsGUI() {
     }
 
     if (windowVisible && windowOpen) {
+        bool openProfileManagerPopup = false;
+        ImVec2 profileManagerPopupAnchor(0.0f, 0.0f);
 
-        float headerRightStartX = 0;
         {
             PROFILE_SCOPE_CAT("Settings Header Controls", "ImGui");
 
@@ -1366,9 +1448,56 @@ void RenderSettingsGUI() {
             float buttonWidth = ImGui::CalcTextSize(buttonLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f;
             float iconSize = ImGui::GetFrameHeight();
             float margin = ImGui::GetStyle().ItemSpacing.x;
-            headerRightStartX = ImGui::GetWindowContentRegionMax().x - buttonWidth - iconSize * 2 - margin * 2;
-
+            const float topBarY = 30.0f;
+            const float screenshotButtonX = ImGui::GetWindowContentRegionMax().x - buttonWidth;
+            const float discordButtonX = screenshotButtonX - margin - iconSize;
+            const float languageButtonX = discordButtonX - margin - iconSize;
+            const float profileButtonX = languageButtonX - margin - iconSize;
             ImVec2 savedCursor = ImGui::GetCursorPos();
+
+            {
+                float activeColor[3] = { kDefaultProfileColor[0], kDefaultProfileColor[1], kDefaultProfileColor[2] };
+                for (const auto& pm : g_profilesConfig.profiles) {
+                    if (pm.name == g_profilesConfig.activeProfile) {
+                        activeColor[0] = pm.color[0];
+                        activeColor[1] = pm.color[1];
+                        activeColor[2] = pm.color[2];
+                        break;
+                    }
+                }
+
+                ImGui::SetCursorPos(ImVec2(profileButtonX, topBarY));
+                ImGui::InvisibleButton("##profileManagerIcon", ImVec2(iconSize, iconSize));
+
+                const bool hovered = ImGui::IsItemHovered();
+                const bool held = ImGui::IsItemActive();
+                const ImVec2 iconMin = ImGui::GetItemRectMin();
+                const ImVec2 iconMax = ImGui::GetItemRectMax();
+                const float colorBoost = held ? 0.18f : (hovered ? 0.10f : 0.0f);
+                const ImVec4 fillColor((std::min)(1.0f, activeColor[0] + colorBoost),
+                                       (std::min)(1.0f, activeColor[1] + colorBoost),
+                                       (std::min)(1.0f, activeColor[2] + colorBoost), 1.0f);
+                const ImU32 fillColorU32 = ImGui::ColorConvertFloat4ToU32(fillColor);
+                const ImU32 borderColorU32 = ImGui::ColorConvertFloat4ToU32(
+                    hovered ? ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered] : ImGui::GetStyle().Colors[ImGuiCol_Border]);
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                drawList->AddRectFilled(iconMin, iconMax, fillColorU32, 5.0f * scaleFactor);
+                drawList->AddRect(iconMin, iconMax, borderColorU32, 5.0f * scaleFactor);
+
+                                const std::string glyph = GetProfileButtonGlyph(g_profilesConfig.activeProfile);
+                                const ImVec2 glyphSize = ImGui::CalcTextSize(glyph.c_str());
+                drawList->AddText(ImVec2(iconMin.x + (iconSize - glyphSize.x) * 0.5f,
+                                         iconMin.y + (iconSize - glyphSize.y) * 0.5f),
+                                                                    IM_COL32(255, 255, 255, 255), glyph.c_str());
+
+                if (ImGui::IsItemClicked()) {
+                    openProfileManagerPopup = true;
+                    profileManagerPopupAnchor = ImVec2(iconMin.x, iconMax.y + margin);
+                }
+                if (hovered) {
+                    ImGui::SetTooltip("%s", tr("profiles.header_button", g_profilesConfig.activeProfile).c_str());
+                }
+            }
 
             {
                 static GLuint s_languageTexture = 0;
@@ -1383,8 +1512,7 @@ void RenderSettingsGUI() {
 
                 if (s_languageTexture != 0) {
                     float iconSize = ImGui::GetFrameHeight();
-                    float margin = ImGui::GetStyle().ItemSpacing.x;
-                    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowContentRegionMax().x - buttonWidth - iconSize * 2 - margin * 2, 30.0f));
+                    ImGui::SetCursorPos(ImVec2(languageButtonX, topBarY));
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.1f));
                     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.2f));
@@ -1431,8 +1559,7 @@ void RenderSettingsGUI() {
 
                 if (s_discordTexture != 0) {
                     float iconSize = ImGui::GetFrameHeight();
-                    float margin = ImGui::GetStyle().ItemSpacing.x;
-                    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowContentRegionMax().x - buttonWidth - iconSize - margin, 30.0f));
+                    ImGui::SetCursorPos(ImVec2(discordButtonX, topBarY));
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.1f));
                     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.2f));
@@ -1448,7 +1575,7 @@ void RenderSettingsGUI() {
                 }
             }
 
-            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowContentRegionMax().x - buttonWidth, 30.0f));
+            ImGui::SetCursorPos(ImVec2(screenshotButtonX, topBarY));
 
             if (ImGui::Button(buttonLabel)) {
                 g_screenshotRequested = true;
@@ -1471,229 +1598,233 @@ void RenderSettingsGUI() {
             }
         }
 
-        ImGui::SameLine();
-        ImGui::TextDisabled("|");
-        ImGui::SameLine();
-
         {
             static std::string s_renameBuffer;
             static std::string s_newProfileName;
             static float s_renameColor[3] = { kDefaultProfileColor[0], kDefaultProfileColor[1], kDefaultProfileColor[2] };
             static ProfileSectionSelection s_editSections;
+            static std::string s_loadedProfileName;
+            static ImVec2 s_profilePopupAnchor(0.0f, 0.0f);
+            static bool s_deleteConfirmationArmed = false;
 
-            static GLuint s_iconAdd = 0, s_iconDuplicate = 0, s_iconRename = 0, s_iconDelete = 0;
-            static HGLRC s_iconLastCtx = NULL;
-            {
-                HGLRC ctx = wglGetCurrentContext();
-                if (ctx != s_iconLastCtx) { s_iconAdd = s_iconDuplicate = s_iconRename = s_iconDelete = 0; s_iconLastCtx = ctx; }
-            }
-            LoadEmbeddedResourceTexture(s_iconAdd, IDR_ICON_ADD, GL_NEAREST);
-            LoadEmbeddedResourceTexture(s_iconDuplicate, IDR_ICON_DUPLICATE, GL_NEAREST);
-            LoadEmbeddedResourceTexture(s_iconRename, IDR_ICON_RENAME, GL_NEAREST);
-            LoadEmbeddedResourceTexture(s_iconDelete, IDR_ICON_DELETE, GL_NEAREST);
-
-            float iconSz = ImGui::GetFrameHeight() * 0.75f;
-            auto iconBtnStyle = []() {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.1f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.2f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2, 2));
-            };
-            auto iconBtnStylePop = []() {
-                ImGui::PopStyleVar();
-                ImGui::PopStyleColor(3);
-            };
-
-            float profileButtonsWidth = (iconSz + 6) * 4 + ImGui::GetStyle().ItemSpacing.x * 4;
-            float labelWidth = ImGui::CalcTextSize(trc("profiles.label")).x + ImGui::GetStyle().ItemSpacing.x;
-            float availableForCombo = headerRightStartX - ImGui::GetCursorPosX() - labelWidth - profileButtonsWidth;
-            if (availableForCombo < 60) availableForCombo = 60;
-
-            ImGui::TextUnformatted(trc("profiles.label"));
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth((std::min)(150.0f, availableForCombo));
-            float* activeColor = nullptr;
-            for (auto& pm : g_profilesConfig.profiles) {
-                if (pm.name == g_profilesConfig.activeProfile) { activeColor = pm.color; break; }
-            }
-            if (activeColor) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(activeColor[0], activeColor[1], activeColor[2], 1.0f));
-            if (ImGui::BeginCombo("##profileSelector", g_profilesConfig.activeProfile.c_str())) {
-                if (activeColor) ImGui::PopStyleColor();
+            auto loadActiveProfileEditorState = [&]() {
+                s_loadedProfileName = g_profilesConfig.activeProfile;
+                s_renameBuffer = g_profilesConfig.activeProfile;
+                s_deleteConfirmationArmed = false;
                 for (const auto& pm : g_profilesConfig.profiles) {
-                    bool selected = (pm.name == g_profilesConfig.activeProfile);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(pm.color[0], pm.color[1], pm.color[2], 1.0f));
-                    if (ImGui::Selectable(pm.name.c_str(), selected)) {
-                        if (pm.name != g_profilesConfig.activeProfile) {
-                            SwitchProfile(pm.name);
+                    if (pm.name == g_profilesConfig.activeProfile) {
+                        s_renameColor[0] = pm.color[0];
+                        s_renameColor[1] = pm.color[1];
+                        s_renameColor[2] = pm.color[2];
+                        s_editSections = pm.sections;
+                        return;
+                    }
+                }
+
+                s_renameColor[0] = kDefaultProfileColor[0];
+                s_renameColor[1] = kDefaultProfileColor[1];
+                s_renameColor[2] = kDefaultProfileColor[2];
+                s_editSections = ProfileSectionSelection{};
+            };
+
+            auto duplicateActiveProfile = [&]() {
+                std::string base = g_profilesConfig.activeProfile + " " + tr("profiles.copy_suffix");
+                std::string newName = base;
+                for (int i = 2; !DuplicateProfile(g_profilesConfig.activeProfile, newName); i++) {
+                    newName = base + " " + std::to_string(i);
+                    if (i > 99) break;
+                }
+            };
+
+            if (s_loadedProfileName != g_profilesConfig.activeProfile) { loadActiveProfileEditorState(); }
+            if (openProfileManagerPopup) {
+                loadActiveProfileEditorState();
+                s_profilePopupAnchor = profileManagerPopupAnchor;
+                ImGui::OpenPopup("##ProfileManagerPopup");
+            }
+
+            std::string switchTo;
+            for (const auto& pm : g_profilesConfig.profiles) {
+                if (pm.name != g_profilesConfig.activeProfile) {
+                    switchTo = pm.name;
+                    break;
+                }
+            }
+
+            ImGui::SetNextWindowPos(s_profilePopupAnchor, ImGuiCond_Appearing);
+            ImGui::SetNextWindowSize(ImVec2(720.0f * scaleFactor, 400.0f * scaleFactor), ImGuiCond_Appearing);
+            if (ImGui::BeginPopup("##ProfileManagerPopup")) {
+                ImGui::TextUnformatted(tr("profiles.header_button", g_profilesConfig.activeProfile).c_str());
+                ImGui::Separator();
+                ImGui::BeginChild("##profileManagerPanel", ImVec2(0.0f, 330.0f * scaleFactor), false);
+                ImGui::TextWrapped("%s", trc("profiles.manage_hint"));
+                ImGui::Spacing();
+
+                if (ImGui::BeginTable("##profileManagerLayout", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
+                    ImGui::TableSetupColumn("##profileManagerListColumn", ImGuiTableColumnFlags_WidthFixed, 220.0f * scaleFactor);
+                    ImGui::TableSetupColumn("##profileManagerEditorColumn", ImGuiTableColumnFlags_WidthStretch);
+
+                    ImGui::TableNextColumn();
+                    ImGui::BeginChild("##profileManagerListPane", ImVec2(0.0f, 0.0f), false);
+                    ImGui::SeparatorText(trc("profiles.list_title"));
+                    if (ImGui::BeginListBox("##profileManagerListBox", ImVec2(-FLT_MIN, 180.0f * scaleFactor))) {
+                        for (const auto& pm : g_profilesConfig.profiles) {
+                            bool selected = (pm.name == g_profilesConfig.activeProfile);
+                            std::string label = pm.name;
+                            if (selected) { label += " " + tr("label.current"); }
+
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(pm.color[0], pm.color[1], pm.color[2], 1.0f));
+                            if (ImGui::Selectable(label.c_str(), selected)) {
+                                if (!selected) { SwitchProfile(pm.name); }
+                                loadActiveProfileEditorState();
+                            }
+                            ImGui::PopStyleColor();
+
+                            if (selected) { ImGui::SetItemDefaultFocus(); }
+                        }
+                        ImGui::EndListBox();
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText(trc("profiles.new_popup"));
+                    ImGui::TextUnformatted(trc("label.name"));
+                    ImGui::InputText("##newProfileNameInline", &s_newProfileName);
+                    const bool newNameValid = IsValidProfileName(s_newProfileName);
+                    if (!s_newProfileName.empty() && !newNameValid) {
+                        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", trc("profiles.invalid_name"));
+                    }
+                    ImGui::BeginDisabled(!newNameValid);
+                    if (ImGui::Button(trc("profiles.action.new"), ImVec2(-FLT_MIN, 0.0f))) {
+                        if (CreateNewProfile(s_newProfileName)) {
+                            SwitchProfile(s_newProfileName);
+                            loadActiveProfileEditorState();
+                            s_newProfileName.clear();
                         }
                     }
-                    ImGui::PopStyleColor();
-                    if (selected) ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            } else {
-                if (activeColor) ImGui::PopStyleColor();
-            }
+                    ImGui::EndDisabled();
+                    ImGui::EndChild();
 
-            if (s_iconAdd != 0) {
-                ImGui::SameLine();
-                iconBtnStyle();
-                if (ImGui::ImageButton("##profileNew", (ImTextureID)(intptr_t)s_iconAdd, ImVec2(iconSz, iconSz))) {
-                    s_newProfileName = "New Profile";
-                    ImGui::OpenPopup(trc("profiles.new_popup"));
-                }
-                iconBtnStylePop();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", trc("profiles.tooltip.new"));
-            }
+                    ImGui::TableNextColumn();
+                    ImGui::BeginChild("##profileManagerEditorPane", ImVec2(0.0f, 0.0f), false);
+                    ImGui::SeparatorText(trc("profiles.rename_popup"));
+                    ImGui::TextUnformatted(tr("profiles.header_button", g_profilesConfig.activeProfile).c_str());
+                    ImGui::TextUnformatted(trc("label.name"));
+                    ImGui::InputText("##renameProfileNameInline", &s_renameBuffer);
 
-            if (s_iconDuplicate != 0) {
-                ImGui::SameLine();
-                iconBtnStyle();
-                if (ImGui::ImageButton("##profileDup", (ImTextureID)(intptr_t)s_iconDuplicate, ImVec2(iconSz, iconSz))) {
-                    std::string base = g_profilesConfig.activeProfile + " " + tr("profiles.copy_suffix");
-                    std::string newName = base;
-                    for (int i = 2; !DuplicateProfile(g_profilesConfig.activeProfile, newName); i++) {
-                        newName = base + " " + std::to_string(i);
-                        if (i > 99) break;
-                    }
-                }
-                iconBtnStylePop();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", trc("profiles.tooltip.duplicate"));
-            }
-
-            if (s_iconRename != 0) {
-                ImGui::SameLine();
-                iconBtnStyle();
-                if (ImGui::ImageButton("##profileRen", (ImTextureID)(intptr_t)s_iconRename, ImVec2(iconSz, iconSz))) {
-                    s_renameBuffer = g_profilesConfig.activeProfile;
+                    const ProfileMetadata* activeProfile = nullptr;
                     for (const auto& pm : g_profilesConfig.profiles) {
                         if (pm.name == g_profilesConfig.activeProfile) {
-                            s_renameColor[0] = pm.color[0];
-                            s_renameColor[1] = pm.color[1];
-                            s_renameColor[2] = pm.color[2];
-                            s_editSections = pm.sections;
+                            activeProfile = &pm;
                             break;
                         }
                     }
-                    ImGui::OpenPopup(trc("profiles.rename_popup"));
-                }
-                iconBtnStylePop();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", trc("profiles.tooltip.rename"));
-            }
 
-            if (s_iconDelete != 0) {
-                ImGui::SameLine();
-                ImGui::BeginDisabled(g_profilesConfig.profiles.size() <= 1);
-                iconBtnStyle();
-                if (ImGui::ImageButton("##profileDel", (ImTextureID)(intptr_t)s_iconDelete, ImVec2(iconSz, iconSz))) {
-                    ImGui::OpenPopup(trc("profiles.delete_popup"));
-                }
-                iconBtnStylePop();
-                ImGui::EndDisabled();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", trc("profiles.tooltip.delete"));
-            }
+                    const bool nameChanged = s_renameBuffer != g_profilesConfig.activeProfile;
+                    const bool nameValid = IsValidProfileName(s_renameBuffer);
+                    const bool colorChanged = activeProfile != nullptr &&
+                        (activeProfile->color[0] != s_renameColor[0] ||
+                         activeProfile->color[1] != s_renameColor[1] ||
+                         activeProfile->color[2] != s_renameColor[2]);
+                    const bool sectionsChanged = activeProfile != nullptr && !(activeProfile->sections == s_editSections);
+                    const bool hasEditableChanges = nameChanged || colorChanged || sectionsChanged;
+                    const bool renameValid = (nameChanged ? nameValid : true) && hasEditableChanges;
 
-            if (ImGui::BeginPopup(trc("profiles.new_popup"))) {
-                ImGui::InputText("##newProfileName", &s_newProfileName);
-                bool nameValid = IsValidProfileName(s_newProfileName);
-                if (!s_newProfileName.empty() && !nameValid)
-                    ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", trc("profiles.invalid_name"));
-                ImGui::BeginDisabled(!nameValid);
-                if (ImGui::Button(trc("button.ok"), ImVec2(80, 0))) {
-                    if (CreateNewProfile(s_newProfileName)) {
-                        SwitchProfile(s_newProfileName);
+                    if (nameChanged && !nameValid) {
+                        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", trc("profiles.invalid_name"));
                     }
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                if (ImGui::Button(trc("button.cancel"), ImVec2(80, 0))) {
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
-            }
 
-            if (ImGui::BeginPopup(trc("profiles.rename_popup"))) {
-                ImGui::InputText("##renameProfileName", &s_renameBuffer);
-                const ProfileMetadata* activeProfile = nullptr;
-                for (const auto& pm : g_profilesConfig.profiles) {
-                    if (pm.name == g_profilesConfig.activeProfile) {
-                        activeProfile = &pm;
-                        break;
-                    }
-                }
+                    ImGui::ColorEdit3(trc("profiles.color"), s_renameColor, ImGuiColorEditFlags_NoInputs);
 
-                const bool nameChanged = s_renameBuffer != g_profilesConfig.activeProfile;
-                const bool nameValid = IsValidProfileName(s_renameBuffer);
-                const bool colorChanged = activeProfile != nullptr &&
-                    (activeProfile->color[0] != s_renameColor[0] ||
-                     activeProfile->color[1] != s_renameColor[1] ||
-                     activeProfile->color[2] != s_renameColor[2]);
-                const bool sectionsChanged = activeProfile != nullptr && !(activeProfile->sections == s_editSections);
-                const bool renameValid = (nameChanged ? nameValid : true) && (nameChanged || colorChanged || sectionsChanged);
-
-                if (nameChanged && !nameValid)
-                    ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", trc("profiles.invalid_name"));
-                ImGui::ColorEdit3(trc("profiles.color"), s_renameColor, ImGuiColorEditFlags_NoInputs);
-                ImGui::Separator();
-                ImGui::TextUnformatted(trc("profiles.sections"));
-                ImGui::TextWrapped("%s", trc("profiles.sections_hint"));
-                if (ImGui::BeginTable("##profileSections", 2, ImGuiTableFlags_SizingStretchSame)) {
-                    auto drawSectionCheckbox = [](const char* label, bool* value) {
+                    if (ImGui::BeginTable("##profileManagerEditorActions", 3, ImGuiTableFlags_SizingStretchSame)) {
                         ImGui::TableNextColumn();
-                        ImGui::Checkbox(label, value);
-                    };
+                        ImGui::BeginDisabled(!renameValid);
+                        if (ImGui::Button(trc("button.apply"), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+                            if (UpdateProfileMetadata(g_profilesConfig.activeProfile, s_renameBuffer, s_renameColor, s_editSections)) {
+                                loadActiveProfileEditorState();
+                            }
+                        }
+                        ImGui::EndDisabled();
 
-                    drawSectionCheckbox(trc("profiles.section.modes"), &s_editSections.modes);
-                    drawSectionCheckbox(trc("profiles.section.mirrors"), &s_editSections.mirrors);
-                    drawSectionCheckbox(trc("profiles.section.images"), &s_editSections.images);
-                    drawSectionCheckbox(trc("profiles.section.window_overlays"), &s_editSections.windowOverlays);
-                    drawSectionCheckbox(trc("profiles.section.browser_overlays"), &s_editSections.browserOverlays);
-                    drawSectionCheckbox(trc("profiles.section.ninjabrain_overlay"), &s_editSections.ninjabrainOverlay);
-                    drawSectionCheckbox(trc("profiles.section.hotkeys"), &s_editSections.hotkeys);
-                    drawSectionCheckbox(trc("profiles.section.inputs_mouse"), &s_editSections.inputsMouse);
-                    drawSectionCheckbox(trc("profiles.section.capture_window"), &s_editSections.captureWindow);
-                    drawSectionCheckbox(trc("profiles.section.settings"), &s_editSections.settings);
-                    drawSectionCheckbox(trc("profiles.section.appearance"), &s_editSections.appearance);
+                        ImGui::TableNextColumn();
+                        if (ImGui::Button(trc("profiles.action.duplicate"), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+                            duplicateActiveProfile();
+                        }
+
+                        ImGui::TableNextColumn();
+                        ImGui::BeginDisabled(!hasEditableChanges);
+                        if (ImGui::Button(trc("profiles.action.revert"), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+                            loadActiveProfileEditorState();
+                        }
+                        ImGui::EndDisabled();
+
+                        ImGui::EndTable();
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText(trc("profiles.sections"));
+                    ImGui::TextWrapped("%s", trc("profiles.sections_hint"));
+                    if (ImGui::BeginTable("##profileSectionsInline", 2, ImGuiTableFlags_SizingStretchSame)) {
+                        auto drawSectionCheckbox = [](const char* label, bool* value) {
+                            ImGui::TableNextColumn();
+                            ImGui::Checkbox(label, value);
+                        };
+
+                        drawSectionCheckbox(trc("profiles.section.modes"), &s_editSections.modes);
+                        drawSectionCheckbox(trc("profiles.section.mirrors"), &s_editSections.mirrors);
+                        drawSectionCheckbox(trc("profiles.section.images"), &s_editSections.images);
+                        drawSectionCheckbox(trc("profiles.section.window_overlays"), &s_editSections.windowOverlays);
+                        drawSectionCheckbox(trc("profiles.section.browser_overlays"), &s_editSections.browserOverlays);
+                        drawSectionCheckbox(trc("profiles.section.ninjabrain_overlay"), &s_editSections.ninjabrainOverlay);
+                        drawSectionCheckbox(trc("profiles.section.hotkeys"), &s_editSections.hotkeys);
+                        drawSectionCheckbox(trc("profiles.section.inputs_mouse"), &s_editSections.inputsMouse);
+                        drawSectionCheckbox(trc("profiles.section.capture_window"), &s_editSections.captureWindow);
+                        drawSectionCheckbox(trc("profiles.section.settings"), &s_editSections.settings);
+                        drawSectionCheckbox(trc("profiles.section.appearance"), &s_editSections.appearance);
+
+                        ImGui::EndTable();
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::BeginDisabled(g_profilesConfig.profiles.size() <= 1);
+                    if (!s_deleteConfirmationArmed) {
+                        if (ImGui::Button(trc("profiles.action.delete"), ImVec2(-FLT_MIN, 0.0f))) {
+                            s_deleteConfirmationArmed = true;
+                        }
+                    } else {
+                        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s",
+                                           tr("profiles.confirm_delete", g_profilesConfig.activeProfile).c_str());
+                        if (!switchTo.empty()) {
+                            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", tr("profiles.switch_to", switchTo).c_str());
+                        }
+
+                        if (ImGui::BeginTable("##profileManagerDeleteActions", 2, ImGuiTableFlags_SizingStretchSame)) {
+                            ImGui::TableNextColumn();
+                            if (ImGui::Button(trc("profiles.action.confirm_delete"), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+                                if (!switchTo.empty()) {
+                                    const std::string toDelete = g_profilesConfig.activeProfile;
+                                    SwitchProfile(switchTo);
+                                    DeleteProfile(toDelete);
+                                    loadActiveProfileEditorState();
+                                } else {
+                                    Log("DeleteProfile: no fallback profile found");
+                                }
+                            }
+
+                            ImGui::TableNextColumn();
+                            if (ImGui::Button(trc("button.cancel"), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+                                s_deleteConfirmationArmed = false;
+                            }
+
+                            ImGui::EndTable();
+                        }
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::EndChild();
 
                     ImGui::EndTable();
                 }
-                ImGui::BeginDisabled(!renameValid);
-                if (ImGui::Button(trc("button.ok"), ImVec2(80, 0))) {
-                    if (UpdateProfileMetadata(g_profilesConfig.activeProfile, s_renameBuffer, s_renameColor, s_editSections)) {
-                        ImGui::CloseCurrentPopup();
-                    }
-                }
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                if (ImGui::Button(trc("button.cancel"), ImVec2(80, 0))) {
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
-            }
-
-            if (ImGui::BeginPopup(trc("profiles.delete_popup"))) {
-                std::string toDelete = g_profilesConfig.activeProfile;
-                std::string switchTo;
-                for (const auto& pm : g_profilesConfig.profiles) {
-                    if (pm.name != toDelete) { switchTo = pm.name; break; }
-                }
-                ImGui::Text("%s", tr("profiles.confirm_delete", toDelete).c_str());
-                if (!switchTo.empty())
-                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", tr("profiles.switch_to", switchTo).c_str());
-                if (ImGui::Button(trc("button.ok"), ImVec2(80, 0))) {
-                    if (!switchTo.empty()) {
-                        SwitchProfile(switchTo);
-                        DeleteProfile(toDelete);
-                    } else {
-                        Log("DeleteProfile: no fallback profile found");
-                    }
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::SameLine();
-                if (ImGui::Button(trc("button.cancel"), ImVec2(80, 0))) {
-                    ImGui::CloseCurrentPopup();
-                }
+                ImGui::EndChild();
                 ImGui::EndPopup();
             }
         }

@@ -1,4 +1,4 @@
-if (BeginSelectableSettingsTopTabItem(trc("ninjabrain.title"))) {
+if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);

@@ -1,4 +1,4 @@
-if (BeginSelectableSettingsTopTabItem(trc("tabs.mirrors"))) {
+if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
