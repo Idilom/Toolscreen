@@ -2464,8 +2464,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             const std::string legacyMinecraftPath = WideToUtf8(g_toolscreenPath + L"\\Minecraft.ttf");
             const std::string extractedMinecraftPath = WideToUtf8(g_toolscreenPath + L"\\fonts\\Minecraft.ttf");
 
-            if (g_config.fontPath.empty() || g_config.fontPath == ConfigDefaults::CONFIG_FALLBACK_FONT_PATH ||
-                g_config.fontPath == extractedOpenSansPath) {
+            if (g_config.fontPath.empty()) {
+                g_config.fontPath = ConfigDefaults::CONFIG_DEFAULT_GUI_FONT_PATH;
+            } else if (g_config.fontPath == extractedOpenSansPath) {
                 g_config.fontPath = ConfigDefaults::CONFIG_FONT_PATH;
             }
 

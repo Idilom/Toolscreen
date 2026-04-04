@@ -1,4 +1,4 @@
-if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
+if (BeginSelectableSettingsTopTabItem(trc("tabs.other"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
@@ -60,34 +60,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText(trc("hotkeys.window_hotkeys"));
-
-    ImGui::PushID("settings_borderless_toggle");
-    {
-        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
-        const bool canToggleBorderless = (hwnd != NULL && IsWindow(hwnd));
-
-        ImGui::Text(trc("label.toggle_borderless"));
-        ImGui::SameLine();
-
-        if (!canToggleBorderless) { ImGui::BeginDisabled(); }
-        if (ImGui::Button(trc("general.go_borderless"), ImVec2(150, 0))) {
-            ToggleBorderlessWindowedFullscreen(hwnd);
-        }
-        if (!canToggleBorderless) { ImGui::EndDisabled(); }
-        ImGui::SameLine();
-        HelpMarker(trc("tooltip.toggle_borderless"));
-    }
-    ImGui::PopID();
-
+    ImGui::SeparatorText(trc("config_mode.advanced"));
     ImGui::PushID("settings_auto_borderless");
     if (ImGui::Checkbox(trc("settings.auto_borderless"), &g_config.autoBorderless)) { g_configIsDirty = true; }
     ImGui::SameLine();
     HelpMarker(trc("tooltip.auto_borderless"));
     ImGui::PopID();
 
-    ImGui::Spacing();
-    ImGui::SeparatorText(trc("config_mode.advanced"));
     if (ImGui::Checkbox(trc("settings.restore_windowed_mode_on_fullscreen_exit"), &g_config.restoreWindowedModeOnFullscreenExit)) {
         g_configIsDirty = true;
     }
@@ -106,15 +85,6 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
     ImGui::SameLine();
     HelpMarker(trc("tooltip.fps_limit.advanced"));
 
-/*    if (ImGui::Checkbox("Disable Fullscreen Prompt", &g_config.disableFullscreenPrompt)) { g_configIsDirty = true; }
-    ImGui::SameLine();
-    HelpMarker("Disables the fullscreen toast prompt (toast2).\n"
-               "When disabled, toast2 appears in fullscreen and starts fading out after 10 seconds.");
-
-    if (ImGui::Checkbox("Disable Configure Prompt", &g_config.disableConfigurePrompt)) { g_configIsDirty = true; }
-    ImGui::SameLine();
-    HelpMarker("Disables the configure toast prompt (toast1) shown in windowed mode.");*/
-
     ImGui::Spacing();
     ImGui::Text(trc("settings.video_cache_budget_mib"));
     ImGui::SetNextItemWidth(300);
@@ -126,6 +96,60 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
     }
     ImGui::SameLine();
     HelpMarker(trc("settings.tooltip.video_cache_budget_mib"));
+
+/*    if (ImGui::Checkbox("Disable Fullscreen Prompt", &g_config.disableFullscreenPrompt)) { g_configIsDirty = true; }
+    ImGui::SameLine();
+    HelpMarker("Disables the fullscreen toast prompt (toast2).\n"
+               "When disabled, toast2 appears in fullscreen and starts fading out after 10 seconds.");
+
+    if (ImGui::Checkbox("Disable Configure Prompt", &g_config.disableConfigurePrompt)) { g_configIsDirty = true; }
+    ImGui::SameLine();
+    HelpMarker("Disables the configure toast prompt (toast1) shown in windowed mode.");*/
+
+    ImGui::Spacing();
+    ImGui::SeparatorText(trc("label.font"));
+
+    ImGui::Text(trc("label.font_path"));
+    ImGui::SetNextItemWidth(300);
+    if (ImGui::InputText("##AdvancedFontPath", &g_config.fontPath)) {
+        g_configIsDirty = true;
+        RequestDynamicGuiFontRefresh(true);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button((tr("button.browse") + "##AdvancedMainGuiFont").c_str())) {
+        OPENFILENAMEA ofn = {};
+        char szFile[MAX_PATH] = {};
+
+        if (!g_config.fontPath.empty()) { strncpy_s(szFile, g_config.fontPath.c_str(), MAX_PATH - 1); }
+
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = g_minecraftHwnd.load();
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile);
+        ofn.lpstrFilter = "Font Files (*.ttf;*.otf)\0*.ttf;*.otf\0All Files (*.*)\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.lpstrTitle = "Select Main GUI Font";
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+        ofn.lpstrInitialDir = "C:\\Windows\\Fonts";
+
+        if (GetOpenFileNameA(&ofn)) {
+            g_config.fontPath = szFile;
+            g_configIsDirty = true;
+            RequestDynamicGuiFontRefresh(true);
+        }
+    }
+    ImGui::SameLine();
+    HelpMarker(trc("tooltip.font"));
+
+    ImGui::Text(trc("label.scale"));
+    ImGui::SetNextItemWidth(160);
+    if (ImGui::SliderFloat("##AdvancedGuiFontScale", &g_config.appearance.guiFontScale, 0.75f, 2.0f, "%.2fx")) {
+        g_config.appearance.guiFontScale = std::clamp(g_config.appearance.guiFontScale, 0.75f, 2.0f);
+        g_configIsDirty = true;
+        RequestDynamicGuiFontRefresh(true);
+    }
+    ImGui::SameLine();
+    HelpMarker(trc("tooltip.gui_font_scale"));
 
     ImGui::Spacing();
 

@@ -1400,16 +1400,20 @@ void RenderSettingsGUI() {
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowSizeConstraints(ImVec2(500, 400), ImVec2(FLT_MAX, FLT_MAX));
 
     const int screenWidth = GetCachedWindowWidth();
     const int screenHeight = GetCachedWindowHeight();
 
     const float scaleFactor = ComputeGuiScaleFactorFromCachedWindowSize();
-    static float s_lastRuntimeScaleFactor = -1.0f;
-    if (s_lastRuntimeScaleFactor < 0.0f || fabsf(scaleFactor - s_lastRuntimeScaleFactor) > 0.001f) {
-        g_guiNeedsRecenter.store(true, std::memory_order_relaxed);
-        s_lastRuntimeScaleFactor = scaleFactor;
+    const float guiFontScale = std::clamp(g_config.appearance.guiFontScale, 0.75f, 2.0f);
+    const float windowScaleFactor = scaleFactor * (std::max)(1.0f, guiFontScale);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(500.0f * windowScaleFactor, 400.0f * windowScaleFactor), ImVec2(FLT_MAX, FLT_MAX));
+
+    static float s_lastWindowScaleFactor = -1.0f;
+    bool windowScaleChanged = false;
+    if (s_lastWindowScaleFactor < 0.0f || fabsf(windowScaleFactor - s_lastWindowScaleFactor) > 0.001f) {
+        windowScaleChanged = true;
+        s_lastWindowScaleFactor = windowScaleFactor;
     }
 
     static ImVec2 s_lastDisplaySize = ImVec2(-1.0f, -1.0f);
@@ -1422,7 +1426,9 @@ void RenderSettingsGUI() {
 
     if (g_guiNeedsRecenter.exchange(false)) {
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(850 * scaleFactor, 650 * scaleFactor), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(850.0f * windowScaleFactor, 650.0f * windowScaleFactor), ImGuiCond_Always);
+    } else if (windowScaleChanged) {
+        ImGui::SetNextWindowSize(ImVec2(850.0f * windowScaleFactor, 650.0f * windowScaleFactor), ImGuiCond_Always);
     }
 
     std::string windowTitle = "Toolscreen v" + GetToolscreenVersionString() + " by jojoe77777";
@@ -1448,7 +1454,7 @@ void RenderSettingsGUI() {
             float buttonWidth = ImGui::CalcTextSize(buttonLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f;
             float iconSize = ImGui::GetFrameHeight();
             float margin = ImGui::GetStyle().ItemSpacing.x;
-            const float topBarY = 30.0f;
+            const float topBarY = 30.0f * scaleFactor;
             const float screenshotButtonX = ImGui::GetWindowContentRegionMax().x - buttonWidth;
             const float discordButtonX = screenshotButtonX - margin - iconSize;
             const float languageButtonX = discordButtonX - margin - iconSize;
@@ -1652,7 +1658,7 @@ void RenderSettingsGUI() {
             }
 
             ImGui::SetNextWindowPos(s_profilePopupAnchor, ImGuiCond_Appearing);
-            ImGui::SetNextWindowSize(ImVec2(720.0f * scaleFactor, 400.0f * scaleFactor), ImGuiCond_Appearing);
+            ImGui::SetNextWindowSize(ImVec2(720.0f * windowScaleFactor, 400.0f * windowScaleFactor), ImGuiCond_Appearing);
             if (ImGui::BeginPopup("##ProfileManagerPopup")) {
                 ImGui::TextUnformatted(tr("profiles.header_button", g_profilesConfig.activeProfile).c_str());
                 ImGui::Separator();

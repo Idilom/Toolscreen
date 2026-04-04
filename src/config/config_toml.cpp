@@ -1947,6 +1947,7 @@ void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg) {
 
 void AppearanceConfigToToml(const AppearanceConfig& cfg, toml::table& out) {
     out.insert("theme", cfg.theme);
+    out.insert("guiFontScale", cfg.guiFontScale);
 
     if (!cfg.customColors.empty()) {
         toml::table colorsTbl;
@@ -1957,6 +1958,7 @@ void AppearanceConfigToToml(const AppearanceConfig& cfg, toml::table& out) {
 
 void AppearanceConfigFromToml(const toml::table& tbl, AppearanceConfig& cfg) {
     cfg.theme = GetStringOr(tbl, "theme", "Dark");
+    cfg.guiFontScale = std::clamp(GetOr(tbl, "guiFontScale", ConfigDefaults::CONFIG_GUI_FONT_SCALE), 0.75f, 2.0f);
 
     cfg.customColors.clear();
     if (auto colorsTbl = GetTable(tbl, "customColors")) {
@@ -2226,7 +2228,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     const int originalConfigVersion = config.configVersion;
     config.disableHookChaining = GetOr(tbl, "disableHookChaining", ConfigDefaults::CONFIG_DISABLE_HOOK_CHAINING);
     config.defaultMode = GetStringOr(tbl, "defaultMode", ConfigDefaults::CONFIG_DEFAULT_MODE);
-    config.fontPath = GetStringOr(tbl, "fontPath", ConfigDefaults::CONFIG_FONT_PATH);
+    config.fontPath = GetStringOr(tbl, "fontPath", ConfigDefaults::CONFIG_DEFAULT_GUI_FONT_PATH);
     config.lang = GetStringOr(tbl, "lang", ConfigDefaults::CONFIG_LANG);
     config.fpsLimit = GetOr(tbl, "fpsLimit", ConfigDefaults::CONFIG_FPS_LIMIT);
     config.fpsLimitSleepThreshold = GetOr(tbl, "fpsLimitSleepThreshold", ConfigDefaults::CONFIG_FPS_LIMIT_SLEEP_THRESHOLD);

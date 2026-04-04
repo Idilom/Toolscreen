@@ -44,6 +44,7 @@ struct KeyboardLayoutFontRefreshState {
 struct MainGuiFontRefreshState {
     bool valid = false;
     float guiScaleFactor = 1.0f;
+    float configuredFontScale = ConfigDefaults::CONFIG_GUI_FONT_SCALE;
     std::string requestedFontPath;
     std::string resolvedFontPath;
 };
@@ -94,7 +95,15 @@ bool FontFileExists(const std::string& path) {
 }
 
 std::string GetConfiguredGuiFontPath() {
-    return g_config.fontPath.empty() ? ConfigDefaults::CONFIG_FONT_PATH : g_config.fontPath;
+    return g_config.fontPath.empty() ? ConfigDefaults::CONFIG_DEFAULT_GUI_FONT_PATH : g_config.fontPath;
+}
+
+float GetConfiguredGuiFontScale() {
+    return std::clamp(g_config.appearance.guiFontScale, 0.75f, 2.0f);
+}
+
+float ComputeConfiguredGuiBaseFontSize(float scaleFactor) {
+    return 16.0f * scaleFactor * GetConfiguredGuiFontScale();
 }
 
 bool IsStableGuiFontPath(const std::string& path, float size) {
@@ -193,7 +202,7 @@ static void RebuildImGuiFontAtlas(float scaleFactor, float keyboardPrimarySize, 
                                   const std::string& resolvedFontPath) {
     ImGuiIO& io = ImGui::GetIO();
 
-    const float baseFontSize = 16.0f * scaleFactor;
+    const float baseFontSize = ComputeConfiguredGuiBaseFontSize(scaleFactor);
     const std::vector<ImWchar> localizedGlyphRanges = BuildTranslationGlyphRanges();
     const ImWchar* localizedRanges = GetGlyphRangesOrDefault(io.Fonts, localizedGlyphRanges);
 
@@ -236,7 +245,7 @@ static void RebuildImGuiFontAtlas(float scaleFactor, float keyboardPrimarySize, 
 }
 
 static void ConfigureImGuiFontsAndStyle(float scaleFactor) {
-    const float baseFontSize = 16.0f * scaleFactor;
+    const float baseFontSize = ComputeConfiguredGuiBaseFontSize(scaleFactor);
     const std::string requestedFontPath = GetConfiguredGuiFontPath();
     const std::string resolvedFontPath = ResolveGuiFontPath(baseFontSize);
 
@@ -250,6 +259,7 @@ static void ConfigureImGuiFontsAndStyle(float scaleFactor) {
 
     s_mainGuiFontRefreshState.valid = true;
     s_mainGuiFontRefreshState.guiScaleFactor = scaleFactor;
+    s_mainGuiFontRefreshState.configuredFontScale = GetConfiguredGuiFontScale();
     s_mainGuiFontRefreshState.requestedFontPath = requestedFontPath;
     s_mainGuiFontRefreshState.resolvedFontPath = resolvedFontPath;
 }
@@ -315,12 +325,16 @@ void ApplyDynamicGuiFontRefresh() {
     if (ImGui::GetCurrentContext() == nullptr) { return; }
 
     const float guiScaleFactor = ComputeGuiScaleFactorFromCachedWindowSize();
+    const float configuredFontScale = GetConfiguredGuiFontScale();
     const std::string requestedFontPath = GetConfiguredGuiFontPath();
     const bool overlayFontReloadRequested = g_eyeZoomFontNeedsReload.exchange(false, std::memory_order_acq_rel);
     const bool hasPendingRequest = s_pendingMainGuiFontRefresh.pending;
     const bool scaleChanged = !s_mainGuiFontRefreshState.valid || fabsf(guiScaleFactor - s_mainGuiFontRefreshState.guiScaleFactor) > 0.001f;
+    const bool configuredFontScaleChanged = !s_mainGuiFontRefreshState.valid ||
+        fabsf(configuredFontScale - s_mainGuiFontRefreshState.configuredFontScale) > 0.001f;
     const bool requestedFontPathChanged = !s_mainGuiFontRefreshState.valid || requestedFontPath != s_mainGuiFontRefreshState.requestedFontPath;
-    const bool mustRefresh = s_pendingMainGuiFontRefresh.force || scaleChanged || requestedFontPathChanged || overlayFontReloadRequested;
+    const bool mustRefresh = s_pendingMainGuiFontRefresh.force || scaleChanged || configuredFontScaleChanged ||
+        requestedFontPathChanged || overlayFontReloadRequested;
 
     s_pendingMainGuiFontRefresh.pending = false;
     s_pendingMainGuiFontRefresh.force = false;
@@ -358,7 +372,7 @@ void ApplyPendingKeyboardLayoutFontRefresh() {
     s_pendingKeyboardLayoutFontRefresh.force = false;
 
     const float guiScaleFactor = ComputeGuiScaleFactorFromCachedWindowSize();
-    const float baseFontSize = 16.0f * guiScaleFactor;
+    const float baseFontSize = ComputeConfiguredGuiBaseFontSize(guiScaleFactor);
     const std::string fontPath = ResolveGuiFontPath(baseFontSize);
 
     const float widthScale = request.windowSize.x / 1180.0f;

@@ -6,7 +6,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.supporters"))) {
     if (g_supporterTierTexturesDirty.exchange(false, std::memory_order_acq_rel)) { ClearSupporterTierTextureCache(); }
 
     ImGui::TextWrapped(trc("supporters.thanks"));
-    ImGui::TextWrapped(trc("supporters.donate"));
+    ImGui::TextUnformatted(trc("supporters.donate"));
+    ImGui::SameLine(0.0f, 4.0f);
     ImGui::TextLinkOpenURL("https://patreon.com/jojoe77777");
     ImGui::Spacing();
 

@@ -199,7 +199,9 @@ if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
                 if (presetIndex > 0) {
                     ImGui::SameLine();
                 }
-                if (ImGui::Button(trc(presetDefinition.translationKey.c_str()))) {
+                const std::string presetButtonLabel =
+                    std::string(trc(presetDefinition.translationKey.c_str())) + "##nbPreset_" + presetDefinition.id;
+                if (ImGui::Button(presetButtonLabel.c_str())) {
                     applyNinjabrainPreset(presetDefinition);
                     changed = true;
                 }

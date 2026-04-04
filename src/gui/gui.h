@@ -519,6 +519,7 @@ struct EyeZoomConfig {
 };
 struct AppearanceConfig {
     std::string theme = "Dark";
+    float guiFontScale = ConfigDefaults::CONFIG_GUI_FONT_SCALE;
     std::map<std::string, Color> customColors;
 };
 
@@ -691,7 +692,7 @@ struct Config {
     std::vector<DWORD> imageOverlaysHotkey = {};
     std::vector<DWORD> windowOverlaysHotkey = {};
     CursorsConfig cursors;
-    std::string fontPath = ConfigDefaults::CONFIG_FONT_PATH;
+    std::string fontPath = ConfigDefaults::CONFIG_DEFAULT_GUI_FONT_PATH;
     std::string lang = "en";
     int fpsLimit = 0;
     int fpsLimitSleepThreshold = 1000;

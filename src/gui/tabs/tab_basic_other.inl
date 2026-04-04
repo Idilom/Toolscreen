@@ -158,6 +158,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.other"))) {
     ImGui::SameLine();
     HelpMarker(trc("tooltip.font"));
 
+    ImGui::Text(trc("label.scale"));
+    ImGui::SetNextItemWidth(160);
+    if (ImGui::SliderFloat("##GuiFontScale", &g_config.appearance.guiFontScale, 0.75f, 2.0f, "%.2fx")) {
+        g_config.appearance.guiFontScale = std::clamp(g_config.appearance.guiFontScale, 0.75f, 2.0f);
+        g_configIsDirty = true;
+        RequestDynamicGuiFontRefresh(true);
+    }
+    ImGui::SameLine();
+    HelpMarker(trc("tooltip.gui_font_scale"));
+
     ImGui::EndTabItem();
 }
 
