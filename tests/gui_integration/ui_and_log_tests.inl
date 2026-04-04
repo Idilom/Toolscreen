@@ -729,6 +729,32 @@ void RunProfileRenameTest(TestRunMode runMode = TestRunMode::Automated) {
         Expect(g_config.ninjabrainOverlay.apiBaseUrl == "http://127.0.0.1:60000",
             "Switching to the overlay-only profile should restore its Ninjabrain overlay settings.");
 
+        auto loadProfileSnapshot = [](const std::string& profileName) {
+            Config snapshot;
+            const std::wstring profilePath = g_toolscreenPath + L"\\profiles\\" + Utf8ToWide(profileName) + L".toml";
+            Expect(LoadConfigFromTomlFile(profilePath, snapshot),
+                "Profile TOML should remain loadable for '" + profileName + "'.");
+            return snapshot;
+        };
+
+        Config defaultProfileSnapshot = loadProfileSnapshot(kDefaultProfileName);
+        Expect(defaultProfileSnapshot.modes.empty(),
+            "Mirrors-only profile TOML should not persist mode overrides.");
+        Expect(defaultProfileSnapshot.mirrors.size() == 1 && defaultProfileSnapshot.mirrors[0].name == "MirrorA",
+            "Mirrors-only profile TOML should persist its mirror override.");
+        Expect(defaultProfileSnapshot.windowOverlays.empty(),
+            "Mirrors-only profile TOML should not persist shared window overlays.");
+
+        Config overlayProfileSnapshot = loadProfileSnapshot("OverlayOnly");
+        Expect(overlayProfileSnapshot.mirrors.empty(),
+            "Overlay-only profile TOML should not persist shared mirrors.");
+        Expect(overlayProfileSnapshot.windowOverlays.size() == 1 && overlayProfileSnapshot.windowOverlays[0].name == "OverlayB",
+            "Overlay-only profile TOML should persist its window overlay override.");
+        Expect(overlayProfileSnapshot.ninjabrainOverlay.enabled,
+            "Overlay-only profile TOML should persist its Ninjabrain overlay override.");
+        Expect(overlayProfileSnapshot.ninjabrainOverlay.apiBaseUrl == "http://127.0.0.1:60000",
+            "Overlay-only profile TOML should persist its Ninjabrain overlay settings.");
+
         SaveConfigImmediate();
 
         Config diskConfig;

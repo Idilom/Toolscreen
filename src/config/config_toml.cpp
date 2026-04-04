@@ -12,6 +12,7 @@
 #include <fstream>
 #include <optional>
 #include <sstream>
+#include <unordered_set>
 
 template <typename T> T GetOr(const toml::table& tbl, const std::string& key, T defaultValue) {
     if (auto node = tbl.get(key)) {
@@ -2642,6 +2643,7 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "fpsLimitSleepThreshold",
         "mirrorMatchColorspace",
         "allowCursorEscape",
+        "confineCursor",
         "mouseSensitivity",
         "windowsMouseSpeed",
         "hideAnimationsInGame",
@@ -2660,6 +2662,7 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "windowOverlaysHotkey",
         "debug",
         "eyezoom",
+        "ninjabrainOverlay",
         "cursors",
         "keyRebinds",
         "appearance",
@@ -2852,6 +2855,213 @@ const std::vector<std::string>* GetConfigTomlArrayItemKeyOrder(const std::string
     return nullptr;
 }
 
+struct ConfigTomlDocumentEntry {
+    std::string key;
+    const toml::node* node = nullptr;
+};
+
+const std::vector<std::string>& GetConfigTomlArrayOfTablesKeys() {
+    static const std::vector<std::string> keys = {
+        "mode",
+        "mirror",
+        "mirrorGroup",
+        "image",
+        "windowOverlay",
+        "browserOverlay",
+        "hotkey",
+        "sensitivityHotkey",
+    };
+    return keys;
+}
+
+bool IsConfigTomlArrayOfTablesKey(const std::string& key) {
+    const auto& keys = GetConfigTomlArrayOfTablesKeys();
+    return std::find(keys.begin(), keys.end(), key) != keys.end();
+}
+
+bool IsNonEmptyArrayOfTables(const toml::node& node) {
+    if (!node.is_array()) {
+        return false;
+    }
+
+    const toml::array* arr = node.as_array();
+    return arr != nullptr && !arr->empty() && (*arr)[0].is_table();
+}
+
+void AppendConfigTomlDocumentEntry(const std::string& key, const toml::node* node,
+                                   std::vector<ConfigTomlDocumentEntry>& simpleEntries,
+                                   std::vector<ConfigTomlDocumentEntry>& tableEntries,
+                                   std::vector<ConfigTomlDocumentEntry>& arrayOfTablesEntries) {
+    if (node == nullptr) {
+        return;
+    }
+
+    if (node->is_table()) {
+        tableEntries.push_back({ key, node });
+        return;
+    }
+
+    if (IsNonEmptyArrayOfTables(*node)) {
+        arrayOfTablesEntries.push_back({ key, node });
+        return;
+    }
+
+    simpleEntries.push_back({ key, node });
+}
+
+void CollectConfigTomlDocumentEntries(const toml::table& tbl, const std::vector<std::string>& orderedKeys,
+                                      std::vector<ConfigTomlDocumentEntry>& simpleEntries,
+                                      std::vector<ConfigTomlDocumentEntry>& tableEntries,
+                                      std::vector<ConfigTomlDocumentEntry>& arrayOfTablesEntries) {
+    std::unordered_set<std::string> seenKeys;
+
+    for (const auto& key : orderedKeys) {
+        const toml::node* node = tbl.get(key);
+        if (node == nullptr) {
+            continue;
+        }
+
+        seenKeys.insert(key);
+        AppendConfigTomlDocumentEntry(key, node, simpleEntries, tableEntries, arrayOfTablesEntries);
+    }
+
+    for (const auto& [key, node] : tbl) {
+        const std::string keyStr(key.str());
+        if (seenKeys.find(keyStr) != seenKeys.end()) {
+            continue;
+        }
+
+        AppendConfigTomlDocumentEntry(keyStr, &node, simpleEntries, tableEntries, arrayOfTablesEntries);
+    }
+}
+
+std::string TrimTomlWhitespace(const std::string& value) {
+    const size_t start = value.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) {
+        return std::string();
+    }
+
+    const size_t end = value.find_last_not_of(" \t\r\n");
+    return value.substr(start, end - start + 1);
+}
+
+std::string TrimTomlLeadingWhitespace(const std::string& value) {
+    const size_t start = value.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) {
+        return std::string();
+    }
+
+    return value.substr(start);
+}
+
+std::string GetArrayOfTablesHeaderKey(const std::string& trimmedLine) {
+    if (trimmedLine.rfind("[[", 0) != 0) {
+        return std::string();
+    }
+
+    const size_t closePos = trimmedLine.find("]]", 2);
+    if (closePos == std::string::npos) {
+        return std::string();
+    }
+
+    const std::string header = TrimTomlWhitespace(trimmedLine.substr(2, closePos - 2));
+    if (header.empty() || header.find('.') != std::string::npos || !IsConfigTomlArrayOfTablesKey(header)) {
+        return std::string();
+    }
+
+    return header;
+}
+
+bool IsLegacyArrayOfTablesAssignmentLine(const std::string& trimmedLine, const std::string& key) {
+    if (trimmedLine.compare(0, key.size(), key) != 0) {
+        return false;
+    }
+
+    size_t pos = key.size();
+    while (pos < trimmedLine.size() && (trimmedLine[pos] == ' ' || trimmedLine[pos] == '\t')) {
+        ++pos;
+    }
+    if (pos >= trimmedLine.size() || trimmedLine[pos] != '=') {
+        return false;
+    }
+
+    ++pos;
+    while (pos < trimmedLine.size() && (trimmedLine[pos] == ' ' || trimmedLine[pos] == '\t')) {
+        ++pos;
+    }
+
+    return pos < trimmedLine.size() && trimmedLine[pos] == '[';
+}
+
+bool RepairLegacyArrayOfTablesConflicts(const std::string& source, std::string& repairedSource) {
+    std::istringstream input(source);
+    std::vector<std::string> lines;
+    std::unordered_set<std::string> arrayHeaders;
+    std::string line;
+
+    while (std::getline(input, line)) {
+        lines.push_back(line);
+        const std::string headerKey = GetArrayOfTablesHeaderKey(TrimTomlLeadingWhitespace(line));
+        if (!headerKey.empty()) {
+            arrayHeaders.insert(headerKey);
+        }
+    }
+
+    if (arrayHeaders.empty()) {
+        return false;
+    }
+
+    std::ostringstream rebuilt;
+    bool changed = false;
+    for (const std::string& originalLine : lines) {
+        const std::string trimmedLine = TrimTomlLeadingWhitespace(originalLine);
+        bool skipLine = false;
+
+        for (const auto& key : arrayHeaders) {
+            if (IsLegacyArrayOfTablesAssignmentLine(trimmedLine, key)) {
+                skipLine = true;
+                changed = true;
+                break;
+            }
+        }
+
+        if (!skipLine) {
+            rebuilt << originalLine << "\n";
+        }
+    }
+
+    if (!changed) {
+        return false;
+    }
+
+    repairedSource = rebuilt.str();
+    return true;
+}
+
+bool ParseTomlTableFromString(const std::string& source, toml::table& tbl, std::string& errorDescription) {
+#if TOML_EXCEPTIONS
+    try {
+        tbl = toml::parse(source);
+        return true;
+    } catch (const toml::parse_error& e) {
+        errorDescription = e.what();
+        return false;
+    } catch (const std::exception& e) {
+        errorDescription = e.what();
+        return false;
+    }
+#else
+    toml::parse_result result = toml::parse(source);
+    if (!result) {
+        errorDescription = std::string(result.error().description());
+        return false;
+    }
+
+    tbl = std::move(result).table();
+    return true;
+#endif
+}
+
 bool WriteConfigTomlDocument(std::ostream& out, const Config& config) {
     toml::table tbl;
     ConfigToToml(config, tbl);
@@ -2859,65 +3069,50 @@ bool WriteConfigTomlDocument(std::ostream& out, const Config& config) {
     const auto& orderedKeys = GetConfigTomlOrderedKeys();
     static const std::vector<std::string> emptyOrder;
 
-    for (const auto& key : orderedKeys) {
-        if (!tbl.contains(key)) {
+    std::vector<ConfigTomlDocumentEntry> simpleEntries;
+    std::vector<ConfigTomlDocumentEntry> tableEntries;
+    std::vector<ConfigTomlDocumentEntry> arrayOfTablesEntries;
+    CollectConfigTomlDocumentEntries(tbl, orderedKeys, simpleEntries, tableEntries, arrayOfTablesEntries);
+
+    bool wroteAny = false;
+    for (const auto& entry : simpleEntries) {
+        if (entry.node == nullptr) {
             continue;
         }
 
-        const toml::node* nodePtr = tbl.get(key);
-        if (nodePtr == nullptr) {
-            continue;
-        }
-
-        if (nodePtr->is_array()) {
-            const toml::array* arr = nodePtr->as_array();
-            if (arr && !arr->empty() && (*arr)[0].is_table()) {
-                const std::vector<std::string>* itemKeyOrder = GetConfigTomlArrayItemKeyOrder(key);
-                for (const auto& elem : *arr) {
-                    out << "\n[[" << key << "]]\n";
-                    const toml::table* elemTbl = elem.as_table();
-                    if (elemTbl) {
-                        WriteTableOrdered(out, *elemTbl, itemKeyOrder ? *itemKeyOrder : emptyOrder, true);
-                    }
-                }
-            } else if (arr) {
-                out << key << " = " << *arr << "\n";
-            }
-        } else if (nodePtr->is_table()) {
-            out << "\n";
-            WriteNode(out, key, *nodePtr, false);
-        } else {
-            out << key << " = ";
-            nodePtr->visit([&out](auto&& val) { out << val; });
-            out << "\n";
-        }
+        WriteNode(out, entry.key, *entry.node, false);
+        wroteAny = true;
     }
 
-    for (const auto& [key, node] : tbl) {
-        const std::string keyStr(key.str());
-        if (std::find(orderedKeys.begin(), orderedKeys.end(), keyStr) != orderedKeys.end()) {
+    for (const auto& entry : tableEntries) {
+        if (entry.node == nullptr) {
             continue;
         }
 
-        if (node.is_array()) {
-            const toml::array* arr = node.as_array();
-            if (arr && !arr->empty() && (*arr)[0].is_table()) {
-                for (const auto& elem : *arr) {
-                    out << "\n[[" << keyStr << "]]\n";
-                    if (const toml::table* elemTbl = elem.as_table()) {
-                        WriteTableOrdered(out, *elemTbl, emptyOrder, true);
-                    }
-                }
-            } else if (arr) {
-                out << keyStr << " = " << *arr << "\n";
+        if (wroteAny) {
+            out << "\n";
+        }
+        WriteNode(out, entry.key, *entry.node, false);
+        wroteAny = true;
+    }
+
+    for (const auto& entry : arrayOfTablesEntries) {
+        const toml::array* arr = entry.node != nullptr ? entry.node->as_array() : nullptr;
+        if (arr == nullptr) {
+            continue;
+        }
+
+        const std::vector<std::string>* itemKeyOrder = GetConfigTomlArrayItemKeyOrder(entry.key);
+        for (const auto& elem : *arr) {
+            if (wroteAny) {
+                out << "\n";
             }
-        } else if (node.is_table()) {
-            out << "\n";
-            WriteNode(out, keyStr, node, false);
-        } else {
-            out << keyStr << " = ";
-            node.visit([&out](auto&& val) { out << val; });
-            out << "\n";
+            out << "[[" << entry.key << "]]\n";
+
+            if (const toml::table* elemTbl = elem.as_table()) {
+                WriteTableOrdered(out, *elemTbl, itemKeyOrder ? *itemKeyOrder : emptyOrder, true);
+            }
+            wroteAny = true;
         }
     }
 
@@ -2966,18 +3161,24 @@ bool LoadConfigFromTomlFile(const std::wstring& path, Config& config) {
             return false;
         }
 
+        std::ostringstream buffer;
+        buffer << in.rdbuf();
+
         toml::table tbl;
-#if TOML_EXCEPTIONS
-        tbl = toml::parse(in, path);
-#else
-        toml::parse_result result = toml::parse(in, path);
-        if (!result) {
-            const auto& err = result.error();
-            Log("ERROR: TOML parse error: " + std::string(err.description()));
-            return false;
+        std::string parseError;
+        const std::string source = buffer.str();
+        if (!ParseTomlTableFromString(source, tbl, parseError)) {
+            std::string repairedSource;
+            if (parseError.find("cannot redefine existing array") != std::string::npos &&
+                RepairLegacyArrayOfTablesConflicts(source, repairedSource) &&
+                ParseTomlTableFromString(repairedSource, tbl, parseError)) {
+                Log("WARNING: Repaired legacy TOML array-of-tables conflict while loading: " + WideToUtf8(path));
+            } else {
+                Log("ERROR: TOML parse error: " + parseError);
+                return false;
+            }
         }
-        tbl = std::move(result).table();
-#endif
+
         ConfigFromToml(tbl, config);
         return true;
     } catch (const std::exception& e) {
