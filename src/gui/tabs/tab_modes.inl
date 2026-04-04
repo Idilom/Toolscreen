@@ -787,37 +787,25 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     }
                 }
 
-                ImGui::Text(trc("modes.eyezoom.text_font"));
-                ImGui::SetNextItemWidth(300);
-                if (ImGui::InputText("##EyeZoomTextFont", &g_config.eyezoom.textFontPath)) {
+                const std::vector<FontPickerOption> eyeZoomFontOptions = BuildFontPickerOptions({ { "", "font.preset.use_main_gui" } });
+                auto applyEyeZoomFontChange = []() {
                     g_configIsDirty = true;
                     g_eyeZoomFontNeedsReload.store(true);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button((tr("button.browse") + "##EyeZoomFont").c_str())) {
-                    OPENFILENAMEA ofn = {};
-                    char szFile[MAX_PATH] = {};
+                };
 
-                    if (!g_config.eyezoom.textFontPath.empty()) { strncpy_s(szFile, g_config.eyezoom.textFontPath.c_str(), MAX_PATH - 1); }
-
-                    ofn.lStructSize = sizeof(ofn);
-                    ofn.hwndOwner = g_minecraftHwnd.load();
-                    ofn.lpstrFile = szFile;
-                    ofn.nMaxFile = sizeof(szFile);
-                    ofn.lpstrFilter = "Font Files (*.ttf;*.otf)\0*.ttf;*.otf\0All Files (*.*)\0*.*\0";
-                    ofn.nFilterIndex = 1;
-                    ofn.lpstrTitle = "Select Font for EyeZoom Text";
-                    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-                    ofn.lpstrInitialDir = "C:\\Windows\\Fonts";
-
-                    if (GetOpenFileNameA(&ofn)) {
-                        g_config.eyezoom.textFontPath = szFile;
-                        g_configIsDirty = true;
-                        g_eyeZoomFontNeedsReload.store(true);
-                    }
-                }
+                ImGui::Text(trc("modes.eyezoom.text_font"));
+                const bool usingCustomEyeZoomFont = RenderFontPickerCombo("##EyeZoomTextFontChoice", 300.0f, eyeZoomFontOptions,
+                                                                          g_config.eyezoom.textFontPath,
+                                                                          s_eyeZoomFontPickerState, applyEyeZoomFontChange);
                 ImGui::SameLine();
                 HelpMarker(trc("modes.eyezoom.tooltip.custom_font"));
+
+                if (usingCustomEyeZoomFont) {
+                    ImGui::Text(trc("label.font_path"));
+                    RenderCustomFontPathEditor("##EyeZoomTextFont", "##EyeZoomFont", 300.0f, eyeZoomFontOptions,
+                                               g_config.eyezoom.textFontPath, s_eyeZoomFontPickerState,
+                                               "Select Font for EyeZoom Text", applyEyeZoomFontChange);
+                }
 
                 if (ImGui::Checkbox(trc("modes.eyezoom.link_rect_to_font"), &g_config.eyezoom.linkRectToFont)) {
                     g_configIsDirty = true;

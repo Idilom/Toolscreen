@@ -1,5 +1,6 @@
 #include "gui_internal.h"
 
+#include "common/font_assets.h"
 #include "common/i18n.h"
 #include "common/profiler.h"
 #include "common/utils.h"
@@ -77,21 +78,14 @@ constexpr std::array<const char*, 5> kLocalizedFallbackFontPaths = {
 };
 
 std::string ResolveRuntimeFontPath(const std::string& path) {
-    if (path.empty()) return path;
-
-    const std::filesystem::path configuredPath = std::filesystem::u8path(path);
-    if (configuredPath.is_absolute() || g_toolscreenPath.empty()) {
-        return path;
-    }
-
-    return WideToUtf8((std::filesystem::path(g_toolscreenPath) / configuredPath).wstring());
+    return ResolveToolscreenRelativePath(path, g_toolscreenPath);
 }
 
 bool FontFileExists(const std::string& path) {
     if (path.empty()) return false;
 
     std::error_code error;
-    return std::filesystem::is_regular_file(std::filesystem::u8path(ResolveRuntimeFontPath(path)), error);
+    return std::filesystem::is_regular_file(std::filesystem::path(Utf8ToWide(ResolveRuntimeFontPath(path))), error);
 }
 
 std::string GetConfiguredGuiFontPath() {

@@ -1,5 +1,6 @@
 #include "gui_internal.h"
 
+#include "common/font_assets.h"
 #include "common/mode_dimensions.h"
 #include "common/profiler.h"
 #include "common/utils.h"
@@ -500,6 +501,7 @@ void LoadConfig() {
     }
 
     BackupConfigFile();
+    ExtractBundledFontAssets(std::filesystem::path(g_toolscreenPath), &LoadConfig);
 
     try {
         g_config = Config();
@@ -533,6 +535,25 @@ void LoadConfig() {
         if (!LoadProfile(g_profilesConfig.activeProfile)) {
             Log("WARNING: Failed to load active profile '" + g_profilesConfig.activeProfile + "', using base config");
         }
+
+        auto normalizeConfigFontPaths = [](Config& config, const std::wstring& toolscreenPath) {
+            if (config.fontPath.empty()) {
+                config.fontPath = ConfigDefaults::CONFIG_DEFAULT_GUI_FONT_PATH;
+            } else {
+                NormalizeBundledFontPathInPlace(config.fontPath, toolscreenPath);
+            }
+
+            NormalizeBundledFontPathInPlace(config.eyezoom.textFontPath, toolscreenPath);
+
+            if (config.ninjabrainOverlay.customFontPath.empty()) {
+                config.ninjabrainOverlay.customFontPath = ConfigDefaults::CONFIG_FONT_PATH;
+            } else {
+                NormalizeBundledFontPathInPlace(config.ninjabrainOverlay.customFontPath, toolscreenPath);
+            }
+        };
+
+        normalizeConfigFontPaths(g_sharedConfig, g_toolscreenPath);
+        normalizeConfigFontPaths(g_config, g_toolscreenPath);
         Log("Loaded config from TOML file.");
 
         int screenWidth = GetCachedWindowWidth();

@@ -43,58 +43,11 @@ if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
             g_eyeZoomFontNeedsReload.store(true);
         };
 
-        static char nbFontBuf[512] = {};
-        static bool nbFontBufInit = false;
-        static constexpr const char* kNinjabrainOpenSansFontPath = "fonts/OpenSans-Regular.ttf";
-        static constexpr const char* kNinjabrainMinecraftFontPath = "fonts/Minecraft.ttf";
-        auto isNinjabrainMinecraftFont = [](const std::string& path) {
-            return path == kNinjabrainMinecraftFontPath || path == "Minecraft.ttf";
-        };
-        auto isNinjabrainOpenSansFont = [](const std::string& path) {
-            return path.empty() || path == ConfigDefaults::CONFIG_FONT_PATH || path == kNinjabrainOpenSansFontPath;
-        };
-        auto isNinjabrainBuiltInFont = [&](const std::string& path) {
-            return isNinjabrainOpenSansFont(path) || isNinjabrainMinecraftFont(path);
-        };
-        auto applyNinjabrainFontPath = [&](const std::string& fontPath) {
-            if (nb.customFontPath == fontPath) {
-                return false;
-            }
-            nb.customFontPath = fontPath;
+        const std::vector<FontPickerOption> ninjabrainFontOptions = BuildFontPickerOptions();
+        auto applyNinjabrainFontChange = [&]() {
             changed = true;
             g_eyeZoomFontNeedsReload.store(true);
-            return true;
         };
-        auto browseNinjabrainCustomFont = [&]() {
-            OPENFILENAMEA ofn = {};
-            char szFile[MAX_PATH] = {};
-
-            if (!nb.customFontPath.empty() && !isNinjabrainBuiltInFont(nb.customFontPath)) {
-                strncpy_s(szFile, nb.customFontPath.c_str(), MAX_PATH - 1);
-            }
-
-            ofn.lStructSize = sizeof(ofn);
-            ofn.hwndOwner = g_minecraftHwnd.load();
-            ofn.lpstrFile = szFile;
-            ofn.nMaxFile = sizeof(szFile);
-            ofn.lpstrFilter = "Font Files (*.ttf;*.otf)\0*.ttf;*.otf\0All Files (*.*)\0*.*\0";
-            ofn.nFilterIndex = 1;
-            ofn.lpstrTitle = "Select Font for Ninjabrain Overlay";
-            ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-            ofn.lpstrInitialDir = "C:\\Windows\\Fonts";
-
-            if (!GetOpenFileNameA(&ofn)) {
-                return false;
-            }
-
-            strncpy_s(nbFontBuf, szFile, sizeof(nbFontBuf) - 1);
-            nbFontBufInit = true;
-            return applyNinjabrainFontPath(szFile);
-        };
-        if (!nbFontBufInit || std::string(nbFontBuf) != nb.customFontPath) {
-            strncpy_s(nbFontBuf, nb.customFontPath.c_str(), sizeof(nbFontBuf) - 1);
-            nbFontBufInit = true;
-        }
 
         {
             const bool wasEnabled = nb.enabled;
@@ -255,46 +208,19 @@ if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
             }
             ImGui::NextColumn();
 
-            const bool usingOpenSansFont = isNinjabrainOpenSansFont(nb.customFontPath);
-            const bool usingMinecraftFont = isNinjabrainMinecraftFont(nb.customFontPath);
-            const bool usingCustomFont = !usingOpenSansFont && !usingMinecraftFont;
-            const char* currentNinjabrainFont = usingOpenSansFont
-                ? trc("ninjabrain.font_open_sans")
-                : usingMinecraftFont ? trc("ninjabrain.font_minecraft") : trc("ninjabrain.font_custom");
-
             ImGui::Text("%s", trc("ninjabrain.font"));
             ImGui::NextColumn();
-            ImGui::SetNextItemWidth(250);
-            if (ImGui::BeginCombo("##nbFontChoice", currentNinjabrainFont)) {
-                if (ImGui::Selectable(trc("ninjabrain.font_open_sans"), usingOpenSansFont)) {
-                    applyNinjabrainFontPath(kNinjabrainOpenSansFontPath);
-                }
-                if (ImGui::Selectable(trc("ninjabrain.font_minecraft"), usingMinecraftFont)) {
-                    applyNinjabrainFontPath(kNinjabrainMinecraftFontPath);
-                }
-                if (ImGui::Selectable(trc("ninjabrain.font_custom"), usingCustomFont)) {
-                    if (!usingCustomFont) {
-                        browseNinjabrainCustomFont();
-                    }
-                }
-                ImGui::EndCombo();
-            }
+            const bool usingCustomFont = RenderFontPickerCombo("##nbFontChoice", 250.0f, ninjabrainFontOptions, nb.customFontPath,
+                                                               s_ninjabrainFontPickerState, applyNinjabrainFontChange);
 
             ImGui::NextColumn();
 
             if (usingCustomFont) {
                 ImGui::Text("%s", trc("ninjabrain.custom_font_path"));
                 ImGui::NextColumn();
-                ImGui::SetNextItemWidth(250);
-                if (ImGui::InputText("##nbCustomFont", nbFontBuf, sizeof(nbFontBuf))) {
-                    applyNinjabrainFontPath(nbFontBuf);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button((tr("button.browse") + "##nbCustomFont").c_str())) {
-                    browseNinjabrainCustomFont();
-                }
-                ImGui::SameLine();
-                ImGui::TextDisabled("%s", trc("ninjabrain.custom_font_hint"));
+                RenderCustomFontPathEditor("##nbCustomFont", "##nbCustomFont", 250.0f, ninjabrainFontOptions, nb.customFontPath,
+                                           s_ninjabrainFontPickerState, "Select Font for Ninjabrain Overlay",
+                                           applyNinjabrainFontChange, "ninjabrain.custom_font_hint");
                 ImGui::NextColumn();
             }
 
@@ -847,7 +773,7 @@ if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
             if (ImGui::Button(trc("button.confirm_reset"), ImVec2(120, 0))) {
                 nb = NinjabrainOverlayConfig{};
                 changed = true;
-                nbFontBufInit = false;
+                s_ninjabrainFontPickerState = {};
                 g_eyeZoomFontNeedsReload.store(true);
                 ImGui::CloseCurrentPopup();
             }

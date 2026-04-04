@@ -329,6 +329,9 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/fonts"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/assets/fonts/Monocraft.ttf"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/fonts/Monocraft.ttf"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/src/assets/fonts/Minecraft.ttf"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/fonts/Minecraft.ttf"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -934,6 +937,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-roundtrip-key-rebinds-appearance
     config-roundtrip-debug-settings
     config-load-embedded-ninjabrain-presets
+    config-load-bundled-font-paths-normalized
     config-load-missing-required-modes
     config-load-invalid-hotkey-mode-references
     config-load-relative-mode-dimensions

@@ -8,6 +8,7 @@
 #include "obs_thread.h"
 #include "common/i18n.h"
 #include "common/profiler.h"
+#include "common/font_assets.h"
 #include "gui/imgui_input_queue.h"
 #include "third_party/stb_image.h"
 #include "common/utils.h"
@@ -7104,21 +7105,11 @@ void InitializeOverlayTextFont(const std::string& fontPath, float baseFontSize, 
     ImGuiIO& io = ImGui::GetIO();
     const float sizePixels = baseFontSize * 1.5f * scaleFactor;
 
-    auto resolvePath = [](const std::string& path) -> std::string {
-        if (path.empty()) return path;
-
-        std::wstring widePath = Utf8ToWide(path);
-        if (PathIsRelativeW(widePath.c_str()) && !g_toolscreenPath.empty()) {
-            return WideToUtf8(g_toolscreenPath + L"\\" + widePath);
-        }
-        return path;
-    };
-
     const std::string configuredOverlayPath = g_config.eyezoom.textFontPath;
-    const std::string bundledFontPath = resolvePath(ConfigDefaults::CONFIG_FONT_PATH);
+    const std::string bundledFontPath = ResolveToolscreenRelativePath(ConfigDefaults::CONFIG_FONT_PATH, g_toolscreenPath);
     const std::string systemFallbackFontPath = ConfigDefaults::CONFIG_FALLBACK_FONT_PATH;
 
-    std::string usePath = resolvePath(configuredOverlayPath.empty() ? fontPath : configuredOverlayPath);
+    std::string usePath = ResolveToolscreenRelativePath(configuredOverlayPath.empty() ? fontPath : configuredOverlayPath, g_toolscreenPath);
     if (usePath.empty()) { usePath = bundledFontPath; }
 
     auto isStable = [](const std::string& p, float sz) -> bool {
@@ -8004,14 +7995,7 @@ void LoadNinjabrainFont(ImFontAtlas* atlas, const NinjabrainOverlayConfig& overl
     fontCfg.OversampleV = overlay.fontAntialiasing ? 2 : 1;
     fontCfg.PixelSnapH = !overlay.fontAntialiasing;
 
-    // Resolve relative custom path against the toolscreen directory
-    auto resolvePath = [](const std::string& p) -> std::string {
-        if (p.empty()) return p;
-        std::wstring wp = Utf8ToWide(p);
-        if (PathIsRelativeW(wp.c_str()) && !g_toolscreenPath.empty())
-            return WideToUtf8(g_toolscreenPath + L"\\" + wp);
-        return p;
-    };
+    auto resolvePath = [](const std::string& p) -> std::string { return ResolveToolscreenRelativePath(p, g_toolscreenPath); };
 
     auto tryFontResource = [&](int resourceId) -> bool {
         HMODULE hModule = NULL;
@@ -8052,6 +8036,10 @@ void LoadNinjabrainFont(ImFontAtlas* atlas, const NinjabrainOverlayConfig& overl
                 return;
             }
         }
+    }
+
+    if (const BundledFontAsset* selectedBundledFont = FindBundledFontAssetByPath(overlay.customFontPath, g_toolscreenPath)) {
+        if (tryFontResource(selectedBundledFont->resourceId)) return;
     }
 
     std::string resolvedBundledDefault = resolvePath(ConfigDefaults::CONFIG_FONT_PATH);

@@ -144,6 +144,30 @@ void RunConfigLoadEmbeddedNinjabrainPresetsTest(TestRunMode runMode = TestRunMod
     }
 }
 
+void RunConfigLoadBundledFontPathsNormalizedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_bundled_font_paths_normalized",
+                      []() {
+                          Config config;
+                          const std::filesystem::path root(g_toolscreenPath);
+
+                          config.fontPath = Narrow((root / "fonts" / "OpenSans-Regular.ttf").wstring());
+                          config.eyezoom.textFontPath = Narrow((root / "fonts" / "Monocraft.ttf").wstring());
+                          config.ninjabrainOverlay.customFontPath = Narrow((root / "Minecraft.ttf").wstring());
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-bundled-font-paths-normalized");
+                          Expect(g_config.fontPath == "fonts/OpenSans-Regular.ttf",
+                                 "Expected absolute bundled GUI font path to normalize to the preset-relative path.");
+                          Expect(g_config.eyezoom.textFontPath == "fonts/Monocraft.ttf",
+                                 "Expected absolute bundled EyeZoom font path to normalize to the preset-relative path.");
+                          Expect(g_config.ninjabrainOverlay.customFontPath == "fonts/Minecraft.ttf",
+                                 "Expected legacy bundled Ninjabrain font path to normalize to the preset-relative path.");
+                      },
+                      runMode);
+}
+
 void RunConfigLoadMissingRequiredModesTest(TestRunMode runMode = TestRunMode::Automated) {
     RunConfigLoadCase("config_load_missing_required_modes",
                       []() {

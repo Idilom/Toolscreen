@@ -1,4 +1,5 @@
 #include "common/i18n.h"
+#include "common/font_assets.h"
 #include "common/profiler.h"
 #include "common/utils.h"
 #include "config/config_toml.h"
@@ -89,43 +90,6 @@ void Expect(bool condition, const std::string& message) {
 
 std::string Narrow(const std::wstring& value) {
     return WideToUtf8(value);
-}
-
-void WriteEmbeddedResourceFile(WORD resourceId, const std::filesystem::path& destination) {
-    std::error_code error;
-    std::filesystem::create_directories(destination.parent_path(), error);
-    Expect(!error, "Failed to create resource directory: " + Narrow(destination.parent_path().wstring()));
-
-    HMODULE module = nullptr;
-    const BOOL gotModule = GetModuleHandleExW(
-        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCWSTR>(&WriteEmbeddedResourceFile), &module);
-    Expect(gotModule == TRUE && module != nullptr, "Failed to resolve test module for embedded resources.");
-
-    HRSRC resourceHandle = FindResourceW(module, MAKEINTRESOURCEW(resourceId), RT_RCDATA);
-    Expect(resourceHandle != nullptr, "Failed to find embedded test resource " + std::to_string(resourceId) + ".");
-
-    HGLOBAL resourceDataHandle = LoadResource(module, resourceHandle);
-    Expect(resourceDataHandle != nullptr, "Failed to load embedded test resource " + std::to_string(resourceId) + ".");
-
-    const DWORD resourceSize = SizeofResource(module, resourceHandle);
-    const void* resourceData = LockResource(resourceDataHandle);
-    Expect(resourceData != nullptr && resourceSize > 0,
-           "Embedded test resource was empty: " + std::to_string(resourceId) + ".");
-
-    HANDLE fileHandle = CreateFileW(destination.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    Expect(fileHandle != INVALID_HANDLE_VALUE, "Failed to open staged resource path: " + Narrow(destination.wstring()));
-
-    DWORD written = 0;
-    const BOOL wrote = WriteFile(fileHandle, resourceData, resourceSize, &written, nullptr);
-    CloseHandle(fileHandle);
-    Expect(wrote == TRUE && written == resourceSize,
-           "Failed to stage embedded resource to: " + Narrow(destination.wstring()));
-}
-
-void StageBundledFontAssets(const std::filesystem::path& root) {
-    WriteEmbeddedResourceFile(IDR_MINECRAFT_FONT, root / "fonts" / "Minecraft.ttf");
-    WriteEmbeddedResourceFile(IDR_OPENSANS_FONT, root / "fonts" / "OpenSans-Regular.ttf");
 }
 
 LRESULT CALLBACK TestWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -506,7 +470,7 @@ void ResetGlobalTestState(const std::filesystem::path& root) {
     g_modeFilePath = (root / "mode.txt").wstring();
     g_stateFilePath = (root / "state.txt").wstring();
 
-    StageBundledFontAssets(root);
+    ExtractBundledFontAssets(root, &ResetGlobalTestState);
 
     g_config = Config();
     g_sharedConfig = Config();

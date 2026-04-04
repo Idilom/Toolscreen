@@ -24,6 +24,7 @@ const auto& GetTestCaseDefinitions() {
         {"config-roundtrip-key-rebinds-appearance", &RunConfigRoundtripKeyRebindsAndAppearanceTest},
         {"config-roundtrip-debug-settings", &RunConfigRoundtripDebugSettingsTest},
         {"config-load-embedded-ninjabrain-presets", &RunConfigLoadEmbeddedNinjabrainPresetsTest},
+        {"config-load-bundled-font-paths-normalized", &RunConfigLoadBundledFontPathsNormalizedTest},
         {"config-load-missing-required-modes", &RunConfigLoadMissingRequiredModesTest},
         {"config-load-invalid-hotkey-mode-references", &RunConfigLoadInvalidHotkeyModeReferencesTest},
         {"config-load-relative-mode-dimensions", &RunConfigLoadRelativeModeDimensionsTest},

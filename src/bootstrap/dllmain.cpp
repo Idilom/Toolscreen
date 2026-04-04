@@ -5,6 +5,7 @@
 #include "runtime/logic_thread.h"
 #include "render/mirror_thread.h"
 #include "render/obs_thread.h"
+#include "common/font_assets.h"
 #include "common/profiler.h"
 #include "render/render.h"
 #include "platform/resource.h"
@@ -2481,43 +2482,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         g_toolscreenPath = GetToolscreenPath();
         if (!g_toolscreenPath.empty()) {
             std::wstring logsDir = g_toolscreenPath + L"\\logs";
-            auto extractBundledResource = [&](WORD resourceId, const std::wstring& relativePath) {
-                std::filesystem::path destination = std::filesystem::path(g_toolscreenPath) / std::filesystem::path(relativePath);
-                if (std::filesystem::exists(destination)) {
-                    return;
-                }
-
-                std::error_code directoryError;
-                std::filesystem::create_directories(destination.parent_path(), directoryError);
-
-                HMODULE hModule = nullptr;
-                GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                   reinterpret_cast<LPCWSTR>(&DllMain), &hModule);
-                HRSRC hRes = hModule ? FindResourceW(hModule, MAKEINTRESOURCEW(resourceId), RT_RCDATA) : nullptr;
-                HGLOBAL hData = hRes ? LoadResource(hModule, hRes) : nullptr;
-                if (!hData) {
-                    return;
-                }
-
-                DWORD size = SizeofResource(hModule, hRes);
-                const void* data = LockResource(hData);
-                if (!data || size == 0) {
-                    return;
-                }
-
-                HANDLE hFile = CreateFileW(destination.c_str(), GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-                if (hFile == INVALID_HANDLE_VALUE) {
-                    return;
-                }
-
-                DWORD written = 0;
-                WriteFile(hFile, data, size, &written, NULL);
-                CloseHandle(hFile);
-            };
-
-            extractBundledResource(IDR_MINECRAFT_FONT, L"fonts\\Minecraft.ttf");
-            extractBundledResource(IDR_OPENSANS_FONT, L"fonts\\OpenSans-Regular.ttf");
-
             std::wstring latestLogPath = logsDir + L"\\latest.log";
 
             if (GetFileAttributesW(latestLogPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
@@ -2613,25 +2577,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
 
         LoadConfig();
-
-        if (!g_toolscreenPath.empty()) {
-            const std::string extractedOpenSansPath = WideToUtf8(g_toolscreenPath + L"\\fonts\\OpenSans-Regular.ttf");
-            const std::string legacyMinecraftPath = WideToUtf8(g_toolscreenPath + L"\\Minecraft.ttf");
-            const std::string extractedMinecraftPath = WideToUtf8(g_toolscreenPath + L"\\fonts\\Minecraft.ttf");
-
-            if (g_config.fontPath.empty()) {
-                g_config.fontPath = ConfigDefaults::CONFIG_DEFAULT_GUI_FONT_PATH;
-            } else if (g_config.fontPath == extractedOpenSansPath) {
-                g_config.fontPath = ConfigDefaults::CONFIG_FONT_PATH;
-            }
-
-            if (g_config.ninjabrainOverlay.customFontPath.empty() ||
-                g_config.ninjabrainOverlay.customFontPath == legacyMinecraftPath ||
-                g_config.ninjabrainOverlay.customFontPath == extractedMinecraftPath ||
-                g_config.ninjabrainOverlay.customFontPath == extractedOpenSansPath) {
-                g_config.ninjabrainOverlay.customFontPath = ConfigDefaults::CONFIG_FONT_PATH;
-            }
-        }
 
         LoadLangs();
         LogCategory("init", "Languages list loaded.");
