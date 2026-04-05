@@ -410,12 +410,6 @@ if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
                 if (ImGui::SliderFloat("##nbBoatStateMarginRight", &nb.boatStateMarginRight, 0.0f, 96.0f, "%.0f px")) changed = true;
                 ImGui::NextColumn();
 
-                ImGui::Text("%s", trc("ninjabrain.boat_state_margin_y"));
-                ImGui::NextColumn();
-                ImGui::SetNextItemWidth(250);
-                if (ImGui::SliderFloat("##nbBoatStateMarginY", &nb.boatStateMarginY, 0.0f, 32.0f, "%.0f px")) changed = true;
-                ImGui::NextColumn();
-
                 ImGui::Columns(1);
             }
 

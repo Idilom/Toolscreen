@@ -673,7 +673,6 @@ struct NinjabrainOverlayConfig {
     bool showBoatStateInTopBar = false;
     float boatStateSize = 20.0f;
     float boatStateMarginRight = 8.0f;
-    float boatStateMarginY = 2.0f;
     std::vector<NinjabrainColumn> columns = {
         {"coords", "Chunk", true},
         {"certainty", "%",        true},

@@ -8255,7 +8255,6 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     const int minimumThrowRows = std::clamp(nb.eyeThrowRows, 1, static_cast<int>(kNinjabrainThrowLimit));
     const float boatStateSize = (std::max)(0.0f, nb.boatStateSize) * scale;
     const float boatStateMarginRight = (std::max)(0.0f, nb.boatStateMarginRight) * scale;
-    const float boatStateMarginY = (std::max)(0.0f, nb.boatStateMarginY) * scale;
 
     auto applyAlpha = [](ImU32 col, float alphaMul) -> ImU32 {
         if (alphaMul >= 1.0f) return col;
@@ -8766,14 +8765,14 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             return;
         }
 
-        const float maxIconSize = (std::max)(0.0f, headerHeight - boatStateMarginY * 2.0f);
+        const float maxIconSize = (std::max)(0.0f, headerHeight);
         if (maxIconSize <= 0.0f) {
             return;
         }
 
         const float iconSize = (boatStateSize > 0.0f) ? (std::min)(boatStateSize, maxIconSize) : maxIconSize;
         const float iconX = sectionRight - rightInset - boatStateMarginRight - iconSize;
-        const float iconY = headerTop + boatStateMarginY + (maxIconSize - iconSize) * 0.5f;
+        const float iconY = headerTop + (maxIconSize - iconSize) * 0.5f;
         const ImU32 iconTint = applyOpacity(IM_COL32(255, 255, 255, 255));
         drawList->AddImage((ImTextureID)(intptr_t)boatTex,
                            ImVec2(iconX, iconY),

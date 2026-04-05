@@ -2083,7 +2083,6 @@ void ConfigToToml(const Config& config, toml::table& out) {
         nb.insert("showBoatStateInTopBar", o.showBoatStateInTopBar);
         nb.insert("boatStateSize",        o.boatStateSize);
         nb.insert("boatStateMarginRight", o.boatStateMarginRight);
-        nb.insert("boatStateMarginY",     o.boatStateMarginY);
         nb.insert("angleDisplay",         o.angleDisplay);
         nb.insert("fontAntialiasing",     o.fontAntialiasing);
         nb.insert("rowSpacing",           o.rowSpacing);
@@ -2369,7 +2368,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.showBoatStateInTopBar = GetOr(*nb, "showBoatStateInTopBar", false);
         c.boatStateSize        = GetOr(*nb, "boatStateSize",        20.0f);
         c.boatStateMarginRight = GetOr(*nb, "boatStateMarginRight", 8.0f);
-        c.boatStateMarginY     = GetOr(*nb, "boatStateMarginY",     2.0f);
         c.angleDisplay         = GetOr(*nb, "angleDisplay",         1);
         c.fontAntialiasing     = GetOr(*nb, "fontAntialiasing",     true);
         c.rowSpacing           = GetOr(*nb, "rowSpacing",           4.0f);
@@ -2469,7 +2467,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.resultsDrawOrder = std::clamp(c.resultsDrawOrder, 0, 32);
         c.boatStateSize = std::clamp(c.boatStateSize, 8.0f, 128.0f);
         c.boatStateMarginRight = std::clamp(c.boatStateMarginRight, 0.0f, 160.0f);
-        c.boatStateMarginY = std::clamp(c.boatStateMarginY, 0.0f, 48.0f);
         if (c.informationMessagesPlacement != "top" && c.informationMessagesPlacement != "middle" &&
             c.informationMessagesPlacement != "bottom") {
             c.informationMessagesPlacement = "middle";
