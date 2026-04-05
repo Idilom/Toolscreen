@@ -8471,7 +8471,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                     if (i >= populatedPredictionRows) {
                         continue;
                     }
-                    const double distanceValue = data.predictions[i].overworldDistance;
+                    const double distanceValue = GetNinjabrainPredictionDisplayDistance(data, data.predictions[i]);
                     const int displayDistance = (int)std::floor(distanceValue);
                     snprintf(c.rows[i].text, sizeof(c.rows[i].text), "%d", displayDistance);
                     c.rows[i].color = dataCol;

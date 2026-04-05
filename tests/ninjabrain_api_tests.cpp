@@ -735,6 +735,37 @@ TOOLSCREEN_TEST(stronghold_event_parses_prediction_details) {
     REQUIRE(data.hasBoatAngle);
 }
 
+TOOLSCREEN_TEST(stronghold_display_distance_uses_nether_scale_when_player_is_in_nether) {
+    NinjabrainData data;
+
+    ApplyNinjabrainStrongholdEvent(
+        R"({
+            "resultType":"TRIANGULATED",
+            "playerPosition":{
+                "xInOverworld":4.0,
+                "zInOverworld":-12.0,
+                "isInNether":true,
+                "horizontalAngle":10.0
+            },
+            "predictions":[
+                {
+                    "chunkX":0,
+                    "chunkZ":0,
+                    "certainty":0.91,
+                    "overworldDistance":128.5
+                }
+            ]
+        })",
+        data);
+
+    REQUIRE(data.playerInNether);
+    RequireNear(
+        GetNinjabrainPredictionDisplayDistance(data, data.predictions[0]),
+        16.0625,
+        1e-9,
+        "displayDistance");
+}
+
 TOOLSCREEN_TEST(stronghold_increment_recovery_without_correction_increments) {
     NinjabrainData data;
     data.eyeCount = 1;

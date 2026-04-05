@@ -91,6 +91,12 @@ struct NinjabrainData {
     bool hasBoatAngle = false;
 };
 
+inline double GetNinjabrainPredictionDisplayDistance(
+    const NinjabrainData& data,
+    const NinjabrainPrediction& prediction) {
+    return data.playerInNether ? (prediction.overworldDistance / 8.0) : prediction.overworldDistance;
+}
+
 std::shared_ptr<const NinjabrainData> GetNinjabrainDataSnapshot();
 void PublishNinjabrainData(NinjabrainData data);
 void ModifyNinjabrainData(const std::function<void(NinjabrainData&)>& modifier);
