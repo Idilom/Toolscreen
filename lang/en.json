@@ -619,7 +619,7 @@
   "ninjabrain.failure_margin_top": "Failed margin top",
   "ninjabrain.failure_padding_y": "Failed padding Y",
   "ninjabrain.coords_display": "Coordinates",
-  "ninjabrain.coords_display_block": "Block center",
+  "ninjabrain.coords_display_block": "Block coords",
   "ninjabrain.coords_display_chunk": "Chunk",
   "ninjabrain.content_padding_bottom": "Panel padding bottom",
   "ninjabrain.content_padding_top": "Panel padding top",
