@@ -493,11 +493,6 @@ bool RenderFontPickerCombo(const char* comboId, float width, const std::vector<F
 
         renderSection(FontPickerOptionSection::Special, "font.section.special");
         renderSection(FontPickerOptionSection::Bundled, "font.section.predefined");
-        renderSection(FontPickerOptionSection::System, "font.section.system");
-
-        if (!anyFilteredOptions && !state.searchQuery.empty()) {
-            ImGui::TextDisabled("%s", trc("font.search_no_results"));
-        }
 
         ImGui::SeparatorText(trc("font.section.custom"));
         if (ImGui::Selectable(trc("font.preset.custom"), usingCustomSelection, 0, ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
@@ -510,6 +505,12 @@ bool RenderFontPickerCombo(const char* comboId, float width, const std::vector<F
 
         if (usingCustomSelection) {
             ImGui::SetItemDefaultFocus();
+        }
+
+        renderSection(FontPickerOptionSection::System, "font.section.system");
+
+        if (!anyFilteredOptions && !state.searchQuery.empty()) {
+            ImGui::TextDisabled("%s", trc("font.search_no_results"));
         }
 
         ImGui::EndCombo();

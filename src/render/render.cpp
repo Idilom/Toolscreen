@@ -4166,7 +4166,7 @@ static bool HasNinjabrainOverlayContent(const NinjabrainOverlayConfig& nb, const
 
     if (outHasTriangulation) { *outHasTriangulation = hasTriangulation; }
     if (outShowForBoat) { *outShowForBoat = showForBoat; }
-    return hasTriangulation || hasFailedResult || hasInformationMessages || showForBoat;
+    return hasTriangulation || hasFailedResult || hasInformationMessages || showForBoat || nb.alwaysShow;
 }
 
 static bool ShouldRenderNinjabrainOverlayForRequest(const SameThreadOverlayState& request) {
@@ -8210,7 +8210,8 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     bool hasTriangulation = false;
     bool showForBoat = false;
     if (!HasNinjabrainOverlayContent(nb, data, &hasTriangulation, &showForBoat)) return;
-    const bool showPredictionTable = hasTriangulation || showForBoat;
+    const bool showEmptyState = nb.alwaysShow && !hasTriangulation && !failedResult && !hasInformationMessages;
+    const bool showPredictionTable = hasTriangulation || showForBoat || showEmptyState;
 
     ImDrawList* drawList = renderBehindImGuiWindows ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
     const float scale = (nb.overlayScale > 0.01f) ? nb.overlayScale : 1.0f;
@@ -8301,7 +8302,8 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     if (numRows < 1) numRows = 1;
     if (numRows > (int)kNinjabrainPredictionLimit) numRows = (int)kNinjabrainPredictionLimit;
     if (data.predictionCount > 0 && numRows > data.predictionCount) numRows = data.predictionCount;
-    const bool boatOnly = !hasTriangulation && showForBoat;
+    if (showEmptyState && data.predictionCount <= 0) numRows = 0;
+    const bool boatOnly = !hasTriangulation && showForBoat && !showEmptyState;
     if (boatOnly) numRows = 1;
 
     auto initCol = [&](Col& c, const char* hdr, int rows) {
@@ -8369,7 +8371,8 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
 
     if (!failedResult && showPredictionTable) {
         for (const auto& colCfg : nb.columns) {
-            if (!colCfg.show) continue;
+            const bool forceBoatColumnVisible = (colCfg.id == "boat") && (boatOnly || showEmptyState);
+            if (!colCfg.show && !forceBoatColumnVisible) continue;
             if (numCols >= 10) break;
             if (colCfg.id == "angle_change" || colCfg.id == "eyes") continue;
             if (boatOnly && colCfg.id != "boat") continue;
@@ -8436,6 +8439,10 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             } else if (colCfg.id == "angle") {
                 c.leftAlign = true;
 
+                if (showEmptyState && numRows == 0) {
+                    initCol(c, colCfg.header.c_str(), 0);
+                    c.leftAlign = true;
+                } else
                 if (data.eyeCount == 0) {
                     initCol(c, colCfg.header.c_str(), 1);
                     c.leftAlign = true;
@@ -8637,9 +8644,49 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         }
         const float borderThickness = static_cast<float>(nb.borderWidth);
         const float halfBorder = borderThickness * 0.5f;
+        const float borderRadius = (std::max)(0.0f, nb.borderRadius);
+        const float lineRadius = (std::max)(0.0f, borderRadius - halfBorder);
         drawList->AddRect(ImVec2(left - halfBorder, top - halfBorder),
                           ImVec2(left + width + halfBorder, top + height + halfBorder),
-                          color, nb.cornerRadius + halfBorder, 0, borderThickness);
+                          color, lineRadius, 0, borderThickness);
+    };
+    auto calculateRoundedHorizontalInset = [&](float panelLeft, float panelTop, float panelRight, float panelBottom, float y) {
+        const float panelWidth = panelRight - panelLeft;
+        const float panelHeight = panelBottom - panelTop;
+        float radius = (std::max)(0.0f, nb.cornerRadius);
+        radius = (std::min)(radius, panelWidth * 0.5f);
+        radius = (std::min)(radius, panelHeight * 0.5f);
+        if (radius <= 0.0f) {
+            return 0.0f;
+        }
+
+        const float sampleY = std::clamp(y, panelTop, panelBottom);
+        float inset = 0.0f;
+        auto applyCornerInset = [&](float cornerCenterY) {
+            const float deltaY = std::fabs(sampleY - cornerCenterY);
+            if (deltaY >= radius) {
+                return;
+            }
+            const float xExtent = std::sqrt((std::max)(0.0f, radius * radius - deltaY * deltaY));
+            inset = (std::max)(inset, radius - xExtent);
+        };
+
+        if (sampleY < panelTop + radius) {
+            applyCornerInset(panelTop + radius);
+        }
+        if (sampleY > panelBottom - radius) {
+            applyCornerInset(panelBottom - radius);
+        }
+        return inset;
+    };
+    auto drawClippedHorizontalLine = [&](float panelLeft, float panelTop, float panelRight, float panelBottom, float y, ImU32 color) {
+        const float inset = calculateRoundedHorizontalInset(panelLeft, panelTop, panelRight, panelBottom, y);
+        const float clippedLeft = panelLeft + inset;
+        const float clippedRight = panelRight - inset;
+        if (clippedRight <= clippedLeft) {
+            return;
+        }
+        drawList->AddLine(ImVec2(clippedLeft, y), ImVec2(clippedRight, y), color, 1.0f);
     };
     auto drawCenteredSegmentedText = [&](float left, float width, float y, const char* text, ImU32 color,
                                          float splitOffset, ImU32 part1Color, bool centerOnPart1, bool leftAlign) {
@@ -9038,7 +9085,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             const float backgroundAlpha = nb.bgEnabled ? nb.bgOpacity * nb.overlayOpacity : 0.0f;
             const float surfaceAlpha = backgroundAlpha;
             const ImU32 panelBgCol = colorWithAlpha(nb.bgColor, backgroundAlpha);
-            const ImU32 borderCol = colorWithAlpha(nb.headerDividerColor, nb.overlayOpacity);
+            const ImU32 borderCol = colorWithAlpha(nb.borderColor, nb.overlayOpacity);
             const ImU32 dividerCol = colorWithAlpha(nb.dividerColor, backgroundAlpha);
             const ImU32 resultsDividerCol = dividerCol;
             const ImU32 headerDividerCol = colorWithAlpha(nb.headerDividerColor, backgroundAlpha);
@@ -9108,7 +9155,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                                     roundHeaderTopCorners, false);
                     drawRoundedBand(ImVec2(surfaceLeft, detailRowY), ImVec2(surfaceRight, detailRowsBottomY), throwsBgCol,
                                     false, roundDetailBottomCorners);
-                    drawList->AddLine(ImVec2(surfaceLeft, sectionTop), ImVec2(surfaceRight, sectionTop), headerDividerCol, 1.0f);
+                    drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, sectionTop, headerDividerCol);
                     drawText(fs, ImVec2(detailTableX, sectionTextY), dataCol, throwSectionTitle);
 
                     float detailX = detailTableX;
@@ -9118,7 +9165,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                         detailX += failedColWidths[fi];
                     }
 
-                    drawList->AddLine(ImVec2(surfaceLeft, detailRowY), ImVec2(surfaceRight, detailRowY), headerDividerCol, 1.0f);
+                    drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, detailRowY, headerDividerCol);
                     for (int ri = 0; ri < failedThrowCount; ++ri) {
                         const float rowTop = detailRowY + detailRowH * (float)ri;
                         const float rowBottom = rowTop + detailRowH;
@@ -9136,7 +9183,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                         drawCenteredSegmentedText(detailRowX, failedColWidths[3], rowTextY, failedRows[ri].error, throwsTextCol, 0.0f, throwsTextCol, false, false);
 
                         const ImU32 rowDivider = (ri == failedThrowCount - 1) ? dividerCol : headerDividerCol;
-                        drawList->AddLine(ImVec2(surfaceLeft, rowBottom), ImVec2(surfaceRight, rowBottom), rowDivider, 1.0f);
+                        drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, rowBottom, rowDivider);
                     }
                 } });
             }
@@ -9190,7 +9237,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         const float backgroundAlpha = nb.bgEnabled ? nb.bgOpacity * nb.overlayOpacity : 0.0f;
         const float surfaceAlpha = backgroundAlpha;
         const ImU32 panelBgCol = colorWithAlpha(nb.bgColor, backgroundAlpha);
-        const ImU32 borderCol = colorWithAlpha(nb.headerDividerColor, nb.overlayOpacity);
+        const ImU32 borderCol = colorWithAlpha(nb.borderColor, nb.overlayOpacity);
         const ImU32 dividerCol = colorWithAlpha(nb.dividerColor, backgroundAlpha);
         const ImU32 resultsDividerCol = dividerCol;
         const ImU32 headerDividerCol = colorWithAlpha(nb.headerDividerColor, backgroundAlpha);
@@ -9264,7 +9311,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                             roundHeaderTopCorners, false);
             drawRoundedBand(ImVec2(surfaceLeft, detailRowY), ImVec2(surfaceRight, detailRowsBottomY), throwsBgCol,
                             false, roundDetailBottomCorners);
-            drawList->AddLine(ImVec2(surfaceLeft, sectionY), ImVec2(surfaceRight, sectionY), headerDividerCol, 1.0f);
+            drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, sectionY, headerDividerCol);
             drawText(fs, ImVec2(detailTableX, sectionTextY), dataCol, throwSectionTitle);
 
             float detailX = detailTableX;
@@ -9274,7 +9321,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                 detailX += failedColWidths[fi];
             }
 
-            drawList->AddLine(ImVec2(surfaceLeft, detailRowY), ImVec2(surfaceRight, detailRowY), headerDividerCol, 1.0f);
+            drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, detailRowY, headerDividerCol);
             for (int ri = 0; ri < failedThrowCount; ++ri) {
                 const float rowTop = detailRowY + detailRowH * (float)ri;
                 const float rowBottom = rowTop + detailRowH;
@@ -9292,7 +9339,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                 drawCenteredSegmentedText(detailRowX, failedColWidths[3], rowTextY, failedRows[ri].error, throwsTextCol, 0.0f, throwsTextCol, false, false);
 
                 const ImU32 rowDivider = (ri == failedThrowCount - 1) ? dividerCol : headerDividerCol;
-                drawList->AddLine(ImVec2(surfaceLeft, rowBottom), ImVec2(surfaceRight, rowBottom), rowDivider, 1.0f);
+                drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, rowBottom, rowDivider);
             }
 
             contentBottomY = detailRowY + detailRowH * (float)failedThrowCount + throwsMarginBottom;
@@ -9438,7 +9485,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         const float backgroundAlpha = nb.bgEnabled ? nb.bgOpacity * nb.overlayOpacity : 0.0f;
         const float surfaceAlpha = backgroundAlpha;
         const ImU32 panelBgCol = colorWithAlpha(nb.bgColor, backgroundAlpha);
-        const ImU32 borderCol = colorWithAlpha(nb.headerDividerColor, nb.overlayOpacity);
+        const ImU32 borderCol = colorWithAlpha(nb.borderColor, nb.overlayOpacity);
         const ImU32 dividerCol = colorWithAlpha(nb.dividerColor, backgroundAlpha);
         const ImU32 resultsDividerCol = dividerCol;
         const ImU32 headerDividerCol = colorWithAlpha(nb.headerDividerColor, backgroundAlpha);
@@ -9479,7 +9526,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                     cx += col.width + (ci < numCols - 1 ? colGap : 0.0f);
                 }
 
-                drawList->AddLine(ImVec2(surfaceLeft, headerSeparatorY), ImVec2(surfaceRight, headerSeparatorY), headerDividerCol, 1.0f);
+                drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, headerSeparatorY, headerDividerCol);
 
                 for (int ri = 0; ri < maxRows; ++ri) {
                     const float rowTop = headerSeparatorY + rowH * (float)ri;
@@ -9487,7 +9534,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                     const float rowBottom = rowTop + (isLastRow ? resultsLastRowH : rowH);
                     const float rowTextY = rowTop + resultsTextOffsetY;
 
-                    drawList->AddLine(ImVec2(surfaceLeft, rowBottom), ImVec2(surfaceRight, rowBottom), resultsDividerCol, 1.0f);
+                        drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, rowBottom, resultsDividerCol);
 
                     float rowX = tableX;
                     for (int ci = 0; ci < numCols; ++ci) {
@@ -9555,7 +9602,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                     detailX += detailMinColWidths[fi];
                 }
 
-                drawList->AddLine(ImVec2(surfaceLeft, detailRowY), ImVec2(surfaceRight, detailRowY), headerDividerCol, 1.0f);
+                drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, detailRowY, headerDividerCol);
                 for (int ri = 0; ri < detailRenderRowCount; ++ri) {
                     const float rowTop = detailRowY + detailRowH * (float)ri;
                     const float rowBottom = rowTop + detailRowH;
@@ -9572,7 +9619,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                     detailRowX += detailMinColWidths[2];
                     drawCenteredSegmentedText(detailRowX, detailMinColWidths[3], rowTextY, detailRows[ri].error, throwsTextCol, 0.0f, throwsTextCol, false, false);
 
-                    drawList->AddLine(ImVec2(surfaceLeft, rowBottom), ImVec2(surfaceRight, rowBottom), dividerCol, 1.0f);
+                    drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, rowBottom, dividerCol);
                 }
             } });
         }
@@ -9626,7 +9673,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     const float surfaceAlpha = backgroundAlpha;
     const ImU32 panelBgCol = colorWithAlpha(nb.bgColor, backgroundAlpha);
     const ImU32 titleBarCol = colorWithAlpha(nb.chromeColor, surfaceAlpha);
-    const ImU32 borderCol = colorWithAlpha(nb.headerDividerColor, nb.overlayOpacity);
+    const ImU32 borderCol = colorWithAlpha(nb.borderColor, nb.overlayOpacity);
     const ImU32 dividerCol = colorWithAlpha(nb.dividerColor, backgroundAlpha);
     const ImU32 resultsDividerCol = dividerCol;
     const ImU32 headerDividerCol = colorWithAlpha(nb.headerDividerColor, backgroundAlpha);
@@ -9676,8 +9723,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             drawText(fs, ImVec2(contentAreaRight - versionTextW, titleTextY), versionTextCol, versionLabel.c_str());
         }
         if (nb.showSeparators) {
-            drawList->AddLine(ImVec2(surfaceLeft, titleBarY + titleBarH), ImVec2(surfaceRight, titleBarY + titleBarH),
-                              headerDividerCol, 1.0f);
+            drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, titleBarY + titleBarH, headerDividerCol);
         }
     }
 
@@ -9714,7 +9760,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             cx += col.width + (ci < numCols - 1 ? colGap : 0.0f);
         }
 
-        drawList->AddLine(ImVec2(surfaceLeft, headerSeparatorY), ImVec2(surfaceRight, headerSeparatorY), headerDividerCol, 1.0f);
+        drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, headerSeparatorY, headerDividerCol);
 
         for (int ri = 0; ri < maxRows; ++ri) {
             const float rowTop = headerSeparatorY + rowH * (float)ri;
@@ -9723,7 +9769,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             const float rowTextY = rowTop + resultsTextOffsetY;
 
             if (ri + 1 < maxRows || drawTrailingResultsDivider) {
-                drawList->AddLine(ImVec2(surfaceLeft, rowBottom), ImVec2(surfaceRight, rowBottom), resultsDividerCol, 1.0f);
+                drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, rowBottom, resultsDividerCol);
             }
 
             float rowX = tableX;
@@ -9780,8 +9826,8 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             detailX += detailColWidths[fi];
         }
 
-        drawList->AddLine(ImVec2(surfaceLeft, sectionY), ImVec2(surfaceRight, sectionY), headerDividerCol, 1.0f);
-        drawList->AddLine(ImVec2(surfaceLeft, detailRowY), ImVec2(surfaceRight, detailRowY), headerDividerCol, 1.0f);
+        drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, sectionY, headerDividerCol);
+        drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, detailRowY, headerDividerCol);
         for (int ri = 0; ri < detailRenderRowCount; ++ri) {
             const float rowTop = detailRowY + detailRowH * (float)ri;
             const float rowBottom = rowTop + detailRowH;
@@ -9798,7 +9844,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             detailRowX += detailColWidths[2];
             drawCenteredSegmentedText(detailRowX, detailColWidths[3], rowTextY, detailRows[ri].error, throwsTextCol, 0.0f, throwsTextCol, false, false);
 
-            drawList->AddLine(ImVec2(surfaceLeft, rowBottom), ImVec2(surfaceRight, rowBottom), dividerCol, 1.0f);
+            drawClippedHorizontalLine(surfaceLeft, oy, surfaceRight, oy + totalH, rowBottom, dividerCol);
         }
 
         contentBottomY = detailRowsBottomY + throwsMarginBottom;

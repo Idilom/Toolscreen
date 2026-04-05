@@ -583,6 +583,7 @@ struct NinjabrainOverlayConfig {
     bool showSeparators = true;
     bool showRowStripes = true;
     int borderWidth = 0;
+    float borderRadius = 0.0f;
     float cornerRadius = 0.0f;
     Color headerFillColor = { 0.1765f, 0.1961f, 0.2196f, 1.0f };
     std::string coordsDisplay = "chunk";
@@ -615,6 +616,7 @@ struct NinjabrainOverlayConfig {
     bool showEyeOverlay = true;
     int shownPredictions = 5;
     bool showAllPreds = false;
+    bool alwaysShow = false;
     int angleDisplay = 1;
     float rowSpacing = 4.0f;
     float colSpacing = 36.0f;

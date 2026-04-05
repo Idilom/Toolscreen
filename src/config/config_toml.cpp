@@ -2049,6 +2049,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
         nb.insert("showSeparators",       o.showSeparators);
         nb.insert("showRowStripes",       o.showRowStripes);
         nb.insert("borderWidth",          o.borderWidth);
+        nb.insert("borderRadius",         o.borderRadius);
         nb.insert("cornerRadius",         o.cornerRadius);
         nb.insert("headerFillColor",      ColorToTomlArray(o.headerFillColor));
         nb.insert("coordsDisplay",        o.coordsDisplay);
@@ -2076,6 +2077,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
         nb.insert("showEyeOverlay",       o.showEyeOverlay);
         nb.insert("shownPredictions",     o.shownPredictions);
         nb.insert("showAllPreds",         o.showAllPreds);
+        nb.insert("alwaysShow",           o.alwaysShow);
         nb.insert("alwaysShowBoat",       o.alwaysShowBoat);
         nb.insert("angleDisplay",         o.angleDisplay);
         nb.insert("fontAntialiasing",     o.fontAntialiasing);
@@ -2317,6 +2319,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.showRowStripes       = GetOr(*nb, "showRowStripes",       true);
         c.borderWidth          = GetOr(*nb, "borderWidth",          1);
         c.cornerRadius         = GetOr(*nb, "cornerRadius",         0.0f);
+        c.borderRadius         = GetOr(*nb, "borderRadius",         c.cornerRadius);
         c.chromeColor          = ColorFromTomlArray(nb->get_as<toml::array>("chromeColor"),    Color{0.18f,0.20f,0.24f,1.0f});
         c.borderColor          = ColorFromTomlArray(nb->get_as<toml::array>("borderColor"),    Color{0.28f,0.29f,0.31f,1.0f});
         c.dividerColor         = ColorFromTomlArray(nb->get_as<toml::array>("dividerColor"),   Color{0.24f,0.25f,0.27f,1.0f});
@@ -2354,6 +2357,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.showEyeOverlay       = GetOr(*nb, "showEyeOverlay",       true);
         c.shownPredictions     = GetOr(*nb, "shownPredictions",     5);
         c.showAllPreds         = GetOr(*nb, "showAllPreds",         false);
+        c.alwaysShow          = GetOr(*nb, "alwaysShow",           false);
         c.alwaysShowBoat       = GetOr(*nb, "alwaysShowBoat",       false);
         c.angleDisplay         = GetOr(*nb, "angleDisplay",         1);
         c.fontAntialiasing     = GetOr(*nb, "fontAntialiasing",     true);
@@ -2431,6 +2435,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         if (c.apiBaseUrl.empty()) { c.apiBaseUrl = ConfigDefaults::CONFIG_NINJABRAIN_API_BASE_URL; }
         if (c.titleText.empty()) { c.titleText = "Ninjabrain Bot"; }
         if (c.borderWidth < 0) { c.borderWidth = 0; }
+        if (c.borderRadius < 0.0f) { c.borderRadius = 0.0f; }
         if (c.cornerRadius < 0.0f) { c.cornerRadius = 0.0f; }
         if (c.coordsDisplay != "block" && c.coordsDisplay != "chunk") { c.coordsDisplay = "chunk"; }
         if (c.sidePadding < 0.0f) { c.sidePadding = 0.0f; }
@@ -2486,6 +2491,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.failureMarginTop = std::clamp(c.failureMarginTop, 0.0f, 160.0f);
         c.failureMarginBottom = std::clamp(c.failureMarginBottom, 0.0f, 160.0f);
         c.failureLineGap = std::clamp(c.failureLineGap, 0.0f, 96.0f);
+        c.borderRadius = std::clamp(c.borderRadius, 0.0f, 160.0f);
         if (c.failureAnchor != "topLeft" && c.failureAnchor != "topRight" && c.failureAnchor != "bottomLeft" && c.failureAnchor != "bottomRight") {
             c.failureAnchor = "topLeft";
         }
