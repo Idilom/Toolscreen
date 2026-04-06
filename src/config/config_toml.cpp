@@ -3039,6 +3039,19 @@ bool IsConfigTomlArrayOfTablesKey(const std::string& key) {
     return std::find(keys.begin(), keys.end(), key) != keys.end();
 }
 
+bool IsArrayOfTablesNodeForConfigKey(const std::string& key, const toml::node& node) {
+    if (!node.is_array()) {
+        return false;
+    }
+
+    if (IsConfigTomlArrayOfTablesKey(key)) {
+        return true;
+    }
+
+    const toml::array* arr = node.as_array();
+    return arr != nullptr && !arr->empty() && (*arr)[0].is_table();
+}
+
 bool IsNonEmptyArrayOfTables(const toml::node& node) {
     if (!node.is_array()) {
         return false;
@@ -3061,7 +3074,7 @@ void AppendConfigTomlDocumentEntry(const std::string& key, const toml::node* nod
         return;
     }
 
-    if (IsNonEmptyArrayOfTables(*node)) {
+    if (IsArrayOfTablesNodeForConfigKey(key, *node)) {
         arrayOfTablesEntries.push_back({ key, node });
         return;
     }

@@ -523,6 +523,18 @@ void RunProfileCreateDuplicateDeleteTest(TestRunMode runMode = TestRunMode::Auto
     SwitchProfile("Second");
     Expect(g_config.defaultMode == "CurrentProfileMode",
         "CreateNewProfile should seed the new profile from the current merged config so switching is non-destructive.");
+
+    g_configIsDirty.store(true, std::memory_order_release);
+    SaveConfigImmediate();
+
+    std::ifstream configIn(GetCurrentConfigPath(), std::ios::binary);
+    Expect(configIn.is_open(), "Saved config.toml should remain readable after switching to a new profile.");
+    std::ostringstream configBuffer;
+    configBuffer << configIn.rdbuf();
+    const std::string savedConfigToml = configBuffer.str();
+    Expect(savedConfigToml.find("\nmode = []") == std::string::npos && savedConfigToml.rfind("mode = []", 0) != 0,
+           "Saving with an active profile should not emit an empty top-level mode array assignment.");
+
     SwitchProfile(kDefaultProfileName);
 
     const bool dupCreated = CreateNewProfile("Second");
