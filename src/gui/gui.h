@@ -241,6 +241,8 @@ struct MirrorConfig {
     bool gradientOutput = false;
     GradientConfig gradient;
     bool onlyOnMyScreen = false;
+    bool runtimeGrouped = false;
+    std::string runtimeGroupName;
 };
 struct MirrorGroupItem {
     std::string mirrorId;

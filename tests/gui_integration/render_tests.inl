@@ -507,6 +507,343 @@ void RunModeMirrorGroupRenderTest(TestRunMode runMode = TestRunMode::Automated) 
     CleanupShaders();
 }
 
+void RunModeMirrorGroupRelativePositionResolutionTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_group_relative_position_resolution");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Mirror Group Relative Position Resolution";
+    constexpr char kGroupName[] = "Relative Screen Mirror Group";
+    constexpr int kOffsetX = 12;
+    constexpr int kOffsetY = -8;
+
+    MirrorConfig mirror = MakeMirrorRenderTestConfig("Relative Group Mirror", 24, 16, "topLeftScreen", 0, 0, 4.0f);
+
+    MirrorGroupConfig group;
+    group.name = kGroupName;
+    group.output.relativeTo = "topLeftScreen";
+    group.output.useRelativePosition = true;
+    group.output.relativeX = 0.25f;
+    group.output.relativeY = 0.5f;
+    group.mirrors = {
+        { mirror.name, true, 1.0f, 1.0f, kOffsetX, kOffsetY },
+    };
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = 200;
+    mode.height = 100;
+    mode.manualWidth = 200;
+    mode.manualHeight = 100;
+    mode.mirrorGroupIds = { kGroupName };
+
+    g_config.defaultMode = kModeId;
+    g_config.mirrors = { mirror };
+    g_config.mirrorGroups = { group };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    std::vector<MirrorConfig> sourceMirrors;
+    std::vector<ImageConfig> unusedSourceImages;
+    std::vector<WindowOverlayConfig> unusedSourceWindowOverlays;
+    std::vector<BrowserOverlayConfig> unusedSourceBrowserOverlays;
+    CollectActiveElementsForMode(g_config, kModeId, false, sourceMirrors, unusedSourceImages, unusedSourceWindowOverlays,
+                                 unusedSourceBrowserOverlays, 200, 100);
+
+    std::vector<MirrorConfig> targetMirrors;
+    std::vector<ImageConfig> unusedTargetImages;
+    std::vector<WindowOverlayConfig> unusedTargetWindowOverlays;
+    std::vector<BrowserOverlayConfig> unusedTargetBrowserOverlays;
+    CollectActiveElementsForMode(g_config, kModeId, false, targetMirrors, unusedTargetImages, unusedTargetWindowOverlays,
+                                 unusedTargetBrowserOverlays, 400, 200);
+
+    Expect(sourceMirrors.size() == 1,
+           "Expected one grouped mirror to resolve for the source relative-position collection.");
+    Expect(targetMirrors.size() == 1,
+           "Expected one grouped mirror to resolve for the target relative-position collection.");
+
+    Expect(sourceMirrors[0].output.x == 62,
+           "Expected source grouped mirror X to use the explicit source screen width before adding the item offset.");
+    Expect(sourceMirrors[0].output.y == 42,
+           "Expected source grouped mirror Y to use the explicit source screen height before adding the item offset.");
+    Expect(targetMirrors[0].output.x == 112,
+           "Expected target grouped mirror X to use the explicit target screen width before adding the item offset.");
+    Expect(targetMirrors[0].output.y == 92,
+           "Expected target grouped mirror Y to use the explicit target screen height before adding the item offset.");
+    Expect(sourceMirrors[0].output.relativeTo == group.output.relativeTo,
+           "Expected grouped mirrors to preserve the mirror-group anchor when resolving explicit screen sizes.");
+}
+
+    void RunModeMirrorGroupSlideUnitTransitionTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
+
+        const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_group_slide_unit_transition");
+        ResetGlobalTestState(root);
+
+        constexpr char kSourceModeId[] = "Mirror Group Slide Source";
+        constexpr char kTargetModeId[] = "Mirror Group Slide Target";
+        constexpr char kGroupName[] = "Sliding Mirror Group";
+        constexpr float kTransitionProgress = 0.5f;
+
+        MirrorConfig leftMirror = MakeMirrorRenderTestConfig("Sliding Group Left Mirror", 20, 12, "topLeftViewport", 0, 0, 4.0f);
+        MirrorConfig rightMirror = MakeMirrorRenderTestConfig("Sliding Group Right Mirror", 20, 12, "topLeftViewport", 0, 0, 4.0f);
+        leftMirror.input = { { 0, 0, "topLeftScreen" } };
+        rightMirror.input = { { 40, 0, "topLeftScreen" } };
+
+        MirrorGroupConfig group;
+        group.name = kGroupName;
+        group.output.x = 80;
+        group.output.y = 60;
+        group.output.relativeTo = "topLeftViewport";
+        group.mirrors = {
+         { leftMirror.name, true, 1.0f, 1.0f, 0, 0 },
+         { rightMirror.name, true, 1.0f, 1.0f, 120, 0 },
+        };
+
+        ModeConfig sourceMode;
+        sourceMode.id = kSourceModeId;
+        sourceMode.width = 700;
+        sourceMode.height = 420;
+        sourceMode.manualWidth = 700;
+        sourceMode.manualHeight = 420;
+
+        ModeConfig targetMode;
+        targetMode.id = kTargetModeId;
+        targetMode.width = 1000;
+        targetMode.height = 600;
+        targetMode.manualWidth = 1000;
+        targetMode.manualHeight = 600;
+        targetMode.slideMirrorsIn = true;
+        targetMode.mirrorGroupIds = { kGroupName };
+
+        g_config.defaultMode = kTargetModeId;
+        g_config.mirrors = { leftMirror, rightMirror };
+        g_config.mirrorGroups = { group };
+        g_config.modes = { sourceMode, targetMode };
+        g_configLoaded.store(true, std::memory_order_release);
+        PublishConfigSnapshot();
+
+        InitializeMirrorRenderTestResources();
+
+        const SurfaceSize surface = GetWindowClientSize(window.hwnd());
+        std::vector<unsigned char> sourcePixels(static_cast<size_t>(surface.width) * static_cast<size_t>(surface.height) * 4u, 0);
+        auto fillVerticalStripe = [&](int startX, int stripeWidth, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+            for (int y = 0; y < surface.height; ++y) {
+                for (int x = startX; x < (std::min)(surface.width, startX + stripeWidth); ++x) {
+                    const size_t pixelIndex = (static_cast<size_t>(y) * static_cast<size_t>(surface.width) + static_cast<size_t>(x)) * 4u;
+                    sourcePixels[pixelIndex + 0] = r;
+                    sourcePixels[pixelIndex + 1] = g;
+                    sourcePixels[pixelIndex + 2] = b;
+                    sourcePixels[pixelIndex + 3] = 255;
+                }
+            }
+        };
+        fillVerticalStripe(0, 20, 0, 255, 0);
+        fillVerticalStripe(40, 20, 0, 0, 255);
+        ScopedTexture2D sourceTexture(surface.width, surface.height, sourcePixels);
+
+        struct ScopedCachedGameTextureOverride {
+         GLuint previousTextureId = 0;
+
+         explicit ScopedCachedGameTextureOverride(GLuint textureId) {
+             previousTextureId = g_cachedGameTextureId.load(std::memory_order_acquire);
+             g_cachedGameTextureId.store(textureId, std::memory_order_release);
+         }
+
+         ~ScopedCachedGameTextureOverride() {
+             g_cachedGameTextureId.store(previousTextureId, std::memory_order_release);
+         }
+        } scopedGameTexture(sourceTexture.id());
+
+        const int fromX = GetCenteredAxisOffset(surface.width, sourceMode.width);
+        const int fromY = GetCenteredAxisOffset(surface.height, sourceMode.height);
+        const int toX = GetCenteredAxisOffset(surface.width, targetMode.width);
+        const int toY = GetCenteredAxisOffset(surface.height, targetMode.height);
+
+        ViewportTransitionSnapshot snapshot;
+        snapshot.active = true;
+        snapshot.isBounceTransition = true;
+        snapshot.fromModeId = kSourceModeId;
+        snapshot.toModeId = kTargetModeId;
+        snapshot.fromWidth = sourceMode.width;
+        snapshot.fromHeight = sourceMode.height;
+        snapshot.fromX = fromX;
+        snapshot.fromY = fromY;
+        snapshot.currentWidth = static_cast<int>(sourceMode.width + (targetMode.width - sourceMode.width) * kTransitionProgress);
+        snapshot.currentHeight = static_cast<int>(sourceMode.height + (targetMode.height - sourceMode.height) * kTransitionProgress);
+        snapshot.currentX = static_cast<int>(fromX + (toX - fromX) * kTransitionProgress);
+        snapshot.currentY = static_cast<int>(fromY + (toY - fromY) * kTransitionProgress);
+        snapshot.toWidth = targetMode.width;
+        snapshot.toHeight = targetMode.height;
+        snapshot.toX = toX;
+        snapshot.toY = toY;
+        snapshot.fromNativeWidth = surface.width;
+        snapshot.fromNativeHeight = surface.height;
+        snapshot.toNativeWidth = surface.width;
+        snapshot.toNativeHeight = surface.height;
+        snapshot.gameTransition = GameTransitionType::Bounce;
+        snapshot.overlayTransition = OverlayTransitionType::Cut;
+        snapshot.backgroundTransition = BackgroundTransitionType::Cut;
+        snapshot.progress = kTransitionProgress;
+        snapshot.moveProgress = kTransitionProgress;
+
+        struct ScopedViewportTransitionSnapshot {
+         ViewportTransitionSnapshot previousSnapshots[2];
+         int previousIndex = 0;
+
+         explicit ScopedViewportTransitionSnapshot(const ViewportTransitionSnapshot& activeSnapshot) {
+             previousSnapshots[0] = g_viewportTransitionSnapshots[0];
+             previousSnapshots[1] = g_viewportTransitionSnapshots[1];
+             previousIndex = g_viewportTransitionSnapshotIndex.load(std::memory_order_acquire);
+             g_viewportTransitionSnapshots[0] = activeSnapshot;
+             g_viewportTransitionSnapshots[1] = activeSnapshot;
+             g_viewportTransitionSnapshotIndex.store(0, std::memory_order_release);
+         }
+
+         ~ScopedViewportTransitionSnapshot() {
+             g_viewportTransitionSnapshots[0] = previousSnapshots[0];
+             g_viewportTransitionSnapshots[1] = previousSnapshots[1];
+             g_viewportTransitionSnapshotIndex.store(previousIndex, std::memory_order_release);
+         }
+        } scopedTransitionSnapshot(snapshot);
+
+        auto renderAndAssert = [&](DummyWindow& targetWindow) {
+         Expect(targetWindow.PrepareRenderSurface(),
+             "GUI integration test window closed unexpectedly while rendering the grouped slide transition case.");
+
+         GLState state{};
+         SaveGLState(&state);
+         RenderMode(&targetMode, state, surface.width, surface.height, false, false);
+         glFinish();
+
+         if (runMode == TestRunMode::Automated) {
+             std::vector<MirrorConfig> activeMirrors;
+             std::vector<ImageConfig> unusedImages;
+             std::vector<WindowOverlayConfig> unusedWindowOverlays;
+             std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+             CollectActiveElementsForMode(g_config, kTargetModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
+                              unusedBrowserOverlays, surface.width, surface.height);
+
+             Expect(activeMirrors.size() == 2,
+                 "Expected both grouped mirrors to resolve for the grouped slide transition regression test.");
+             Expect(activeMirrors[0].name == leftMirror.name,
+                 "Expected the grouped slide regression to preserve the first mirror ordering.");
+             Expect(activeMirrors[1].name == rightMirror.name,
+                 "Expected the grouped slide regression to preserve the second mirror ordering.");
+
+             const ExpectedMirrorRect expectedLeftRect = ComputeExpectedMirrorRect(activeMirrors[0], surface.width, surface.height,
+                                                     toX, toY, targetMode.width, targetMode.height);
+             const ExpectedMirrorRect expectedRightRect = ComputeExpectedMirrorRect(activeMirrors[1], surface.width, surface.height,
+                                                      toX, toY, targetMode.width, targetMode.height);
+                 const Color expectedRightColor{ 0.0f, 0.0f, 1.0f, 1.0f };
+                 struct ColorSpan {
+                  int start = -1;
+                  int end = -1;
+                 };
+
+                 auto findHorizontalSpan = [&](const Color& expectedColor, int scanY, const std::string& label) {
+                  ColorSpan span;
+                  for (int x = 0; x < surface.width; ++x) {
+                      if (IsColorNear(ReadFramebufferPixelColor(x, scanY, surface.height), expectedColor)) {
+                       if (span.start < 0) {
+                        span.start = x;
+                       }
+                       span.end = x;
+                      } else if (span.start >= 0) {
+                       break;
+                      }
+                  }
+
+                  Expect(span.start >= 0 && span.end >= span.start,
+                      "Expected to find a visible horizontal color span for " + label + ".");
+                  return span;
+                 };
+
+                 auto findVerticalSpan = [&](const Color& expectedColor, int scanX, const std::string& label) {
+                  ColorSpan span;
+                  for (int y = 0; y < surface.height; ++y) {
+                      if (IsColorNear(ReadFramebufferPixelColor(scanX, y, surface.height), expectedColor)) {
+                       if (span.start < 0) {
+                        span.start = y;
+                       }
+                       span.end = y;
+                      } else if (span.start >= 0) {
+                       break;
+                      }
+                  }
+
+                  Expect(span.start >= 0 && span.end >= span.start,
+                      "Expected to find a visible vertical color span for " + label + ".");
+                  return span;
+                 };
+
+                 const int scanY = expectedLeftRect.y + expectedLeftRect.height / 2;
+                 const ColorSpan leftHorizontalSpan = findHorizontalSpan(kExpectedMirrorRenderGreen, scanY, leftMirror.name);
+                 const ColorSpan rightHorizontalSpan = findHorizontalSpan(expectedRightColor, scanY, rightMirror.name);
+                 const int leftCenterX = leftHorizontalSpan.start + (leftHorizontalSpan.end - leftHorizontalSpan.start) / 2;
+                 const int rightCenterX = rightHorizontalSpan.start + (rightHorizontalSpan.end - rightHorizontalSpan.start) / 2;
+                 const ColorSpan leftVerticalSpan = findVerticalSpan(kExpectedMirrorRenderGreen, leftCenterX, leftMirror.name);
+                 const ColorSpan rightVerticalSpan = findVerticalSpan(expectedRightColor, rightCenterX, rightMirror.name);
+
+                 const ExpectedMirrorRect actualLeftRect{
+                  leftMirror.name,
+                  leftHorizontalSpan.start,
+                  leftVerticalSpan.start,
+                  leftHorizontalSpan.end - leftHorizontalSpan.start + 1,
+                  leftVerticalSpan.end - leftVerticalSpan.start + 1,
+                 };
+                 const ExpectedMirrorRect actualRightRect{
+                  rightMirror.name,
+                  rightHorizontalSpan.start,
+                  rightVerticalSpan.start,
+                  rightHorizontalSpan.end - rightHorizontalSpan.start + 1,
+                  rightVerticalSpan.end - rightVerticalSpan.start + 1,
+                 };
+
+                 Expect(std::abs(actualLeftRect.y - expectedLeftRect.y) <= 2,
+                     "Expected the left grouped mirror to keep its target Y position during slide-in.");
+                 Expect(std::abs(actualRightRect.y - expectedRightRect.y) <= 2,
+                     "Expected the right grouped mirror to keep its target Y position during slide-in.");
+                 Expect(std::abs(actualLeftRect.width - expectedLeftRect.width) <= 2,
+                     "Expected the left grouped mirror width to stay stable during slide-in.");
+                 Expect(std::abs(actualRightRect.width - expectedRightRect.width) <= 2,
+                     "Expected the right grouped mirror width to stay stable during slide-in.");
+                 Expect(std::abs(actualLeftRect.height - expectedLeftRect.height) <= 2,
+                     "Expected the left grouped mirror height to stay stable during slide-in.");
+                 Expect(std::abs(actualRightRect.height - expectedRightRect.height) <= 2,
+                     "Expected the right grouped mirror height to stay stable during slide-in.");
+
+             const int leftDeltaX = actualLeftRect.x - expectedLeftRect.x;
+             const int rightDeltaX = actualRightRect.x - expectedRightRect.x;
+             Expect(leftDeltaX < -10,
+                 "Expected the left grouped mirror to still be sliding in from off-screen at mid-transition.");
+             Expect(rightDeltaX < -10,
+                 "Expected the right grouped mirror to still be sliding in from off-screen at mid-transition.");
+             Expect(std::abs(leftDeltaX - rightDeltaX) <= 2,
+                 "Expected grouped mirrors to share the same slide translation during a mode transition.");
+
+             const int actualSpacing = actualRightRect.x - actualLeftRect.x;
+             const int expectedSpacing = expectedRightRect.x - expectedLeftRect.x;
+             Expect(std::abs(actualSpacing - expectedSpacing) <= 2,
+                 "Expected grouped mirrors to preserve their relative X spacing while the group slides in.");
+         }
+        };
+
+        if (runMode == TestRunMode::Visual) {
+         RunVisualLoop(window, "mode-mirror-group-slide-unit-transition",
+                 [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+        } else {
+         renderAndAssert(window);
+        }
+
+        CleanupBrowserOverlayCache();
+        CleanupWindowOverlayCache();
+        CleanupGPUResources();
+        CleanupShaders();
+    }
+
 void RunModeWindowOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }

@@ -1016,6 +1016,8 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     mode-mirror-render-screen-anchor-size-matrix
     mode-mirror-render-viewport-anchor-size-matrix
     mode-mirror-group-render
+    mode-mirror-group-relative-position-resolution
+    mode-mirror-group-slide-unit-transition
     mode-window-overlay-render
     mode-window-overlay-render-resets-blend-equation
     mode-window-overlay-render-unbinds-sampler

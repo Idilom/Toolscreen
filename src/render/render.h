@@ -265,7 +265,8 @@ void RenderImages(const std::vector<ImageConfig>& activeImages, int fullW, int f
 void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
                                   std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
                                   std::vector<WindowOverlayConfig>& outWindowOverlays,
-                                  std::vector<BrowserOverlayConfig>& outBrowserOverlays);
+                                  std::vector<BrowserOverlayConfig>& outBrowserOverlays,
+                                  int screenWOverride = 0, int screenHOverride = 0);
 bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig& modeToRender, const GLState& s, int fullW,
                                           int fullH, int gameX, int gameY, int gameW, int gameH,
                                           bool excludeOnlyOnMyScreen = false, GLuint gameTextureId = 0,
@@ -324,6 +325,10 @@ struct ModeTransitionState {
     int fromHeight;
     int fromX;
     int fromY;
+    int fromNativeWidth;
+    int fromNativeHeight;
+    int toNativeWidth;
+    int toNativeHeight;
     std::string fromModeId;
 };
 

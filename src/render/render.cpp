@@ -194,7 +194,8 @@ static void EnsureConfigCachesValid() {
 void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
                                   std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
                                   std::vector<WindowOverlayConfig>& outWindowOverlays,
-                                  std::vector<BrowserOverlayConfig>& outBrowserOverlays) {
+                                  std::vector<BrowserOverlayConfig>& outBrowserOverlays,
+                                  int screenWOverride, int screenHOverride) {
     outMirrors.clear();
     outImages.clear();
     outWindowOverlays.clear();
@@ -245,6 +246,8 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
     outImages.reserve(mode->imageIds.size());
     outWindowOverlays.reserve(mode->windowOverlayIds.size());
     outBrowserOverlays.reserve(mode->browserOverlayIds.size());
+    const int resolvedScreenW = screenWOverride > 0 ? screenWOverride : GetCachedWindowWidth();
+    const int resolvedScreenH = screenHOverride > 0 ? screenHOverride : GetCachedWindowHeight();
 
     for (const auto& mirrorName : mode->mirrorIds) {
         auto it = mirrorByName.find(mirrorName);
@@ -271,10 +274,12 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
             int groupX = group.output.x;
             int groupY = group.output.y;
             if (group.output.useRelativePosition) {
-                int screenW = GetCachedWindowWidth();
-                int screenH = GetCachedWindowHeight();
-                groupX = static_cast<int>(group.output.relativeX * screenW);
-                groupY = static_cast<int>(group.output.relativeY * screenH);
+                if (resolvedScreenW > 0) {
+                    groupX = static_cast<int>(group.output.relativeX * static_cast<float>(resolvedScreenW));
+                }
+                if (resolvedScreenH > 0) {
+                    groupY = static_cast<int>(group.output.relativeY * static_cast<float>(resolvedScreenH));
+                }
             }
 
             groupedMirror.output.x = groupX + item.offsetX;
@@ -283,6 +288,8 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
             groupedMirror.output.useRelativePosition = group.output.useRelativePosition;
             groupedMirror.output.relativeX = group.output.relativeX;
             groupedMirror.output.relativeY = group.output.relativeY;
+            groupedMirror.runtimeGrouped = true;
+            groupedMirror.runtimeGroupName = group.name;
             if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
                 groupedMirror.output.separateScale = true;
                 float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
@@ -3173,7 +3180,8 @@ static void AppendUniqueMirrorsByName(std::vector<MirrorConfig>& dest, const std
 static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, const GameViewportGeometry& geo, int fullW, int fullH,
                                 float modeOpacity, bool excludeOnlyOnMyScreen, bool relativeStretching, float transitionProgress,
                                 float mirrorSlideProgress, int fromX, int fromY, int fromW, int fromH, int toX, int toY, int toW,
-                                int toH, bool isEyeZoomMode, bool isTransitioningFromEyeZoom, int eyeZoomAnimatedViewportX,
+                                int toH, int fromFullW, int fromFullH, bool isEyeZoomMode, bool isTransitioningFromEyeZoom,
+                                int eyeZoomAnimatedViewportX,
                                 bool skipAnimation, const std::string& fromModeId, bool fromSlideMirrorsIn, bool toSlideMirrorsIn,
                                 bool isSlideOutPass, const Config& cfg) {
     if (activeMirrors.empty()) return;
@@ -3198,8 +3206,10 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
         std::vector<ImageConfig> unusedImages;
         std::vector<WindowOverlayConfig> unusedWindowOverlays;
         std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+        const int resolvedSourceScreenW = fromFullW > 0 ? fromFullW : fullW;
+        const int resolvedSourceScreenH = fromFullH > 0 ? fromFullH : fullH;
         CollectActiveElementsForMode(cfg, fromModeId, false, sourceMirrors, unusedImages, unusedWindowOverlays,
-                         unusedBrowserOverlays);
+                                     unusedBrowserOverlays, resolvedSourceScreenW, resolvedSourceScreenH);
         sourceMirrorConfigs.reserve(sourceMirrors.size());
         for (const auto& sourceMirror : sourceMirrors) {
             sourceMirrorConfigs[sourceMirror.name] = &sourceMirror;
@@ -3216,6 +3226,167 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
         } else if (anchorOut.length() > 8 && anchorOut.substr(anchorOut.length() - 8) == "Viewport") {
             anchorOut = anchorOut.substr(0, anchorOut.length() - 8);
         }
+    };
+
+    struct MirrorLayoutState {
+        int finalXScreen = 0;
+        int finalYScreen = 0;
+        int finalWScreen = 0;
+        int finalHScreen = 0;
+        int slideAnchorX = 0;
+        int slideAnchorW = 0;
+        bool shouldApplySlide = false;
+        float slideProgress = 1.0f;
+    };
+
+    struct GroupSlideBounds {
+        int minX = 0;
+        int maxX = 0;
+        bool valid = false;
+    };
+
+    auto resolveSourceConfig = [&](const MirrorConfig& conf) -> const MirrorConfig* {
+        if (isSlideOutPass) {
+            return nullptr;
+        }
+
+        auto sourceIt = sourceMirrorConfigs.find(conf.name);
+        if (sourceIt == sourceMirrorConfigs.end()) {
+            return nullptr;
+        }
+
+        return sourceIt->second;
+    };
+
+    auto resolveMirrorLayout = [&](const MirrorConfig& conf, const MirrorConfig* sourceConf, int renderedOutW,
+                                   int renderedOutH) {
+        MirrorLayoutState layout{};
+
+        std::string targetAnchor;
+        bool targetIsScreenRelative = false;
+        splitRelativeAnchor(conf.output.relativeTo, targetAnchor, targetIsScreenRelative);
+
+        std::string sourceAnchor = targetAnchor;
+        bool sourceIsScreenRelative = targetIsScreenRelative;
+        if (sourceConf) {
+            splitRelativeAnchor(sourceConf->output.relativeTo, sourceAnchor, sourceIsScreenRelative);
+        }
+
+        const float targetScaleBaseX = conf.output.separateScale ? conf.output.scaleX : conf.output.scale;
+        const float targetScaleBaseY = conf.output.separateScale ? conf.output.scaleY : conf.output.scale;
+        float sourceScaleBaseX = targetScaleBaseX;
+        float sourceScaleBaseY = targetScaleBaseY;
+        if (sourceConf) {
+            sourceScaleBaseX = sourceConf->output.separateScale ? sourceConf->output.scaleX : sourceConf->output.scale;
+            sourceScaleBaseY = sourceConf->output.separateScale ? sourceConf->output.scaleY : sourceConf->output.scale;
+        }
+
+        int targetBaseW = renderedOutW;
+        int targetBaseH = renderedOutH;
+        int sourceBaseW = renderedOutW;
+        int sourceBaseH = renderedOutH;
+        if (sourceConf) {
+            if (targetScaleBaseX > 0.0f) {
+                sourceBaseW = static_cast<int>(renderedOutW * (sourceScaleBaseX / targetScaleBaseX));
+            }
+            if (targetScaleBaseY > 0.0f) {
+                sourceBaseH = static_cast<int>(renderedOutH * (sourceScaleBaseY / targetScaleBaseY));
+            }
+        }
+
+        const int targetSizeW = relativeStretching ? static_cast<int>(targetBaseW * toScaleX) : targetBaseW;
+        const int targetSizeH = relativeStretching ? static_cast<int>(targetBaseH * toScaleY) : targetBaseH;
+        const int sourceSizeW = relativeStretching ? static_cast<int>(sourceBaseW * fromScaleX) : sourceBaseW;
+        const int sourceSizeH = relativeStretching ? static_cast<int>(sourceBaseH * fromScaleY) : sourceBaseH;
+
+        int toPosX = 0;
+        int toPosY = 0;
+        if (targetIsScreenRelative) {
+            GetRelativeCoords(targetAnchor, conf.output.x, conf.output.y, targetSizeW, targetSizeH, fullW, fullH, toPosX, toPosY);
+        } else {
+            int toOutX = 0;
+            int toOutY = 0;
+            GetRelativeCoords(targetAnchor, conf.output.x, conf.output.y, targetSizeW, targetSizeH, toW, toH, toOutX, toOutY);
+            toPosX = toX + toOutX;
+            toPosY = toY + toOutY;
+        }
+
+        int fromPosX = toPosX;
+        int fromPosY = toPosY;
+        if (sourceConf) {
+            if (sourceIsScreenRelative) {
+                GetRelativeCoords(sourceAnchor, sourceConf->output.x, sourceConf->output.y, sourceSizeW, sourceSizeH, fullW, fullH,
+                                  fromPosX, fromPosY);
+            } else {
+                int fromOutX = 0;
+                int fromOutY = 0;
+                const int effectiveFromSizeH = isTransitioningFromEyeZoom ? targetSizeH : sourceSizeH;
+                GetRelativeCoords(sourceAnchor, sourceConf->output.x, sourceConf->output.y, sourceSizeW, effectiveFromSizeH, fromW,
+                                  effectiveFromH, fromOutX, fromOutY);
+                fromPosX = fromX + fromOutX;
+                fromPosY = effectiveFromY + fromOutY;
+            }
+        } else if (!targetIsScreenRelative) {
+            int fromOutX = 0;
+            int fromOutY = 0;
+            const int effectiveFromSizeH = isTransitioningFromEyeZoom ? targetSizeH : sourceSizeH;
+            GetRelativeCoords(targetAnchor, conf.output.x, conf.output.y, sourceSizeW, effectiveFromSizeH, fromW, effectiveFromH,
+                              fromOutX, fromOutY);
+            fromPosX = fromX + fromOutX;
+            fromPosY = effectiveFromY + fromOutY;
+        }
+
+        layout.finalWScreen = targetSizeW;
+        layout.finalHScreen = targetSizeH;
+        auto applyLayoutProgress = [&](float layoutProgress) {
+            layout.finalXScreen = static_cast<int>(fromPosX + (toPosX - fromPosX) * layoutProgress);
+            layout.finalYScreen = static_cast<int>(fromPosY + (toPosY - fromPosY) * layoutProgress);
+            if (sourceConf || relativeStretching) {
+                layout.finalWScreen = static_cast<int>(sourceSizeW + (targetSizeW - sourceSizeW) * layoutProgress);
+                layout.finalHScreen = static_cast<int>(sourceSizeH + (targetSizeH - sourceSizeH) * layoutProgress);
+            }
+        };
+        applyLayoutProgress(transitionProgress);
+
+        layout.slideAnchorX = layout.finalXScreen;
+        layout.slideAnchorW = layout.finalWScreen;
+        if (wantsTransitionSlide) {
+            if (fromSlideMirrorsIn && isSlideOutPass) {
+                layout.slideAnchorX = fromPosX;
+                layout.slideAnchorW = sourceSizeW;
+            } else if (toSlideMirrorsIn && !isSlideOutPass) {
+                layout.slideAnchorX = toPosX;
+                layout.slideAnchorW = targetSizeW;
+            }
+        }
+
+        const bool isTransitioningToEyeZoom = wantsEyeZoomSlide && !isTransitioningFromEyeZoom;
+        const bool isEyeZoomSlideOut = wantsEyeZoomSlide && isTransitioningFromEyeZoom;
+        if (isTransitioningToEyeZoom || isEyeZoomSlideOut) {
+            layout.shouldApplySlide = true;
+            layout.slideProgress = eyeZoomSlideProgress;
+        }
+        if (!layout.shouldApplySlide && wantsTransitionSlide) {
+            if (toSlideMirrorsIn && !isSlideOutPass) {
+                layout.shouldApplySlide = true;
+                layout.slideProgress = mirrorSlideProgress;
+            } else if (fromSlideMirrorsIn && isSlideOutPass) {
+                layout.shouldApplySlide = true;
+                layout.slideProgress = 1.0f - mirrorSlideProgress;
+            }
+        }
+
+        bool shouldUseSharedOnScreenLerp = false;
+        if (wantsTransitionSlide && !isSlideOutPass && sourceConf != nullptr) {
+            layout.shouldApplySlide = false;
+            shouldUseSharedOnScreenLerp = (fromPosX != toPosX) || (fromPosY != toPosY) || (sourceSizeW != targetSizeW) ||
+                                          (sourceSizeH != targetSizeH);
+        }
+        if (shouldUseSharedOnScreenLerp) {
+            applyLayoutProgress((std::max)(0.0f, (std::min)(1.0f, mirrorSlideProgress)));
+        }
+
+        return layout;
     };
 
     std::vector<MirrorRenderData> mirrorsToRender;
@@ -3282,6 +3453,34 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
     }
 
     if (mirrorsToRender.empty()) return;
+
+    std::unordered_map<std::string, GroupSlideBounds> groupedSlideBounds;
+    if (wantsTransitionSlide || wantsEyeZoomSlide) {
+        for (const auto& renderData : mirrorsToRender) {
+            const MirrorConfig& conf = *renderData.config;
+            if (!conf.runtimeGrouped || conf.runtimeGroupName.empty()) {
+                continue;
+            }
+
+            const MirrorConfig* sourceConf = resolveSourceConfig(conf);
+            const MirrorLayoutState layout = resolveMirrorLayout(conf, sourceConf, renderData.outW, renderData.outH);
+            if (!layout.shouldApplySlide) {
+                continue;
+            }
+
+            GroupSlideBounds& bounds = groupedSlideBounds[conf.runtimeGroupName];
+            const int slideMinX = layout.slideAnchorX;
+            const int slideMaxX = layout.slideAnchorX + layout.slideAnchorW;
+            if (!bounds.valid) {
+                bounds.minX = slideMinX;
+                bounds.maxX = slideMaxX;
+                bounds.valid = true;
+            } else {
+                bounds.minX = (std::min)(bounds.minX, slideMinX);
+                bounds.maxX = (std::max)(bounds.maxX, slideMaxX);
+            }
+        }
+    }
 
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
@@ -3397,164 +3596,51 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             if (renderData.cacheValid) {
                 glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(renderData.vertices), renderData.vertices);
             } else {
-                const MirrorConfig* sourceConf = nullptr;
-                if (!isSlideOutPass) {
-                    auto sourceIt = sourceMirrorConfigs.find(conf.name);
-                    if (sourceIt != sourceMirrorConfigs.end()) {
-                        sourceConf = sourceIt->second;
+                const MirrorConfig* sourceConf = resolveSourceConfig(conf);
+                const MirrorLayoutState layout = resolveMirrorLayout(conf, sourceConf, renderData.outW, renderData.outH);
+
+                int finalXScreen = layout.finalXScreen;
+                if (layout.shouldApplySlide) {
+                    const float slideProgress = (std::max)(0.0f, (std::min)(1.0f, layout.slideProgress));
+                    auto groupedBoundsIt = groupedSlideBounds.end();
+                    if (conf.runtimeGrouped && !conf.runtimeGroupName.empty()) {
+                        groupedBoundsIt = groupedSlideBounds.find(conf.runtimeGroupName);
                     }
-                }
 
-                std::string targetAnchor;
-                bool targetIsScreenRelative = false;
-                splitRelativeAnchor(conf.output.relativeTo, targetAnchor, targetIsScreenRelative);
-
-                std::string sourceAnchor = targetAnchor;
-                bool sourceIsScreenRelative = targetIsScreenRelative;
-                if (sourceConf) {
-                    splitRelativeAnchor(sourceConf->output.relativeTo, sourceAnchor, sourceIsScreenRelative);
-                }
-
-                const float targetScaleBaseX = conf.output.separateScale ? conf.output.scaleX : conf.output.scale;
-                const float targetScaleBaseY = conf.output.separateScale ? conf.output.scaleY : conf.output.scale;
-                float sourceScaleBaseX = targetScaleBaseX;
-                float sourceScaleBaseY = targetScaleBaseY;
-                if (sourceConf) {
-                    sourceScaleBaseX = sourceConf->output.separateScale ? sourceConf->output.scaleX : sourceConf->output.scale;
-                    sourceScaleBaseY = sourceConf->output.separateScale ? sourceConf->output.scaleY : sourceConf->output.scale;
-                }
-
-                int targetBaseW = renderData.outW;
-                int targetBaseH = renderData.outH;
-                int sourceBaseW = renderData.outW;
-                int sourceBaseH = renderData.outH;
-                if (sourceConf) {
-                    if (targetScaleBaseX > 0.0f) {
-                        sourceBaseW = static_cast<int>(renderData.outW * (sourceScaleBaseX / targetScaleBaseX));
-                    }
-                    if (targetScaleBaseY > 0.0f) {
-                        sourceBaseH = static_cast<int>(renderData.outH * (sourceScaleBaseY / targetScaleBaseY));
-                    }
-                }
-
-                const int targetSizeW = relativeStretching ? static_cast<int>(targetBaseW * toScaleX) : targetBaseW;
-                const int targetSizeH = relativeStretching ? static_cast<int>(targetBaseH * toScaleY) : targetBaseH;
-                const int sourceSizeW = relativeStretching ? static_cast<int>(sourceBaseW * fromScaleX) : sourceBaseW;
-                const int sourceSizeH = relativeStretching ? static_cast<int>(sourceBaseH * fromScaleY) : sourceBaseH;
-
-                int toPosX = 0;
-                int toPosY = 0;
-                if (targetIsScreenRelative) {
-                    GetRelativeCoords(targetAnchor, conf.output.x, conf.output.y, targetSizeW, targetSizeH, fullW, fullH, toPosX,
-                                      toPosY);
-                } else {
-                    int toOutX = 0;
-                    int toOutY = 0;
-                    GetRelativeCoords(targetAnchor, conf.output.x, conf.output.y, targetSizeW, targetSizeH, toW, toH, toOutX, toOutY);
-                    toPosX = toX + toOutX;
-                    toPosY = toY + toOutY;
-                }
-
-                int fromPosX = toPosX;
-                int fromPosY = toPosY;
-                if (sourceConf) {
-                    if (sourceIsScreenRelative) {
-                        GetRelativeCoords(sourceAnchor, sourceConf->output.x, sourceConf->output.y, sourceSizeW, sourceSizeH, fullW,
-                                          fullH, fromPosX, fromPosY);
+                    if (groupedBoundsIt != groupedSlideBounds.end() && groupedBoundsIt->second.valid) {
+                        const int groupMinX = groupedBoundsIt->second.minX;
+                        const int groupWidth = (std::max)(1, groupedBoundsIt->second.maxX - groupedBoundsIt->second.minX);
+                        const bool isOnLeftSide = (groupMinX + groupWidth / 2) < (fullW / 2);
+                        int groupedSlideX = 0;
+                        if (isOnLeftSide) {
+                            groupedSlideX = -groupWidth + static_cast<int>((groupMinX + groupWidth) * slideProgress);
+                        } else {
+                            groupedSlideX = fullW - static_cast<int>((fullW - groupMinX) * slideProgress);
+                        }
+                        finalXScreen += groupedSlideX - groupMinX;
                     } else {
-                        int fromOutX = 0;
-                        int fromOutY = 0;
-                        const int effectiveFromSizeH = isTransitioningFromEyeZoom ? targetSizeH : sourceSizeH;
-                        GetRelativeCoords(sourceAnchor, sourceConf->output.x, sourceConf->output.y, sourceSizeW, effectiveFromSizeH,
-                                          fromW, effectiveFromH, fromOutX, fromOutY);
-                        fromPosX = fromX + fromOutX;
-                        fromPosY = effectiveFromY + fromOutY;
-                    }
-                } else if (!targetIsScreenRelative) {
-                    int fromOutX = 0;
-                    int fromOutY = 0;
-                    const int effectiveFromSizeH = isTransitioningFromEyeZoom ? targetSizeH : sourceSizeH;
-                    GetRelativeCoords(targetAnchor, conf.output.x, conf.output.y, sourceSizeW, effectiveFromSizeH, fromW, effectiveFromH,
-                                      fromOutX, fromOutY);
-                    fromPosX = fromX + fromOutX;
-                    fromPosY = effectiveFromY + fromOutY;
-                }
-
-                int finalXScreen = 0;
-                int finalYScreen = 0;
-                int finalWScreen = targetSizeW;
-                int finalHScreen = targetSizeH;
-                auto applyLayoutProgress = [&](float layoutProgress) {
-                    finalXScreen = static_cast<int>(fromPosX + (toPosX - fromPosX) * layoutProgress);
-                    finalYScreen = static_cast<int>(fromPosY + (toPosY - fromPosY) * layoutProgress);
-                    if (sourceConf || relativeStretching) {
-                        finalWScreen = static_cast<int>(sourceSizeW + (targetSizeW - sourceSizeW) * layoutProgress);
-                        finalHScreen = static_cast<int>(sourceSizeH + (targetSizeH - sourceSizeH) * layoutProgress);
-                    }
-                };
-                applyLayoutProgress(transitionProgress);
-
-                int slideAnchorX = finalXScreen;
-                int slideAnchorW = finalWScreen;
-                if (wantsTransitionSlide) {
-                    if (fromSlideMirrorsIn && isSlideOutPass) {
-                        slideAnchorX = fromPosX;
-                        slideAnchorW = sourceSizeW;
-                    } else if (toSlideMirrorsIn && !isSlideOutPass) {
-                        slideAnchorX = toPosX;
-                        slideAnchorW = targetSizeW;
+                        const bool isOnLeftSide = (layout.slideAnchorX + layout.slideAnchorW / 2) < (fullW / 2);
+                        if (isOnLeftSide) {
+                            finalXScreen = -layout.finalWScreen + static_cast<int>((layout.slideAnchorX + layout.finalWScreen) * slideProgress);
+                        } else {
+                            finalXScreen = fullW - static_cast<int>((fullW - layout.slideAnchorX) * slideProgress);
+                        }
                     }
                 }
 
-            bool shouldApplySlide = false;
-            float slideProgress = 1.0f;
-            const bool isTransitioningToEyeZoom = wantsEyeZoomSlide && !isTransitioningFromEyeZoom;
-            const bool isEyeZoomSlideOut = wantsEyeZoomSlide && isTransitioningFromEyeZoom;
-            if (isTransitioningToEyeZoom || isEyeZoomSlideOut) {
-                shouldApplySlide = true;
-                slideProgress = eyeZoomSlideProgress;
-            }
-            if (!shouldApplySlide && wantsTransitionSlide) {
-                if (toSlideMirrorsIn && !isSlideOutPass) {
-                    shouldApplySlide = true;
-                    slideProgress = mirrorSlideProgress;
-                } else if (fromSlideMirrorsIn && isSlideOutPass) {
-                    shouldApplySlide = true;
-                    slideProgress = 1.0f - mirrorSlideProgress;
-                }
-            }
-            bool shouldUseSharedOnScreenLerp = false;
-            if (wantsTransitionSlide && !isSlideOutPass && sourceConf != nullptr) {
-                shouldApplySlide = false;
-                shouldUseSharedOnScreenLerp = (fromPosX != toPosX) || (fromPosY != toPosY) || (sourceSizeW != targetSizeW) ||
-                                              (sourceSizeH != targetSizeH);
-            }
-            if (shouldUseSharedOnScreenLerp) {
-                applyLayoutProgress((std::max)(0.0f, (std::min)(1.0f, mirrorSlideProgress)));
-            }
-            if (shouldApplySlide) {
-                slideProgress = (std::max)(0.0f, (std::min)(1.0f, slideProgress));
-                bool isOnLeftSide = (slideAnchorX + slideAnchorW / 2) < (fullW / 2);
-                if (isOnLeftSide) {
-                    finalXScreen = -finalWScreen + static_cast<int>((slideAnchorX + finalWScreen) * slideProgress);
-                } else {
-                    finalXScreen = fullW - static_cast<int>((fullW - slideAnchorX) * slideProgress);
-                }
-            }
+                renderData.screenX = finalXScreen;
+                renderData.screenY = layout.finalYScreen;
+                renderData.screenW = layout.finalWScreen;
+                renderData.screenH = layout.finalHScreen;
 
-            renderData.screenX = finalXScreen;
-            renderData.screenY = finalYScreen;
-            renderData.screenW = finalWScreen;
-            renderData.screenH = finalHScreen;
-
-            int finalYGl = fullH - finalYScreen - finalHScreen;
+                int finalYGl = fullH - renderData.screenY - renderData.screenH;
             float nx1 = (static_cast<float>(finalXScreen) / fullW) * 2.0f - 1.0f;
             float ny1 = (static_cast<float>(finalYGl) / fullH) * 2.0f - 1.0f;
-            float nx2 = (static_cast<float>(finalXScreen + finalWScreen) / fullW) * 2.0f - 1.0f;
-            float ny2 = (static_cast<float>(finalYGl + finalHScreen) / fullH) * 2.0f - 1.0f;
+                float nx2 = (static_cast<float>(finalXScreen + renderData.screenW) / fullW) * 2.0f - 1.0f;
+                float ny2 = (static_cast<float>(finalYGl + renderData.screenH) / fullH) * 2.0f - 1.0f;
             float verts[] = { nx1, ny1, 0, 0, nx2, ny1, 1, 0, nx2, ny2, 1, 1, nx1, ny1, 0, 0, nx2, ny2, 1, 1, nx1, ny2, 0, 1 };
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
-        }
+            }
 
             glDrawArrays(GL_TRIANGLES, 0, 6);
         }
@@ -4112,10 +4198,14 @@ struct SameThreadOverlayState {
     int fromY = 0;
     int fromW = 0;
     int fromH = 0;
+    int fromFullW = 0;
+    int fromFullH = 0;
     int toX = 0;
     int toY = 0;
     int toW = 0;
     int toH = 0;
+    int toFullW = 0;
+    int toFullH = 0;
 
     bool shouldRenderGui = false;
     bool showPerformanceOverlay = false;
@@ -4368,6 +4458,8 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
 
     static const Config* s_cachedActiveConfig = nullptr;
     static std::string s_cachedActiveModeId;
+    static int s_cachedActiveScreenW = 0;
+    static int s_cachedActiveScreenH = 0;
     static bool s_cachedActiveImagesVisible = false;
     static bool s_cachedActiveWindowOverlaysVisible = false;
     static bool s_cachedActiveBrowserOverlaysVisible = false;
@@ -4377,13 +4469,19 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     static std::vector<BrowserOverlayConfig> s_cachedActiveBrowserOverlays;
     static const Config* s_cachedEyeZoomSlideOutConfig = nullptr;
     static std::string s_cachedEyeZoomSlideOutTargetModeId;
+    static int s_cachedEyeZoomSlideOutScreenW = 0;
+    static int s_cachedEyeZoomSlideOutScreenH = 0;
     static std::vector<MirrorConfig> s_cachedEyeZoomSlideOutMirrors;
     static const Config* s_cachedTransitionSlideOutConfig = nullptr;
     static std::string s_cachedTransitionSlideOutFromModeId;
     static std::string s_cachedTransitionSlideOutTargetModeId;
+    static int s_cachedTransitionSlideOutScreenW = 0;
+    static int s_cachedTransitionSlideOutScreenH = 0;
     static std::vector<MirrorConfig> s_cachedTransitionSlideOutMirrors;
     static const Config* s_cachedSameThreadCaptureConfig = nullptr;
     static std::string s_cachedSameThreadCaptureModeId;
+    static int s_cachedSameThreadCaptureScreenW = 0;
+    static int s_cachedSameThreadCaptureScreenH = 0;
     static std::vector<ThreadedMirrorConfig> s_cachedSameThreadCaptureConfigs;
     static const std::vector<MirrorConfig> s_emptyMirrors;
     static const std::vector<ImageConfig> s_emptyImages;
@@ -4409,18 +4507,26 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     const bool imagesVisible = request.modeHasImages;
     const bool windowOverlaysVisible = request.modeHasWindowOverlays;
     const bool browserOverlaysVisible = request.modeHasBrowserOverlays;
+    const int resolvedTargetScreenW = request.toFullW > 0 ? request.toFullW : request.fullW;
+    const int resolvedTargetScreenH = request.toFullH > 0 ? request.toFullH : request.fullH;
+    const int resolvedSourceScreenW = request.fromFullW > 0 ? request.fromFullW : request.fullW;
+    const int resolvedSourceScreenH = request.fromFullH > 0 ? request.fromFullH : request.fullH;
     if (needModeElements) {
         if (s_cachedActiveConfig != &cfg || s_cachedActiveModeId != request.modeId ||
+            s_cachedActiveScreenW != resolvedTargetScreenW || s_cachedActiveScreenH != resolvedTargetScreenH ||
             s_cachedActiveImagesVisible != imagesVisible || s_cachedActiveWindowOverlaysVisible != windowOverlaysVisible ||
             s_cachedActiveBrowserOverlaysVisible != browserOverlaysVisible) {
             PROFILE_SCOPE_CAT("Collect Active Mode Elements", "Rendering");
             s_cachedActiveConfig = &cfg;
             s_cachedActiveModeId = request.modeId;
+            s_cachedActiveScreenW = resolvedTargetScreenW;
+            s_cachedActiveScreenH = resolvedTargetScreenH;
             s_cachedActiveImagesVisible = imagesVisible;
             s_cachedActiveWindowOverlaysVisible = windowOverlaysVisible;
             s_cachedActiveBrowserOverlaysVisible = browserOverlaysVisible;
             CollectActiveElementsForMode(cfg, request.modeId, false, s_cachedActiveMirrors, s_cachedActiveImages,
-                                         s_cachedActiveWindowOverlays, s_cachedActiveBrowserOverlays);
+                                         s_cachedActiveWindowOverlays, s_cachedActiveBrowserOverlays,
+                                         resolvedTargetScreenW, resolvedTargetScreenH);
         }
     }
     const std::vector<MirrorConfig>& activeMirrors = needModeElements ? s_cachedActiveMirrors : s_emptyMirrors;
@@ -4431,7 +4537,9 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         needModeElements ? s_cachedActiveBrowserOverlays : s_emptyBrowserOverlays;
 
     if (!request.isRawWindowedMode && request.isTransitioningFromEyeZoom && cfg.eyezoom.slideMirrorsIn && !request.skipAnimation) {
-        if (s_cachedEyeZoomSlideOutConfig != &cfg || s_cachedEyeZoomSlideOutTargetModeId != request.modeId) {
+        if (s_cachedEyeZoomSlideOutConfig != &cfg || s_cachedEyeZoomSlideOutTargetModeId != request.modeId ||
+            s_cachedEyeZoomSlideOutScreenW != resolvedSourceScreenW ||
+            s_cachedEyeZoomSlideOutScreenH != resolvedSourceScreenH) {
             PROFILE_SCOPE_CAT("Resolve EyeZoom Slide-Out Mirrors", "Rendering");
             std::vector<MirrorConfig> eyeZoomMirrors;
             std::vector<ImageConfig> unusedImages;
@@ -4444,7 +4552,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             }
 
             CollectActiveElementsForMode(cfg, "EyeZoom", false, eyeZoomMirrors, unusedImages, unusedOverlays,
-                                         unusedBrowserOverlays);
+                                         unusedBrowserOverlays, resolvedSourceScreenW, resolvedSourceScreenH);
 
             s_cachedEyeZoomSlideOutMirrors.clear();
             s_cachedEyeZoomSlideOutMirrors.reserve(eyeZoomMirrors.size());
@@ -4456,6 +4564,8 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
 
             s_cachedEyeZoomSlideOutConfig = &cfg;
             s_cachedEyeZoomSlideOutTargetModeId = request.modeId;
+            s_cachedEyeZoomSlideOutScreenW = resolvedSourceScreenW;
+            s_cachedEyeZoomSlideOutScreenH = resolvedSourceScreenH;
         }
 
         eyeZoomSlideOutMirrors = &s_cachedEyeZoomSlideOutMirrors;
@@ -4464,7 +4574,9 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     if (!request.isRawWindowedMode && !request.isTransitioningFromEyeZoom && request.fromSlideMirrorsIn && !request.fromModeId.empty() &&
         request.mirrorSlideProgress < 1.0f && !request.skipAnimation) {
         if (s_cachedTransitionSlideOutConfig != &cfg || s_cachedTransitionSlideOutFromModeId != request.fromModeId ||
-            s_cachedTransitionSlideOutTargetModeId != request.modeId) {
+            s_cachedTransitionSlideOutTargetModeId != request.modeId ||
+            s_cachedTransitionSlideOutScreenW != resolvedSourceScreenW ||
+            s_cachedTransitionSlideOutScreenH != resolvedSourceScreenH) {
             PROFILE_SCOPE_CAT("Resolve Transition Slide-Out Mirrors", "Rendering");
             std::vector<MirrorConfig> fromModeMirrors;
             std::vector<ImageConfig> unusedImages;
@@ -4477,7 +4589,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             }
 
             CollectActiveElementsForMode(cfg, request.fromModeId, false, fromModeMirrors, unusedImages, unusedOverlays,
-                                         unusedBrowserOverlays);
+                                         unusedBrowserOverlays, resolvedSourceScreenW, resolvedSourceScreenH);
 
             s_cachedTransitionSlideOutMirrors.clear();
             s_cachedTransitionSlideOutMirrors.reserve(fromModeMirrors.size());
@@ -4490,6 +4602,8 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             s_cachedTransitionSlideOutConfig = &cfg;
             s_cachedTransitionSlideOutFromModeId = request.fromModeId;
             s_cachedTransitionSlideOutTargetModeId = request.modeId;
+            s_cachedTransitionSlideOutScreenW = resolvedSourceScreenW;
+            s_cachedTransitionSlideOutScreenH = resolvedSourceScreenH;
         }
 
         transitionSlideOutMirrors = &s_cachedTransitionSlideOutMirrors;
@@ -4515,13 +4629,17 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         int sourceH = 0;
         const bool hasEyeZoomSlideOutMirrors = !eyeZoomSlideOutMirrors->empty();
         const bool hasTransitionSlideOutMirrors = !transitionSlideOutMirrors->empty();
-        if (s_cachedSameThreadCaptureConfig != &cfg || s_cachedSameThreadCaptureModeId != request.modeId) {
+        if (s_cachedSameThreadCaptureConfig != &cfg || s_cachedSameThreadCaptureModeId != request.modeId ||
+            s_cachedSameThreadCaptureScreenW != resolvedTargetScreenW ||
+            s_cachedSameThreadCaptureScreenH != resolvedTargetScreenH) {
             PROFILE_SCOPE_CAT("Build Same-Thread Capture Configs", "Rendering");
             std::vector<MirrorConfig> mirrorsForCapture = activeMirrors;
             BuildThreadedMirrorConfigs(mirrorsForCapture, s_cachedSameThreadCaptureConfigs);
 
             s_cachedSameThreadCaptureConfig = &cfg;
             s_cachedSameThreadCaptureModeId = request.modeId;
+            s_cachedSameThreadCaptureScreenW = resolvedTargetScreenW;
+            s_cachedSameThreadCaptureScreenH = resolvedTargetScreenH;
         }
 
         bool hasCaptureSource = false;
@@ -4554,7 +4672,8 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             RenderMirrorsDirect(activeMirrors, geo, request.fullW, request.fullH, request.overlayOpacity,
                                 request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
                                 request.mirrorSlideProgress, request.fromX, request.fromY, request.fromW, request.fromH, request.toX,
-                                request.toY, request.toW, request.toH, isEyeZoomMode, request.isTransitioningFromEyeZoom,
+                                request.toY, request.toW, request.toH, request.fromFullW, request.fromFullH, isEyeZoomMode,
+                                request.isTransitioningFromEyeZoom,
                                 request.eyeZoomAnimatedViewportX, request.skipAnimation, request.fromModeId, request.fromSlideMirrorsIn,
                                 request.toSlideMirrorsIn, false, cfg);
         }
@@ -4564,7 +4683,8 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             RenderMirrorsDirect(*eyeZoomSlideOutMirrors, geo, request.fullW, request.fullH, request.overlayOpacity,
                                 request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
                                 request.mirrorSlideProgress, request.fromX, request.fromY, request.fromW, request.fromH,
-                                request.toX, request.toY, request.toW, request.toH, true, request.isTransitioningFromEyeZoom,
+                                request.toX, request.toY, request.toW, request.toH, request.fromFullW, request.fromFullH, true,
+                                request.isTransitioningFromEyeZoom,
                                 request.eyeZoomAnimatedViewportX, request.skipAnimation, request.modeId, cfg.eyezoom.slideMirrorsIn,
                                 request.toSlideMirrorsIn, true, cfg);
         }
@@ -4574,7 +4694,8 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             RenderMirrorsDirect(*transitionSlideOutMirrors, geo, request.fullW, request.fullH, request.overlayOpacity,
                                 request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
                                 request.mirrorSlideProgress, request.fromX, request.fromY, request.fromW, request.fromH,
-                                request.toX, request.toY, request.toW, request.toH, false, false, -1, request.skipAnimation,
+                                request.toX, request.toY, request.toW, request.toH, request.fromFullW, request.fromFullH, false,
+                                false, -1, request.skipAnimation,
                                 request.modeId, request.fromSlideMirrorsIn, request.toSlideMirrorsIn, true, cfg);
         }
     }
@@ -4640,10 +4761,14 @@ bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig
     request.fromY = gameY;
     request.fromW = gameW;
     request.fromH = gameH;
+    request.fromFullW = fullW;
+    request.fromFullH = fullH;
     request.toX = gameX;
     request.toY = gameY;
     request.toW = gameW;
     request.toH = gameH;
+    request.toFullW = fullW;
+    request.toFullH = fullH;
     request.shouldRenderGui = renderGui;
     request.modeHasMirrors = gameTextureId != 0 && (!modeToRender.mirrorIds.empty() || !modeToRender.mirrorGroupIds.empty());
     request.modeHasImages = !modeToRender.imageIds.empty();
@@ -5321,6 +5446,17 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
                 request.toY = finalY;
                 request.toW = finalW;
                 request.toH = finalH;
+            }
+            if (transitionState.active) {
+                request.fromFullW = transitionState.fromNativeWidth > 0 ? transitionState.fromNativeWidth : fullW;
+                request.fromFullH = transitionState.fromNativeHeight > 0 ? transitionState.fromNativeHeight : fullH;
+                request.toFullW = transitionState.toNativeWidth > 0 ? transitionState.toNativeWidth : fullW;
+                request.toFullH = transitionState.toNativeHeight > 0 ? transitionState.toNativeHeight : fullH;
+            } else {
+                request.fromFullW = fullW;
+                request.fromFullH = fullH;
+                request.toFullW = fullW;
+                request.toFullH = fullH;
             }
 
             const bool slideAnimationsEnabled = transitionState.active && transitionState.gameTransition == GameTransitionType::Bounce;
@@ -6328,59 +6464,12 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
             // Collect active mirrors for fallback rendering (use snapshot for thread safety)
             std::vector<MirrorConfig> fallbackMirrors;
-            const auto& fbMirrors = configSnap ? configSnap->mirrors : g_config.mirrors;
-            const auto& fbGroups = configSnap ? configSnap->mirrorGroups : g_config.mirrorGroups;
-            fallbackMirrors.reserve(modeToRender->mirrorIds.size() + modeToRender->mirrorGroupIds.size());
-
-            std::unordered_map<std::string, size_t> mirrorIndex;
-            mirrorIndex.reserve(fbMirrors.size());
-            for (size_t i = 0; i < fbMirrors.size(); ++i) { mirrorIndex[fbMirrors[i].name] = i; }
-            std::unordered_map<std::string, size_t> groupIndex;
-            groupIndex.reserve(fbGroups.size());
-            for (size_t i = 0; i < fbGroups.size(); ++i) { groupIndex[fbGroups[i].name] = i; }
-
-            for (const auto& name : modeToRender->mirrorIds) {
-                auto it = mirrorIndex.find(name);
-                if (it != mirrorIndex.end()) {
-                    fallbackMirrors.push_back(fbMirrors[it->second]);
-                }
-            }
-            for (const auto& groupName : modeToRender->mirrorGroupIds) {
-                auto git = groupIndex.find(groupName);
-                if (git != groupIndex.end()) {
-                    const auto& group = fbGroups[git->second];
-                    for (const auto& item : group.mirrors) {
-                        if (!item.enabled) continue;
-                        auto mit = mirrorIndex.find(item.mirrorId);
-                        if (mit != mirrorIndex.end()) {
-                            const auto& mirror = fbMirrors[mit->second];
-                            MirrorConfig groupedMirror = mirror;
-                            int groupX = group.output.x;
-                            int groupY = group.output.y;
-                            if (group.output.useRelativePosition) {
-                                int screenW = GetCachedWindowWidth();
-                                int screenH = GetCachedWindowHeight();
-                                groupX = static_cast<int>(group.output.relativeX * screenW);
-                                groupY = static_cast<int>(group.output.relativeY * screenH);
-                            }
-                            groupedMirror.output.x = groupX + item.offsetX;
-                            groupedMirror.output.y = groupY + item.offsetY;
-                            groupedMirror.output.relativeTo = group.output.relativeTo;
-                            groupedMirror.output.useRelativePosition = group.output.useRelativePosition;
-                            groupedMirror.output.relativeX = group.output.relativeX;
-                            groupedMirror.output.relativeY = group.output.relativeY;
-                            if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
-                                groupedMirror.output.separateScale = true;
-                                float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
-                                float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
-                                groupedMirror.output.scaleX = baseScaleX * item.widthPercent;
-                                groupedMirror.output.scaleY = baseScaleY * item.heightPercent;
-                            }
-                            fallbackMirrors.push_back(groupedMirror);
-                        }
-                    }
-                }
-            }
+            std::vector<ImageConfig> unusedImages;
+            std::vector<WindowOverlayConfig> unusedWindowOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            const Config& fallbackConfig = configSnap ? *configSnap : g_config;
+            CollectActiveElementsForMode(fallbackConfig, modeToRender->id, false, fallbackMirrors, unusedImages,
+                                         unusedWindowOverlays, unusedBrowserOverlays, fullW, fullH);
 
             std::vector<size_t> mirrorsNeedingUpdate;
             mirrorsNeedingUpdate.reserve(fallbackMirrors.size());
@@ -6978,6 +7067,17 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                 target.toY = currentGeo.finalY;
                 target.toW = currentGeo.finalW;
                 target.toH = currentGeo.finalH;
+            }
+            if (transitionState.active) {
+                target.fromFullW = transitionState.fromNativeWidth > 0 ? transitionState.fromNativeWidth : fullW;
+                target.fromFullH = transitionState.fromNativeHeight > 0 ? transitionState.fromNativeHeight : fullH;
+                target.toFullW = transitionState.toNativeWidth > 0 ? transitionState.toNativeWidth : fullW;
+                target.toFullH = transitionState.toNativeHeight > 0 ? transitionState.toNativeHeight : fullH;
+            } else {
+                target.fromFullW = fullW;
+                target.fromFullH = fullH;
+                target.toFullW = fullW;
+                target.toFullH = fullH;
             }
         }
 
@@ -7979,6 +8079,10 @@ ModeTransitionState GetModeTransitionState() {
         state.fromHeight = snapshot.fromHeight;
         state.fromX = snapshot.fromX;
         state.fromY = snapshot.fromY;
+        state.fromNativeWidth = snapshot.fromNativeWidth;
+        state.fromNativeHeight = snapshot.fromNativeHeight;
+        state.toNativeWidth = snapshot.toNativeWidth;
+        state.toNativeHeight = snapshot.toNativeHeight;
         state.fromModeId = snapshot.fromModeId;
     } else {
         state.width = 0;
@@ -7998,6 +8102,10 @@ ModeTransitionState GetModeTransitionState() {
         state.fromHeight = 0;
         state.fromX = 0;
         state.fromY = 0;
+        state.fromNativeWidth = 0;
+        state.fromNativeHeight = 0;
+        state.toNativeWidth = 0;
+        state.toNativeHeight = 0;
     }
     return state;
 }
