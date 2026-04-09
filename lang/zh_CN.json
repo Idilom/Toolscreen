@@ -301,6 +301,8 @@
     "inputs.reset_cursors_to_defaults": "将光标重置为默认值？",
     "inputs.reset_cursors_to_defaults_tip": "这将把所有光标设置重置为默认值。",
     "inputs.resolve_rebind_targets_for_hotkeys": "为快捷键解析重绑定目标",
+    "inputs.scroll_down_label": "向下滚动",
+    "inputs.scroll_up_label": "向上滚动",
     "inputs.split_rebind_label": "拆分重绑定",
     "inputs.tooltip.configure_key_rebinds": "在键盘布局窗口中配置按键重绑定（右键单击按键）。",
     "inputs.tooltip.enable_key_rebinding": "启用后，配置的按键重绑定将拦截键盘输入，并将重新映射的按键发送给游戏。",

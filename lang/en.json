@@ -301,6 +301,8 @@
     "inputs.reset_cursors_to_defaults": "Reset Cursors to Defaults?",
     "inputs.reset_cursors_to_defaults_tip": "This will reset all cursor settings to their default values.",
     "inputs.resolve_rebind_targets_for_hotkeys": "Resolve Rebind Targets For Hotkeys",
+    "inputs.scroll_down_label": "Scroll down",
+    "inputs.scroll_up_label": "Scroll up",
     "inputs.split_rebind_label": "Split rebind",
     "inputs.tooltip.configure_key_rebinds": "Configure key rebinds in the Keyboard Layout window (right-click keys).",
     "inputs.tooltip.enable_key_rebinding": "When enabled, configured key rebinds will intercept keyboard input and send the remapped key to the game instead.",

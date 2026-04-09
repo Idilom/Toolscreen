@@ -124,6 +124,11 @@ enum class KeyRebindCursorStateMatchPriority {
     Exact = 2,
 };
 
+static bool IsConsumeOnlyScrollWheelRebind(const KeyRebind& rebind) {
+    const bool sourceIsScrollWheel = (rebind.fromKey == VK_TOOLSCREEN_SCROLL_UP || rebind.fromKey == VK_TOOLSCREEN_SCROLL_DOWN);
+    return sourceIsScrollWheel && rebind.enabled && rebind.toKey == 0;
+}
+
 static KeyRebindCursorStateMatchPriority GetKeyRebindCursorStateMatchPriority(const KeyRebind& rebind, bool cursorVisible) {
     if (rebind.cursorState == kKeyRebindCursorStateCursorFree) {
         return cursorVisible ? KeyRebindCursorStateMatchPriority::Exact : KeyRebindCursorStateMatchPriority::None;
@@ -141,7 +146,10 @@ static const KeyRebind* FindPreferredEnabledKeyRebind(const std::vector<KeyRebin
     const KeyRebind* anyMatch = nullptr;
 
     for (const auto& rebind : rebinds) {
-        if (!rebind.enabled || rebind.fromKey == 0 || rebind.toKey == 0) {
+        if (!rebind.enabled || rebind.fromKey == 0) {
+            continue;
+        }
+        if (rebind.toKey == 0 && !IsConsumeOnlyScrollWheelRebind(rebind)) {
             continue;
         }
         if (!predicate(rebind)) {
@@ -2691,6 +2699,10 @@ InputHandlerResult HandleInjectedMenuMaskKey(HWND hWnd, UINT uMsg, WPARAM wParam
 static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, DWORD rawVkCode, DWORD vkCode,
                                                   bool isMouseButton, bool isKeyDown, bool isAutoRepeatKeyDown,
                                                   const KeyRebind& rebind) {
+    if (IsConsumeOnlyScrollWheelRebind(rebind)) {
+        return { true, 0 };
+    }
+
     const bool shiftLayerActive = IsShiftLayerActiveForRebind(rebind, vkCode, rawVkCode, isKeyDown);
     const DWORD defaultTextVK = NormalizeModifierVkFromConfig(rebind.fromKey);
     const DWORD effectiveCustomOutputVk = ResolveEffectiveCustomOutputVk(rebind, shiftLayerActive);

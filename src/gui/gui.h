@@ -122,6 +122,7 @@ void RequestGuiTestKeyboardLayoutConfirmRemoveCustomKey();
 void RequestGuiTestKeyboardLayoutOpenCustomInputPicker();
 void RequestGuiTestKeyboardLayoutSelectCustomInputScan(DWORD scan);
 void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode);
+void RequestGuiTestKeyboardLayoutSetScrollWheelEnabled(bool enabled);
 void RequestGuiTestKeyboardLayoutSetCursorStateView(GuiTestKeyboardLayoutCursorStateView view);
 void RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget target);
 void RequestGuiTestKeyboardLayoutSetShiftLayerUppercase(bool enabled);

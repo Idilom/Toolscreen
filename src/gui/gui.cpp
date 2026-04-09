@@ -1909,6 +1909,7 @@ bool s_guiTestKeyboardLayoutConfirmRemoveCustomKeyRequested = false;
 bool s_guiTestKeyboardLayoutOpenCustomInputPickerRequested = false;
 DWORD s_guiTestKeyboardLayoutSelectCustomInputScanRequest = 0;
 int s_guiTestKeyboardLayoutSplitModeRequest = -1;
+int s_guiTestKeyboardLayoutScrollWheelEnabledRequest = -1;
 int s_guiTestKeyboardLayoutCursorStateViewRequest = -1;
 GuiTestKeyboardLayoutBindTarget s_guiTestKeyboardLayoutBindTargetRequest = GuiTestKeyboardLayoutBindTarget::None;
 int s_guiTestKeyboardLayoutShiftUppercaseRequest = -1;
@@ -2003,6 +2004,12 @@ DWORD ConsumeGuiTestKeyboardLayoutSelectCustomInputScanRequest() {
 int ConsumeGuiTestKeyboardLayoutSplitModeRequest() {
     const int request = s_guiTestKeyboardLayoutSplitModeRequest;
     s_guiTestKeyboardLayoutSplitModeRequest = -1;
+    return request;
+}
+
+int ConsumeGuiTestKeyboardLayoutScrollWheelEnabledRequest() {
+    const int request = s_guiTestKeyboardLayoutScrollWheelEnabledRequest;
+    s_guiTestKeyboardLayoutScrollWheelEnabledRequest = -1;
     return request;
 }
 
@@ -2332,6 +2339,10 @@ void RequestGuiTestKeyboardLayoutSelectCustomInputScan(DWORD scan) {
 
 void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode) {
     s_guiTestKeyboardLayoutSplitModeRequest = splitMode ? 1 : 0;
+}
+
+void RequestGuiTestKeyboardLayoutSetScrollWheelEnabled(bool enabled) {
+    s_guiTestKeyboardLayoutScrollWheelEnabledRequest = enabled ? 1 : 0;
 }
 
 void RequestGuiTestKeyboardLayoutSetCursorStateView(GuiTestKeyboardLayoutCursorStateView view) {

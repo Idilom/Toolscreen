@@ -983,6 +983,66 @@ void RunKeyRebindGuiKeyboardLayoutScrollTriggerLabelMappingTest(TestRunMode runM
                                              VK_TOOLSCREEN_SCROLL_UP, 0x0001, "SCROLL UP", runMode);
 }
 
+void RunKeyRebindGuiKeyboardLayoutScrollSourcePopupOptionsTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (SkipIfNoModernGuiTestGL(window)) { return; }
+    PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_scroll_source_popup_options");
+
+    OpenKeyboardLayoutContext(window, VK_TOOLSCREEN_SCROLL_UP);
+    ResetGuiTestInteractionRects();
+    RenderKeyboardInputsFrame(window);
+
+    GuiTestInteractionRect popupRect;
+    Expect(GetGuiTestInteractionRect("inputs.keyboard_layout.popup.scroll_enabled", popupRect),
+        "Expected the scroll-wheel keyboard-layout popup to expose the default scroll option.");
+    Expect(GetGuiTestInteractionRect("inputs.keyboard_layout.popup.scroll_disabled", popupRect),
+        "Expected the scroll-wheel keyboard-layout popup to expose the disabled option.");
+    Expect(!GetGuiTestInteractionRect("inputs.keyboard_layout.popup.full_rebind", popupRect),
+        "Expected the scroll-wheel keyboard-layout popup to hide the full rebind option.");
+    Expect(!GetGuiTestInteractionRect("inputs.keyboard_layout.popup.split_rebind", popupRect),
+        "Expected the scroll-wheel keyboard-layout popup to hide the split rebind option.");
+    Expect(!GetGuiTestInteractionRect("inputs.keyboard_layout.popup.output", popupRect),
+        "Expected the scroll-wheel keyboard-layout popup to hide the output binding row.");
+    Expect(!GetGuiTestInteractionRect("inputs.keyboard_layout.popup.types", popupRect),
+        "Expected the scroll-wheel keyboard-layout popup to hide the types binding row.");
+    Expect(!GetGuiTestInteractionRect("inputs.keyboard_layout.popup.triggers", popupRect),
+        "Expected the scroll-wheel keyboard-layout popup to hide the triggers binding row.");
+
+    RequestGuiTestKeyboardLayoutSetScrollWheelEnabled(false);
+    RenderKeyboardInputsFrame(window);
+
+    Expect(g_config.keyRebinds.rebinds.size() == 1,
+        "Expected disabling the scroll-wheel source in the keyboard-layout popup to create exactly one override rebind.");
+    const KeyRebind& disabledRebind = g_config.keyRebinds.rebinds.front();
+    Expect(disabledRebind.fromKey == VK_TOOLSCREEN_SCROLL_UP,
+        "Expected disabling the scroll-wheel source in the keyboard-layout popup to keep Scroll Up as the source key.");
+        Expect(disabledRebind.toKey == 0,
+            "Expected disabling the scroll-wheel source in the keyboard-layout popup to store a consume-only override.");
+        Expect(disabledRebind.enabled,
+            "Expected disabling the scroll-wheel source in the keyboard-layout popup to keep the consume-only override active.");
+    Expect(disabledRebind.cursorState == kKeyRebindCursorStateAny,
+        "Expected disabling the scroll-wheel source in the keyboard-layout popup to target the active cursor-state view.");
+
+        g_showGui.store(false, std::memory_order_release);
+        PublishConfigSnapshot();
+        ScopedRebindMessageCapture capture(window.hwnd());
+        const InputHandlerResult blockedWheelResult =
+         HandleKeyRebinding(window.hwnd(), WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA), MAKELPARAM(320, 240));
+        Expect(blockedWheelResult.consumed,
+            "Expected disabling the scroll-wheel source in the keyboard-layout popup to consume scroll wheel input.");
+        Expect(capture.messages.empty(),
+            "Expected disabling the scroll-wheel source in the keyboard-layout popup to avoid forwarding wheel messages.");
+        g_showGui.store(true, std::memory_order_release);
+
+    ResetGuiTestInteractionRects();
+    RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutSetScrollWheelEnabled(true);
+        RenderKeyboardInputsFrame(window);
+
+    Expect(g_config.keyRebinds.rebinds.empty(),
+        "Expected re-selecting the default scroll option in the keyboard-layout popup to clear the temporary scroll override.");
+}
+
 void RunKeyRebindGuiKeyboardLayoutCursorStateOverrideTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     if (SkipIfNoModernGuiTestGL(window)) { return; }

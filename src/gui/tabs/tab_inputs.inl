@@ -2529,6 +2529,14 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             syncUnicodeEditBuffers();
                         };
 
+                        auto eraseRebindsForKeyAndCursorState = [&](DWORD fromVk, const char* cursorStateId) {
+                            for (int eraseIdx = (int)g_config.keyRebinds.rebinds.size() - 1; eraseIdx >= 0; --eraseIdx) {
+                                const auto& rebind = g_config.keyRebinds.rebinds[eraseIdx];
+                                if (rebind.fromKey != fromVk || rebind.cursorState != cursorStateId) continue;
+                                eraseRebindIndex(eraseIdx);
+                            }
+                        };
+
                         auto findBestRebindIndexForKey = [&](DWORD fromVk) -> int {
                             return findBestRebindIndexForCursorState(fromVk, getKeyboardLayoutCursorStateViewId());
                         };
@@ -2618,6 +2626,21 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             if (r.shiftLayerOutputVK == 0) {
                                 r.shiftLayerOutputVK = baseTypesVk;
                             }
+                        };
+
+                        auto resetLayoutRebindToDefault = [&](KeyRebind& r, bool enabled) {
+                            r.toKey = r.fromKey;
+                            r.customOutputVK = 0;
+                            r.customOutputUnicode = 0;
+                            r.customOutputScanCode = 0;
+                            r.baseOutputShifted = false;
+                            r.shiftLayerEnabled = false;
+                            r.shiftLayerUsesCapsLock = false;
+                            r.shiftLayerOutputVK = 0;
+                            r.shiftLayerOutputUnicode = 0;
+                            r.shiftLayerOutputShifted = false;
+                            r.useCustomOutput = false;
+                            r.enabled = enabled;
                         };
 
                         auto setFullRebindState = [&](KeyRebind& r, DWORD originalVk) {
@@ -3094,6 +3117,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         const std::string typesShiftValue = typesShiftValueFor(rbPtr, s_layoutContextVk);
                         const std::string triggersValue = triggersValueFor(rbPtr, s_layoutContextVk);
                         const bool disableTypeControls = cannotTypeFor(rbPtr, s_layoutContextVk);
+                        const bool layoutContextIsScrollWheel = isScrollWheelVk(s_layoutContextVk);
                         const bool layoutContextKeyIsCustom = containsLayoutSourceKey(g_config.keyRebinds.layoutExtraKeys, s_layoutContextVk) ||
                                                               (!containsLayoutSourceKey(builtInLayoutKeys, s_layoutContextVk) &&
                                                                countRebindsForSourceKey(s_layoutContextVk) > 0);
@@ -3104,6 +3128,35 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             s_layoutCustomInputCapturePending = true;
                             s_layoutCustomInputCaptureLastSeq = GetLatestBindingInputSequence();
                             MarkRebindBindingActive();
+                        };
+
+                        auto getScrollWheelPopupLabel = [&](DWORD vk) -> const char* {
+                            return (vk == VK_TOOLSCREEN_SCROLL_DOWN) ? trc("inputs.scroll_down_label") : trc("inputs.scroll_up_label");
+                        };
+
+                        auto isScrollWheelConsumeOnlyRebind = [&](const KeyRebind* rb) -> bool {
+                            return rb != nullptr && isScrollWheelVk(rb->fromKey) && rb->enabled && rb->toKey == 0;
+                        };
+
+                        auto setScrollWheelPopupState = [&](bool enabled) {
+                            eraseRebindsForKeyAndCursorState(s_layoutContextVk, currentCursorStateId);
+                            s_layoutContextPreferredIndex = -1;
+                            idx = -1;
+
+                            if (!enabled) {
+                                idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                s_layoutContextPreferredIndex = idx;
+                                if (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) {
+                                    auto& r = g_config.keyRebinds.rebinds[idx];
+                                    resetLayoutRebindToDefault(r, true);
+                                    r.toKey = 0;
+                                    g_configIsDirty = true;
+                                    std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
+                                    RebuildHotkeyMainKeys_Internal();
+                                }
+                            }
+
+                            rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
                         };
 
                         if (allowCustomLayoutInputPicker && s_layoutCustomInputCapturePending) {
@@ -3161,6 +3214,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 }
                             }
                             rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
+                        }
+
+                        if (const int requestedScrollWheelEnabled = ConsumeGuiTestKeyboardLayoutScrollWheelEnabledRequest();
+                            layoutContextIsScrollWheel && requestedScrollWheelEnabled != -1) {
+                            setScrollWheelPopupState(requestedScrollWheelEnabled != 0);
                         }
 
                         if (const GuiTestKeyboardLayoutBindTarget requestedBindTarget = ConsumeGuiTestKeyboardLayoutBindTargetRequest();
@@ -3240,39 +3298,59 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         }
 #endif
 
-                        const ImVec2 fullRebindRectMin = ImGui::GetCursorScreenPos();
-                        if (ImGui::RadioButton(trc("inputs.full_rebind_label"), !s_layoutContextSplitMode)) {
-                            s_layoutContextSplitMode = false;
-                            if (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) {
-                                auto& r = g_config.keyRebinds.rebinds[idx];
-                                setFullRebindState(r, r.fromKey);
-                                g_configIsDirty = true;
+                        if (layoutContextIsScrollWheel) {
+                            const bool scrollWheelDisabled = isScrollWheelConsumeOnlyRebind(rbPtr);
+                            const std::string scrollWheelLabel = getScrollWheelPopupLabel(s_layoutContextVk);
+                            const ImVec2 scrollEnabledRectMin = ImGui::GetCursorScreenPos();
+                            if (ImGui::RadioButton(scrollWheelLabel.c_str(), !scrollWheelDisabled)) {
+                                setScrollWheelPopupState(true);
+                            }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                            recordPopupInteractionRect("inputs.keyboard_layout.popup.scroll_enabled", scrollEnabledRectMin,
+                                                       popupToggleFallbackMax(scrollWheelLabel.c_str(), scrollEnabledRectMin));
+#endif
+                            const ImVec2 scrollDisabledRectMin = ImGui::GetCursorScreenPos();
+                            if (ImGui::RadioButton(trc("label.disabled"), scrollWheelDisabled)) {
+                                setScrollWheelPopupState(false);
+                            }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                            recordPopupInteractionRect("inputs.keyboard_layout.popup.scroll_disabled", scrollDisabledRectMin,
+                                                       popupToggleFallbackMax(trc("label.disabled"), scrollDisabledRectMin));
+#endif
+                        } else {
+                            const ImVec2 fullRebindRectMin = ImGui::GetCursorScreenPos();
+                            if (ImGui::RadioButton(trc("inputs.full_rebind_label"), !s_layoutContextSplitMode)) {
+                                s_layoutContextSplitMode = false;
+                                if (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) {
+                                    auto& r = g_config.keyRebinds.rebinds[idx];
+                                    setFullRebindState(r, r.fromKey);
+                                    g_configIsDirty = true;
 
-                                if (isNoOpRebindForKey(r, r.fromKey)) {
-                                    eraseRebindIndex(idx);
-                                    s_layoutContextPreferredIndex = -1;
-                                    idx = -1;
+                                    if (isNoOpRebindForKey(r, r.fromKey)) {
+                                        eraseRebindIndex(idx);
+                                        s_layoutContextPreferredIndex = -1;
+                                        idx = -1;
+                                    }
                                 }
                             }
-                        }
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
-                        recordPopupInteractionRect("inputs.keyboard_layout.popup.full_rebind", fullRebindRectMin,
-                                                   popupToggleFallbackMax(trc("inputs.full_rebind_label"), fullRebindRectMin));
+                            recordPopupInteractionRect("inputs.keyboard_layout.popup.full_rebind", fullRebindRectMin,
+                                                       popupToggleFallbackMax(trc("inputs.full_rebind_label"), fullRebindRectMin));
 #endif
-                        const ImVec2 splitRebindRectMin = ImGui::GetCursorScreenPos();
-                        if (ImGui::RadioButton(trc("inputs.split_rebind_label"), s_layoutContextSplitMode)) {
-                            s_layoutContextSplitMode = true;
-                        }
+                            const ImVec2 splitRebindRectMin = ImGui::GetCursorScreenPos();
+                            if (ImGui::RadioButton(trc("inputs.split_rebind_label"), s_layoutContextSplitMode)) {
+                                s_layoutContextSplitMode = true;
+                            }
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
-                        recordPopupInteractionRect("inputs.keyboard_layout.popup.split_rebind", splitRebindRectMin,
-                                                   popupToggleFallbackMax(trc("inputs.split_rebind_label"), splitRebindRectMin));
+                            recordPopupInteractionRect("inputs.keyboard_layout.popup.split_rebind", splitRebindRectMin,
+                                                       popupToggleFallbackMax(trc("inputs.split_rebind_label"), splitRebindRectMin));
 #endif
 
-                        rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
-                        ImGui::Dummy(ImVec2(0.0f, 4.0f * popupUiScale));
-                        ImGui::Separator();
+                            rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
+                            ImGui::Dummy(ImVec2(0.0f, 4.0f * popupUiScale));
+                            ImGui::Separator();
 
-                        auto drawPopupRowLabel = [&](const char* tooltip, const char* label) {
+                            auto drawPopupRowLabel = [&](const char* tooltip, const char* label) {
                             const float rowBaseY = ImGui::GetCursorPosY();
                             const float markerYOffset = 2.0f * popupUiScale;
                             const float labelYOffset = -1.0f * popupUiScale;
@@ -3570,6 +3648,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                             ImGui::EndTable();
                         }
+                        }
 
                         if (openCustomInputPickerPopup) {
                             ImGui::SetNextWindowPos(customInputPickerPopupAnchor, ImGuiCond_Appearing);
@@ -3793,27 +3872,19 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 ImGui::EndPopup();
                         }
 
-                        if (cannotTypeFor(rbPtr, s_layoutContextVk)) {
+                        if (!layoutContextIsScrollWheel && cannotTypeFor(rbPtr, s_layoutContextVk)) {
                             ImGui::TextDisabled(trc("inputs.cannot_type"));
                         }
 
-                        ImGui::Spacing();
+                        if (!layoutContextIsScrollWheel) {
+                            ImGui::Spacing();
+                        }
 
-                        if (ImGui::Button((tr("label.reset") + "##layout_reset").c_str(), ImVec2(102.0f * popupUiScale, 0))) {
+                        if (!layoutContextIsScrollWheel &&
+                            ImGui::Button((tr("label.reset") + "##layout_reset").c_str(), ImVec2(102.0f * popupUiScale, 0))) {
                             if (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) {
                                 auto& r = g_config.keyRebinds.rebinds[idx];
-                                r.toKey = r.fromKey;
-                                r.customOutputVK = 0;
-                                r.customOutputUnicode = 0;
-                                r.customOutputScanCode = 0;
-                                r.baseOutputShifted = false;
-                                r.shiftLayerEnabled = false;
-                                r.shiftLayerUsesCapsLock = false;
-                                r.shiftLayerOutputVK = 0;
-                                r.shiftLayerOutputUnicode = 0;
-                                r.shiftLayerOutputShifted = false;
-                                r.useCustomOutput = false;
-                                r.enabled = true;
+                                resetLayoutRebindToDefault(r, true);
                                 g_configIsDirty = true;
 
                                 if (idx >= 0 && idx < (int)s_rebindUnicodeTextEdit.size()) s_rebindUnicodeTextEdit[idx].clear();
@@ -3828,7 +3899,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             }
                         }
 
-                        if (layoutContextKeyIsCustom) {
+                        if (!layoutContextIsScrollWheel && layoutContextKeyIsCustom) {
                             ImGui::SameLine();
                             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.36f, 0.14f, 0.14f, 0.90f));
                             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.16f, 0.16f, 0.95f));
@@ -4067,8 +4138,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     {
                         ImGui::Spacing();
                         ImGui::SeparatorText(trc("inputs.rebinds"));
+                        auto isScrollWheelConsumeOnlyRebind = [&](const KeyRebind& r) -> bool {
+                            return isScrollWheelVk(r.fromKey) && r.enabled && r.toKey == 0;
+                        };
                         auto isNoOp = [&](const KeyRebind& r) -> bool {
-                            if (r.fromKey == 0 || r.toKey == 0) return true;
+                            if (r.fromKey == 0) return true;
+                            if (isScrollWheelConsumeOnlyRebind(r)) return false;
+                            if (r.toKey == 0) return true;
                             if (r.toKey != r.fromKey) return false;
                             if (r.customOutputVK != 0 && r.customOutputVK != r.toKey) return false;
                             if (r.customOutputUnicode != 0) return false;
@@ -4079,6 +4155,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         };
                         auto renderRebindSummaryLine = [&](const KeyRebind& r) {
                             std::string fromStr = VkToString(r.fromKey);
+                            if (isScrollWheelConsumeOnlyRebind(r)) {
+                                ImGui::Text("%s -> %s", fromStr.c_str(), trc("label.disabled"));
+                                return;
+                            }
+
                             std::string typesStr = typesValueForDisplay(&r, r.fromKey);
                             if (hasShiftLayerOverride(&r, r.fromKey)) {
                                 const std::string shiftTypesStr = typesShiftValueForDisplay(&r, r.fromKey);
@@ -4094,7 +4175,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         auto renderRebindSummarySection = [&](const char* cursorStateId, const char* label) -> bool {
                             bool sectionShown = false;
                             for (const auto& r : g_config.keyRebinds.rebinds) {
-                                if (r.fromKey == 0 || r.toKey == 0) continue;
+                                if (r.fromKey == 0) continue;
+                                if (r.toKey == 0 && !isScrollWheelConsumeOnlyRebind(r)) continue;
                                 if (isNoOp(r)) continue;
                                 if (NormalizeKeyRebindCursorStateId(r.cursorState) != cursorStateId) continue;
 

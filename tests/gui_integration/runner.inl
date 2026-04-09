@@ -74,6 +74,7 @@ const auto& GetTestCaseDefinitions() {
         {"key-rebind-gui-keyboard-layout-mouse-trigger-label-mapping", &RunKeyRebindGuiKeyboardLayoutMouseTriggerLabelMappingTest},
         {"key-rebind-gui-keyboard-layout-xbutton-trigger-label-mapping", &RunKeyRebindGuiKeyboardLayoutXButtonTriggerLabelMappingTest},
         {"key-rebind-gui-keyboard-layout-scroll-trigger-label-mapping", &RunKeyRebindGuiKeyboardLayoutScrollTriggerLabelMappingTest},
+        {"key-rebind-gui-keyboard-layout-scroll-source-popup-options", &RunKeyRebindGuiKeyboardLayoutScrollSourcePopupOptionsTest},
         {"key-rebind-gui-keyboard-layout-cursor-state-override", &RunKeyRebindGuiKeyboardLayoutCursorStateOverrideTest},
         {"key-rebind-gui-keyboard-layout-add-custom-bind-button", &RunKeyRebindGuiKeyboardLayoutAddCustomBindButtonTest},
         {"key-rebind-gui-keyboard-layout-remove-custom-bind-button", &RunKeyRebindGuiKeyboardLayoutRemoveCustomBindButtonTest},
