@@ -210,11 +210,11 @@ jobs:
           $afterSizeBytes = (Get-Item $pdbPath).Length
           Write-Host ('Reduced Toolscreen.pdb from {0} MiB to {1} MiB using PDBCopy.' -f [math]::Round($beforeSizeBytes / 1MB, 2), [math]::Round($afterSizeBytes / 1MB, 2))
 
-      - name: Validate PE metadata
+      - name: Validate unsigned PE metadata
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
         shell: pwsh
         run: |
-          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts\verify_pe_metadata.ps1'
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts\verify_unsigned_pe_metadata.ps1'
           $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
           & $scriptPath -ArtifactDirectory $artifactDirectory
 
