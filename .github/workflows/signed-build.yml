@@ -142,7 +142,8 @@ jobs:
 
       - name: Run CLI integration tests
         shell: pwsh
-        run: & "$env:GITHUB_WORKSPACE\$env:TOOLSCREEN_ARTIFACT_DIR\toolscreen_gui_integration_tests.exe" --run-all
+        run: |
+          & "$env:GITHUB_WORKSPACE\$env:TOOLSCREEN_ARTIFACT_DIR\toolscreen_gui_integration_tests.exe" --run-all
 
       - name: Upload DLL for SignPath
         id: signpath_dll_upload
