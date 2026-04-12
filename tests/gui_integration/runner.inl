@@ -69,6 +69,8 @@ const auto& GetTestCaseDefinitions() {
         {"key-rebind-runtime-shift-types-disabled-still-triggers", &RunKeyRebindRuntimeShiftTypesDisabledStillTriggersTest},
         {"key-rebind-runtime-mouse-source-emits-key-and-char", &RunKeyRebindRuntimeMouseSourceEmitsKeyAndCharTest},
         {"key-rebind-runtime-modifier-output-released-on-deactivate", &RunKeyRebindRuntimeModifierOutputReleasedOnDeactivateTest},
+        {"key-rebind-runtime-custom-modifier-output-uses-synthetic-key", &RunKeyRebindRuntimeCustomModifierOutputUsesSyntheticKeyTest},
+        {"key-rebind-runtime-wndproc-keeps-synthetic-modifier-held", &RunKeyRebindRuntimeWndProcKeepsSyntheticModifierHeldTest},
         {"key-rebind-runtime-disabled-rebind-ignored", &RunKeyRebindRuntimeDisabledRebindIgnoredTest},
         {"key-rebind-runtime-cursor-state-priority-and-fallback", &RunKeyRebindRuntimeCursorStatePriorityAndFallbackTest},
         {"key-rebind-gui-keyboard-layout-full-bind-and-trigger", &RunKeyRebindGuiKeyboardLayoutFullBindAndTriggerTest},

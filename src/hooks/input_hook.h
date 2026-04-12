@@ -1,9 +1,11 @@
 #pragma once
 
+#include <atomic>
 #include <Windows.h>
 #include <string>
 
 extern WNDPROC g_originalWndProc;
+extern std::atomic<HWND> g_subclassedHwnd;
 
 struct InputHandlerResult {
     bool consumed;

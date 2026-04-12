@@ -90,12 +90,14 @@ static std::vector<SyntheticRebindKeyEventForTest> s_syntheticRebindKeyEventsFor
 
 static bool SendMenuMaskKeyTap();
 static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown);
+static bool SendSyntheticRebindOutput(UINT scanCodeWithFlags, bool keyDown);
 static bool HotkeyUsesWindowsKey(const std::vector<DWORD>& keys);
 static bool ShouldMaskWindowsKeyForHotkey(const std::vector<DWORD>& keys, bool isKeyDown, bool isAutoRepeatKeyDown);
 static uint64_t BuildSyntheticRebindOutputSourceId(DWORD vkCode, DWORD rawVkCode, bool isMouseButton);
 static void TrackSyntheticRebindOutputHold(uint64_t sourceId, UINT outputScanCode);
 static bool ReleaseTrackedSyntheticRebindOutputHold(uint64_t sourceId);
 static void ReleaseAllTrackedSyntheticRebindOutputHolds();
+static void ReleaseSuppressedLowLevelRebindKeys(HWND hWnd);
 
 static bool MatchesConfiguredGameStateCondition(const std::vector<std::string>& configuredStates, const std::string& gameState) {
     if (configuredStates.empty()) {
@@ -387,9 +389,9 @@ static DWORD ResolveEffectiveCustomOutputVk(const KeyRebind& rebind, bool shiftL
     return 0;
 }
 
-static bool IsModifierScanCode(UINT scanCodeWithFlags) {
+static DWORD ResolveModifierVkFromScanCode(UINT scanCodeWithFlags) {
     const UINT scanLow = (scanCodeWithFlags & 0xFF);
-    if (scanLow == 0) return false;
+    if (scanLow == 0) return 0;
 
     static thread_local std::unordered_map<UINT, DWORD> s_scanCodeToModifierVk;
 
@@ -405,11 +407,17 @@ static bool IsModifierScanCode(UINT scanCodeWithFlags) {
         if (mappedVk != 0) {
             mappedVk = NormalizeModifierVkFromConfig(mappedVk, scanCodeWithFlags);
         }
+        if (!IsModifierVk(mappedVk)) {
+            mappedVk = 0;
+        }
         s_scanCodeToModifierVk.emplace(scanCodeWithFlags, mappedVk);
     }
-    if (mappedVk == 0) return false;
 
-    return IsModifierVk(mappedVk);
+    return mappedVk;
+}
+
+static bool IsModifierScanCode(UINT scanCodeWithFlags) {
+    return ResolveModifierVkFromScanCode(scanCodeWithFlags) != 0;
 }
 
 static bool TryGetClientSize(HWND hWnd, int& outW, int& outH) {
@@ -2590,7 +2598,7 @@ static void UninstallLowLevelKeyboardHook() {
 static void UpdateLowLevelKeyboardHookInstalledState() {
     if (g_isShuttingDown.load(std::memory_order_acquire) || !HasDeepSuppressionEligibleEnabledRebind()) {
         const HWND targetHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
-        ReleaseActiveLowLevelRebindKeys(targetHwnd);
+        ReleaseSuppressedLowLevelRebindKeys(targetHwnd);
         UninstallLowLevelKeyboardHook();
         return;
     }
@@ -2639,10 +2647,10 @@ static void TrackSyntheticRebindOutputHold(uint64_t sourceId, UINT outputScanCod
     }
 
     if (releaseScanCode != 0) {
-        (void)SendSynthKeyByScanCode(releaseScanCode, false);
+        (void)SendSyntheticRebindOutput(releaseScanCode, false);
     }
     if (sendKeyDown) {
-        (void)SendSynthKeyByScanCode(outputScanCode, true);
+        (void)SendSyntheticRebindOutput(outputScanCode, true);
     }
 }
 
@@ -2673,7 +2681,7 @@ static bool ReleaseTrackedSyntheticRebindOutputHold(uint64_t sourceId) {
     }
 
     if (releaseScanCode != 0) {
-        (void)SendSynthKeyByScanCode(releaseScanCode, false);
+        (void)SendSyntheticRebindOutput(releaseScanCode, false);
     }
     return true;
 }
@@ -2699,13 +2707,11 @@ static void ReleaseAllTrackedSyntheticRebindOutputHolds() {
     }
 
     for (const UINT scanCodeWithFlags : scanCodesToRelease) {
-        (void)SendSynthKeyByScanCode(scanCodeWithFlags, false);
+        (void)SendSyntheticRebindOutput(scanCodeWithFlags, false);
     }
 }
 
-void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
-    s_systemAltTabPassthroughActive = false;
-
+static void ReleaseSuppressedLowLevelRebindKeys(HWND hWnd) {
     std::vector<LowLevelSuppressedKeyState> activeKeys;
     {
         std::lock_guard<std::mutex> lock(s_lowLevelSuppressedKeysMutex);
@@ -2724,15 +2730,17 @@ void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
             (void)HandleKeyRebinding(hWnd, msg, static_cast<WPARAM>(state.rawVk), msgLParam);
         }
     }
+}
+
+void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
+    s_systemAltTabPassthroughActive = false;
+
+    ReleaseSuppressedLowLevelRebindKeys(hWnd);
 
     ReleaseAllTrackedSyntheticRebindOutputHolds();
 }
 
 static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
-#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
-    s_syntheticRebindKeyEventsForTests.push_back(SyntheticRebindKeyEventForTest{ scanCodeWithFlags, keyDown });
-#endif
-
     INPUT in{};
     in.type = INPUT_KEYBOARD;
     in.ki.wVk = 0;
@@ -2744,6 +2752,14 @@ static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
     in.ki.time = 0;
     in.ki.dwExtraInfo = kToolscreenInjectedExtraInfo;
     return ::SendInput(1, &in, sizeof(INPUT)) == 1;
+}
+
+static bool SendSyntheticRebindOutput(UINT scanCodeWithFlags, bool keyDown) {
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+    s_syntheticRebindKeyEventsForTests.push_back(SyntheticRebindKeyEventForTest{ scanCodeWithFlags, keyDown });
+#endif
+
+    return SendSynthKeyByScanCode(scanCodeWithFlags, keyDown);
 }
 
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
@@ -2812,7 +2828,7 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
     DWORD triggerVK = IsTriggerOutputDisabled(rebind)
                           ? 0
                           : NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
-    if (isMouseButton && normalizedCustomOutputVk != 0 && IsNonCharKeyVk(normalizedCustomOutputVk)) {
+    if (normalizedCustomOutputVk != 0 && IsNonCharKeyVk(normalizedCustomOutputVk)) {
         triggerVK = normalizedCustomOutputVk;
     }
 
@@ -2980,13 +2996,13 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
         }
 
         if (sourceIsScrollWheel) {
-            (void)SendSynthKeyByScanCode(outputScanCode, true);
-            (void)SendSynthKeyByScanCode(outputScanCode, false);
+            (void)SendSyntheticRebindOutput(outputScanCode, true);
+            (void)SendSyntheticRebindOutput(outputScanCode, false);
         } else {
             if (isKeyDown) {
                 TrackSyntheticRebindOutputHold(syntheticOutputSourceId, outputScanCode);
             } else if (!ReleaseTrackedSyntheticRebindOutputHold(syntheticOutputSourceId)) {
-                (void)SendSynthKeyByScanCode(outputScanCode, false);
+                (void)SendSyntheticRebindOutput(outputScanCode, false);
             }
         }
 

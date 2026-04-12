@@ -815,6 +815,96 @@ void RunKeyRebindRuntimeMouseSourceEmitsKeyAndCharTest(TestRunMode runMode = Tes
             "Expected focus loss to clear all held synthetic rebind outputs.");
     }
 
+    void RunKeyRebindRuntimeCustomModifierOutputUsesSyntheticKeyTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        KeyRebind rebind = MakeEnabledRebind('A', 'B');
+        rebind.useCustomOutput = true;
+        rebind.customOutputVK = VK_LSHIFT;
+        PrepareRebindRuntimeCase("key_rebind_runtime_custom_modifier_output_uses_synthetic_key", { rebind });
+        ScopedRebindMessageCapture capture(window.hwnd());
+
+        ResetSyntheticRebindKeyEventsForTest();
+        Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+            "Expected the synthetic rebind key event log to start empty for the custom modifier-output test.");
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+            "Expected no held synthetic outputs before the custom modifier-output test runs.");
+
+        ScopedKeyboardStateOverride keyboardState;
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.SetToggle(VK_CAPITAL, false);
+        keyboardState.Apply();
+
+        const UINT expectedScanCodeWithFlags = static_cast<UINT>(MapVirtualKeyW(VK_LSHIFT, MAPVK_VK_TO_VSC_EX));
+        const LPARAM sourceLParam = BuildTestKeyboardMessageLParam('A', true);
+
+        const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', sourceLParam);
+        Expect(keyDownResult.consumed, "Expected a custom modifier-output rebind to consume WM_KEYDOWN.");
+        Expect(capture.messages.empty(), "Expected a custom modifier-output rebind to avoid forwarding WM_KEYDOWN messages.");
+        Expect(GetSyntheticRebindKeyEventCountForTest() == 1,
+            "Expected a custom modifier-output rebind to synthesize one key-down event.");
+        ExpectSyntheticRebindKeyEvent(0, expectedScanCodeWithFlags, true, "Custom modifier-output rebind WM_KEYDOWN");
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 1,
+            "Expected a custom modifier-output rebind to track one held synthetic output after key down.");
+
+        capture.Clear();
+        const InputHandlerResult keyUpResult =
+            HandleKeyRebinding(window.hwnd(), WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false));
+        Expect(keyUpResult.consumed, "Expected a custom modifier-output rebind to consume WM_KEYUP.");
+        Expect(capture.messages.empty(), "Expected a custom modifier-output rebind to avoid forwarding WM_KEYUP messages.");
+        Expect(GetSyntheticRebindKeyEventCountForTest() == 2,
+            "Expected a custom modifier-output rebind to synthesize a matching key-up event.");
+        ExpectSyntheticRebindKeyEvent(1, expectedScanCodeWithFlags, false, "Custom modifier-output rebind WM_KEYUP");
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+            "Expected the custom modifier-output rebind to clear held synthetic output state on key up.");
+    }
+
+    void RunKeyRebindRuntimeWndProcKeepsSyntheticModifierHeldTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        KeyRebind rebind = MakeEnabledRebind('N', VK_LSHIFT);
+        PrepareRebindRuntimeCase("key_rebind_runtime_wndproc_keeps_synthetic_modifier_held", { rebind });
+        ScopedRebindMessageCapture capture(window.hwnd());
+
+        const HWND previousSubclassedHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+        g_subclassedHwnd.store(window.hwnd(), std::memory_order_release);
+
+        ResetSyntheticRebindKeyEventsForTest();
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+            "Expected no held synthetic outputs before the subclassed WndProc modifier-hold test runs.");
+
+        const UINT expectedScanCodeWithFlags = static_cast<UINT>(MapVirtualKeyW(VK_LSHIFT, MAPVK_VK_TO_VSC_EX));
+        const LPARAM sourceDownLParam = BuildTestKeyboardMessageLParam('N', true);
+        const LPARAM sourceUpLParam = BuildTestKeyboardMessageLParam('N', false);
+
+        try {
+            const LRESULT keyDownResult = SubclassedWndProc(window.hwnd(), WM_KEYDOWN, 'N', sourceDownLParam);
+            Expect(keyDownResult == 0 || keyDownResult == kCapturedWndProcResult,
+                "Expected the subclassed WndProc modifier-hold test to return a handled result for WM_KEYDOWN.");
+            Expect(GetSyntheticRebindKeyEventCountForTest() == 1,
+                "Expected the subclassed WndProc modifier-hold test to synthesize one key-down event.");
+            ExpectSyntheticRebindKeyEvent(0, expectedScanCodeWithFlags, true, "Subclassed WndProc modifier-hold WM_KEYDOWN");
+            Expect(GetActiveSyntheticRebindOutputCountForTest() == 1,
+                "Expected the subclassed WndProc modifier-hold test to keep the synthetic modifier held after WM_KEYDOWN.");
+
+            (void)SubclassedWndProc(window.hwnd(), WM_MOUSEMOVE, 0, MAKELPARAM(32, 48));
+            Expect(GetActiveSyntheticRebindOutputCountForTest() == 1,
+                "Expected unrelated WndProc traffic to preserve a held synthetic modifier output.");
+
+            const LRESULT keyUpResult = SubclassedWndProc(window.hwnd(), WM_KEYUP, 'N', sourceUpLParam);
+            Expect(keyUpResult == 0 || keyUpResult == kCapturedWndProcResult,
+                "Expected the subclassed WndProc modifier-hold test to return a handled result for WM_KEYUP.");
+            Expect(GetSyntheticRebindKeyEventCountForTest() == 2,
+                "Expected the subclassed WndProc modifier-hold test to synthesize a matching key-up event.");
+            ExpectSyntheticRebindKeyEvent(1, expectedScanCodeWithFlags, false, "Subclassed WndProc modifier-hold WM_KEYUP");
+            Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+                "Expected the subclassed WndProc modifier-hold test to release the synthetic modifier on WM_KEYUP.");
+        } catch (...) {
+            g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
+            throw;
+        }
+
+        g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
+    }
+
 void RunKeyRebindRuntimeDisabledRebindIgnoredTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     KeyRebind rebind = MakeEnabledRebind('A', 'B');
