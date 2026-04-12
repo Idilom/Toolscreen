@@ -25,9 +25,15 @@ concurrency:
 jobs:
   build_core:
     runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: write
     env:
       TOOLSCREEN_BUILD_DIR: 'out/build-ci'
       TOOLSCREEN_ARTIFACT_DIR: 'out/build-ci/bin/Release'
+      TOOLSCREEN_PACKAGING_BUILD_DIR: 'out/build-ci-package'
+      TOOLSCREEN_PACKAGING_ARTIFACT_DIR: 'out/build-ci-package/bin/Release'
+      TOOLSCREEN_RELEASE_DIR: 'out/release-unsigned'
       VCPKG_DEFAULT_BINARY_CACHE: '${{ github.workspace }}/.cache/vcpkg/archives'
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite'
       VCPKG_DISABLE_METRICS: '1'
@@ -101,69 +107,15 @@ jobs:
         run: |
           & "$env:GITHUB_WORKSPACE\$env:TOOLSCREEN_ARTIFACT_DIR\toolscreen_gui_integration_tests.exe" --run-groups-parallel
 
-      - name: Upload unsigned core artifacts
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: toolscreen-unsigned-core
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 1
-          path: |
-            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen.dll
-            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen.pdb
-            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/liblogger_x64.dll
-
-      - name: Show sccache stats
-        if: ${{ always() }}
-        shell: pwsh
-        run: sccache --show-stats
-
-  package_unsigned_jar:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: windows-latest
-    needs: build_core
-    env:
-      TOOLSCREEN_BUILD_DIR: 'out/build-ci-package'
-      TOOLSCREEN_ARTIFACT_DIR: 'out/build-ci-package/bin/Release'
-      VCPKG_DEFAULT_BINARY_CACHE: '${{ github.workspace }}/.cache/vcpkg/archives'
-      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite'
-      VCPKG_DISABLE_METRICS: '1'
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up MSVC developer command prompt
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
       - name: Set up Java 17
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Restore CMake dependency cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.TOOLSCREEN_BUILD_DIR }}/_deps
-            ${{ env.TOOLSCREEN_BUILD_DIR }}/downloads
-          key: windows-package-deps-v1-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
-          restore-keys: |
-            windows-package-deps-v1-
-
-      - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: windows-vcpkg-binary-v1-${{ hashFiles('src/vcpkg.json') }}
-          restore-keys: |
-            windows-vcpkg-binary-v1-
-
       - name: Restore Maven repository cache
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache@v4
         with:
           path: ~/.m2/repository
@@ -171,49 +123,22 @@ jobs:
           restore-keys: |
             windows-maven-v2-
 
-      - name: Download unsigned core artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: toolscreen-unsigned-core
-          path: out/unsigned-core
-
       - name: Configure packaging build preset
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: pwsh
         run: |
-          $toolscreenDllPath = (Resolve-Path 'out/unsigned-core/Toolscreen.dll').Path
-          $libloggerDllPath = (Resolve-Path 'out/unsigned-core/liblogger_x64.dll').Path
+          $toolscreenDllPath = (Resolve-Path "$env:TOOLSCREEN_ARTIFACT_DIR/Toolscreen.dll").Path
+          $libloggerDllPath = (Resolve-Path "$env:TOOLSCREEN_ARTIFACT_DIR/liblogger_x64.dll").Path
 
           cmake --preset ci-ninja-x64-packaging -DTOOLSCREEN_ENABLE_EXE_PACKAGING=OFF -DTOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS=OFF -DTOOLSCREEN_STAGE_LIBLOGGER_PDB=OFF -DTOOLSCREEN_PACKAGING_DLL_PATH="$toolscreenDllPath" -DTOOLSCREEN_PACKAGING_LIBLOGGER_PATH="$libloggerDllPath"
 
       - name: Build JAR package
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: pwsh
         run: cmake --build --preset ci-package --parallel --target jar
 
-      - name: Upload unsigned JAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: toolscreen-unsigned-jar
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 1
-          path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me.jar
-
-  publish_unsigned_release:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: windows-latest
-    needs:
-      - build_core
-      - package_unsigned_jar
-    permissions:
-      contents: write
-    env:
-      TOOLSCREEN_RELEASE_DIR: 'out/release-unsigned'
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
       - name: Resolve unsigned release metadata
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         id: release_meta
         shell: pwsh
         run: |
@@ -238,24 +163,13 @@ jobs:
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "title=$title" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Download unsigned core artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: toolscreen-unsigned-core
-          path: out/release-inputs/core
-
-      - name: Download unsigned JAR artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: toolscreen-unsigned-jar
-          path: out/release-inputs/jar
-
       - name: Assemble unsigned release inputs
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: pwsh
         run: |
           $releaseDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_RELEASE_DIR
-          $coreDir = Join-Path $env:GITHUB_WORKSPACE 'out/release-inputs/core'
-          $jarDir = Join-Path $env:GITHUB_WORKSPACE 'out/release-inputs/jar'
+          $coreDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
+          $jarDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_PACKAGING_ARTIFACT_DIR
 
           New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 
@@ -271,6 +185,7 @@ jobs:
           Copy-Item -Path $jarPath -Destination (Join-Path $releaseDir (Split-Path $jarPath -Leaf)) -Force
 
       - name: Strip private symbols from unsigned PDB
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: pwsh
         run: |
           $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_RELEASE_DIR
@@ -312,6 +227,7 @@ jobs:
           Write-Host ('Reduced Toolscreen.pdb from {0} MiB to {1} MiB using PDBCopy.' -f [math]::Round($beforeSizeBytes / 1MB, 2), [math]::Round($afterSizeBytes / 1MB, 2))
 
       - name: Validate unsigned PE metadata
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: pwsh
         run: |
           $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts\verify_unsigned_pe_metadata.ps1'
@@ -319,6 +235,7 @@ jobs:
           & $scriptPath -ArtifactDirectory $artifactDirectory
 
       - name: Rename release artifacts
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: pwsh
         run: |
           $outputDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_RELEASE_DIR
@@ -357,6 +274,7 @@ jobs:
           }
 
       - name: Upload unsigned release artifacts
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/upload-artifact@v4
         with:
           name: toolscreen-unsigned-artifacts
@@ -370,6 +288,7 @@ jobs:
             ${{ env.TOOLSCREEN_RELEASE_DIR }}/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
 
       - name: Publish unsigned artifacts to GitHub release
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -407,3 +326,8 @@ jobs:
           $assets += (Get-ChildItem $artifactDir -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.jar').FullName
 
           gh release upload $tag -R $repo --clobber $assets
+
+      - name: Show sccache stats
+        if: ${{ always() }}
+        shell: pwsh
+        run: sccache --show-stats
