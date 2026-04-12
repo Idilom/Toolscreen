@@ -43,6 +43,7 @@ endif()
 
 option(TOOLSCREEN_ENABLE_JAR_PACKAGING "Enable the EasyInjectBundled jar packaging target." ON)
 option(TOOLSCREEN_ENABLE_NINJABRAIN_API_MANUAL_TESTS "Enable the manual-only Ninjabrain API integration test target." OFF)
+option(TOOLSCREEN_USE_SCCACHE_FRIENDLY_DEBUG_INFO "Use /Z7 instead of /Zi for MSVC release-style builds so compiler launcher caches can hit." OFF)
 set(TOOLSCREEN_PACKAGING_DLL_PATH "" CACHE FILEPATH "Optional override DLL path used for jar and EXE packaging inputs")
 set(TOOLSCREEN_PACKAGING_LIBLOGGER_PATH "" CACHE FILEPATH "Optional override liblogger DLL path used for jar and EXE packaging inputs")
 set(TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH "" CACHE FILEPATH "Path to the signed prebuilt liblogger DLL to stage into build outputs")
@@ -71,9 +72,14 @@ endfunction()
 
 function(toolscreen_enable_release_symbols target_name)
     if(MSVC)
+        set(toolscreen_release_debug_info_flag "/Zi")
+        if(TOOLSCREEN_USE_SCCACHE_FRIENDLY_DEBUG_INFO)
+            set(toolscreen_release_debug_info_flag "/Z7")
+        endif()
+
         target_compile_options(${target_name} PRIVATE
-            $<$<CONFIG:Release>:/Zi>
-            $<$<CONFIG:MinSizeRel>:/Zi>
+            $<$<CONFIG:Release>:${toolscreen_release_debug_info_flag}>
+            $<$<CONFIG:MinSizeRel>:${toolscreen_release_debug_info_flag}>
         )
 
         if(TARGET ${target_name} AND NOT "${target_name}" MATCHES "_minhook$|_glew$|_imgui$")

@@ -20,6 +20,19 @@
       }
     },
     {
+      "name": "ci-ninja-x64",
+      "displayName": "CI Ninja x64",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build-ci",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER_LAUNCHER": "sccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "sccache",
+        "TOOLSCREEN_ENABLE_JAR_PACKAGING": "ON",
+        "TOOLSCREEN_USE_SCCACHE_FRIENDLY_DEBUG_INFO": "ON"
+      }
+    },
+    {
       "name": "vs2022-x64-ninjabrain-manual-tests",
       "displayName": "Visual Studio 2022 x64 (Manual Ninjabrain Tests)",
       "inherits": "vs2022-x64",
@@ -42,6 +55,11 @@
       "displayName": "Debug",
       "configurePreset": "vs2022-x64",
       "configuration": "Debug"
+    },
+    {
+      "name": "ci-release",
+      "displayName": "CI Release",
+      "configurePreset": "ci-ninja-x64"
     },
     {
       "name": "release-ninjabrain-manual-tests",
@@ -71,6 +89,14 @@
       "displayName": "Debug Tests",
       "configurePreset": "vs2022-x64",
       "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-release",
+      "displayName": "CI Release Tests",
+      "configurePreset": "ci-ninja-x64",
       "output": {
         "outputOnFailure": true
       }

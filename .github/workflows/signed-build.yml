@@ -11,6 +11,8 @@ jobs:
   build-signed-release:
     runs-on: windows-latest
     env:
+      TOOLSCREEN_BUILD_DIR: 'out/build-ci'
+      TOOLSCREEN_ARTIFACT_DIR: 'out/build-ci/bin/Release'
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
       SIGNPATH_ORGANIZATION_ID: '0126c615-e5f1-4fed-a438-6b8de149c8f4'
       SIGNPATH_PROJECT_SLUG: 'Toolscreen'
@@ -22,10 +24,19 @@ jobs:
       VCPKG_DEFAULT_BINARY_CACHE: '${{ github.workspace }}/.cache/vcpkg/archives'
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite'
       VCPKG_DISABLE_METRICS: '1'
+      SCCACHE_GHA_ENABLED: 'true'
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Validate signing configuration
         shell: pwsh
@@ -75,8 +86,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            out/build/_deps
-            out/build/downloads
+            ${{ env.TOOLSCREEN_BUILD_DIR }}/_deps
+            ${{ env.TOOLSCREEN_BUILD_DIR }}/downloads
           key: windows-build-deps-v2-full-${{ hashFiles('CMakeLists.txt', 'src/vcpkg.json') }}
           restore-keys: |
             windows-build-deps-v2-full-
@@ -120,17 +131,18 @@ jobs:
         run: |
           $prebuiltLoggerDllPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.dll').Path
           $prebuiltLoggerPdbPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.pdb').Path
-          $signedDllPath = Join-Path (Get-Location) 'out/build/bin/Release/Toolscreen.signed-package-input.dll'
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
+          $signedDllPath = Join-Path $artifactDir 'Toolscreen.signed-package-input.dll'
 
-          cmake --preset vs2022-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
+          cmake --preset ci-ninja-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
 
       - name: Build unsigned DLLs and CLI integration test runner
-        shell: cmd
-        run: cmake --build --preset release --parallel --target Toolscreen toolscreen_gui_integration_tests
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target Toolscreen toolscreen_gui_integration_tests
 
       - name: Run CLI integration tests
-        shell: cmd
-        run: out\build\bin\Release\toolscreen_gui_integration_tests.exe --run-all
+        shell: pwsh
+        run: & "$env:GITHUB_WORKSPACE\$env:TOOLSCREEN_ARTIFACT_DIR\toolscreen_gui_integration_tests.exe" --run-all
 
       - name: Upload DLL for SignPath
         id: signpath_dll_upload
@@ -140,7 +152,7 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
-          path: out/build/bin/Release/Toolscreen.dll
+          path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen.dll
 
       - name: Submit DLL to SignPath with origin verification
         uses: signpath/github-action-submit-signing-request@v2
@@ -159,8 +171,9 @@ jobs:
       - name: Preserve signed DLL for packaging
         shell: pwsh
         run: |
-          $artifactDllPath = 'out/build/bin/Release/Toolscreen.dll'
-          $signedDllPath = 'out/build/bin/Release/Toolscreen.signed-package-input.dll'
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
+          $artifactDllPath = Join-Path $artifactDir 'Toolscreen.dll'
+          $signedDllPath = Join-Path $artifactDir 'Toolscreen.signed-package-input.dll'
           $downloadedSignedDllPath = 'out/signpath-dll-output/Toolscreen.dll'
 
           if (-not (Test-Path $artifactDllPath)) {
@@ -179,22 +192,23 @@ jobs:
           Copy-Item -Path $downloadedSignedDllPath -Destination $artifactDllPath -Force
 
       - name: Prepare EXE packaging inputs
-        shell: cmd
-        run: cmake --build --preset release --parallel --target toolscreen_prepare_easyinject_exe_inputs
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target toolscreen_prepare_easyinject_exe_inputs
 
       - name: Reconfigure packaging preset
         shell: pwsh
         run: |
           $prebuiltLoggerDllPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.dll').Path
           $prebuiltLoggerPdbPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.pdb').Path
-          $signedDllPath = (Resolve-Path 'out/build/bin/Release/Toolscreen.signed-package-input.dll').Path
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
+          $signedDllPath = (Resolve-Path (Join-Path $artifactDir 'Toolscreen.signed-package-input.dll')).Path
 
-          cmake --preset vs2022-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
+          cmake --preset ci-ninja-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
 
       - name: Remove stale packaged artifacts
         shell: pwsh
         run: |
-          $outputDir = 'out/build/bin/Release'
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
           $patterns = @(
             'Toolscreen-*-double-click-me.jar'
             'Toolscreen-*-double-click-me.exe'
@@ -209,27 +223,27 @@ jobs:
           }
 
       - name: Build installer EXE package
-        shell: cmd
-        run: cmake --build --preset release --parallel --target installer_exe
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target installer_exe
 
       - name: Build downloader EXE package
-        shell: cmd
-        run: cmake --build --preset release --parallel --target downloader_exe
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target downloader_exe
 
       - name: Build JAR package
-        shell: cmd
-        run: cmake --build --preset release --parallel --target jar
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target jar
 
       - name: Validate PE metadata for SignPath
         shell: pwsh
         run: |
           $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts\verify_pe_metadata.ps1'
-          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE 'out\build\bin\Release'
+          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
           & $scriptPath -ArtifactDirectory $artifactDirectory
 
       - name: Run CTest packaging smoke tests
-        shell: cmd
-        run: ctest --preset release --exclude-regex "^toolscreen_integration_"
+        shell: pwsh
+        run: ctest --preset ci-release --exclude-regex "^toolscreen_integration_"
 
       - name: Upload main installer JAR for SignPath
         id: signpath_jar_upload
@@ -239,7 +253,7 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
-          path: out/build/bin/Release/Toolscreen-*-double-click-me.jar
+          path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me.jar
 
       - name: Submit main installer JAR to SignPath with origin verification
         uses: signpath/github-action-submit-signing-request@v2
@@ -258,7 +272,8 @@ jobs:
       - name: Replace main installer JAR with origin-verified signed output
         shell: pwsh
         run: |
-          $jarMatches = Get-ChildItem 'out/build/bin/Release' -File -Filter 'Toolscreen-*-double-click-me.jar'
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
+          $jarMatches = Get-ChildItem $artifactDir -File -Filter 'Toolscreen-*-double-click-me.jar'
           $signedJarMatches = Get-ChildItem 'out/signpath-jar-output' -File -Filter 'Toolscreen-*-double-click-me.jar'
 
           if ($jarMatches.Count -ne 1) {
@@ -279,7 +294,7 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
-          path: out/build/bin/Release/Toolscreen-*-double-click-me.exe
+          path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me.exe
 
       - name: Submit installer EXE to SignPath with origin verification
         uses: signpath/github-action-submit-signing-request@v2
@@ -298,7 +313,8 @@ jobs:
       - name: Replace installer EXE with origin-verified signed output
         shell: pwsh
         run: |
-          $installerMatches = Get-ChildItem 'out/build/bin/Release' -File -Filter 'Toolscreen-*-double-click-me.exe'
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
+          $installerMatches = Get-ChildItem $artifactDir -File -Filter 'Toolscreen-*-double-click-me.exe'
           $signedInstallerMatches = Get-ChildItem 'out/signpath-installer-exe-output' -File -Filter 'Toolscreen-*-double-click-me.exe'
 
           if ($installerMatches.Count -ne 1) {
@@ -319,7 +335,7 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
-          path: out/build/bin/Release/toolscreen-downloader.exe
+          path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/toolscreen-downloader.exe
 
       - name: Submit downloader EXE to SignPath with origin verification
         uses: signpath/github-action-submit-signing-request@v2
@@ -338,7 +354,8 @@ jobs:
       - name: Replace downloader EXE with origin-verified signed output
         shell: pwsh
         run: |
-          $downloaderPath = 'out/build/bin/Release/toolscreen-downloader.exe'
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
+          $downloaderPath = Join-Path $artifactDir 'toolscreen-downloader.exe'
           $signedDownloaderPath = 'out/signpath-downloader-exe-output/toolscreen-downloader.exe'
 
           if (-not (Test-Path $downloaderPath)) {
@@ -354,8 +371,9 @@ jobs:
       - name: Restore signed DLL to release output
         shell: pwsh
         run: |
-          $signedDllPath = 'out/build/bin/Release/Toolscreen.signed-package-input.dll'
-          $artifactDllPath = 'out/build/bin/Release/Toolscreen.dll'
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
+          $signedDllPath = Join-Path $artifactDir 'Toolscreen.signed-package-input.dll'
+          $artifactDllPath = Join-Path $artifactDir 'Toolscreen.dll'
 
           if (-not (Test-Path $signedDllPath)) {
             throw "Expected preserved signed DLL not found: $signedDllPath"
@@ -366,7 +384,7 @@ jobs:
       - name: Rename release artifacts
         shell: pwsh
         run: |
-          $outputDir = 'out/build/bin/Release'
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
           $suffix = '-not-legal-for-speedruns'
 
           function Get-SingleArtifactPath {
@@ -413,14 +431,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            out/build/bin/Release/Toolscreen-not-legal-for-speedruns.dll
-            out/build/bin/Release/Toolscreen-not-legal-for-speedruns.pdb
-            out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.dll
-            out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.pdb
-            out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
-            out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.exe
-            out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.jar
-            out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.exe
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-not-legal-for-speedruns.dll
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-not-legal-for-speedruns.pdb
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/liblogger_x64-not-legal-for-speedruns.dll
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/liblogger_x64-not-legal-for-speedruns.pdb
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me-not-legal-for-speedruns.exe
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/toolscreen-downloader-not-legal-for-speedruns.jar
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/toolscreen-downloader-not-legal-for-speedruns.exe
 
       - name: Upload final signed JAR artifact
         uses: actions/upload-artifact@v4
@@ -429,7 +447,7 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 14
-          path: out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
+          path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
 
       - name: Publish signed artifacts to GitHub release
         shell: pwsh
@@ -440,6 +458,7 @@ jobs:
           $tag = '${{ steps.release_meta.outputs.tag }}'
           $title = '${{ steps.release_meta.outputs.title }}'
           $notesPath = Join-Path $env:RUNNER_TEMP 'signed-release-notes.md'
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
 
           @"
           Signed Toolscreen archive.
@@ -459,17 +478,22 @@ jobs:
           }
 
           $assets = @(
-            'out/build/bin/Release/Toolscreen-not-legal-for-speedruns.dll',
-            'out/build/bin/Release/Toolscreen-not-legal-for-speedruns.pdb',
-            'out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.dll',
-            'out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.pdb'
+            (Join-Path $artifactDir 'Toolscreen-not-legal-for-speedruns.dll'),
+            (Join-Path $artifactDir 'Toolscreen-not-legal-for-speedruns.pdb'),
+            (Join-Path $artifactDir 'liblogger_x64-not-legal-for-speedruns.dll'),
+            (Join-Path $artifactDir 'liblogger_x64-not-legal-for-speedruns.pdb')
           )
 
-          $assets += (Get-ChildItem 'out/build/bin/Release' -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.jar').FullName
-          $assets += (Get-ChildItem 'out/build/bin/Release' -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.exe').FullName
+          $assets += (Get-ChildItem $artifactDir -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.jar').FullName
+          $assets += (Get-ChildItem $artifactDir -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.exe').FullName
           $assets += @(
-            'out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.jar',
-            'out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.exe'
+            (Join-Path $artifactDir 'toolscreen-downloader-not-legal-for-speedruns.jar'),
+            (Join-Path $artifactDir 'toolscreen-downloader-not-legal-for-speedruns.exe')
           )
 
           gh release upload $tag -R $repo --clobber $assets
+
+      - name: Show sccache stats
+        if: ${{ always() }}
+        shell: pwsh
+        run: sccache --show-stats

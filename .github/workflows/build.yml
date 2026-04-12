@@ -27,13 +27,24 @@ jobs:
     runs-on: windows-latest
     env:
       TOOLSCREEN_FULL_BUILD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      TOOLSCREEN_BUILD_DIR: 'out/build-ci'
+      TOOLSCREEN_ARTIFACT_DIR: 'out/build-ci/bin/Release'
       VCPKG_DEFAULT_BINARY_CACHE: '${{ github.workspace }}/.cache/vcpkg/archives'
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite'
       VCPKG_DISABLE_METRICS: '1'
+      SCCACHE_GHA_ENABLED: 'true'
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Resolve unsigned release metadata
         id: release_meta
@@ -72,8 +83,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            out/build/_deps
-            out/build/downloads
+            ${{ env.TOOLSCREEN_BUILD_DIR }}/_deps
+            ${{ env.TOOLSCREEN_BUILD_DIR }}/downloads
           key: windows-build-deps-v2-${{ env.TOOLSCREEN_FULL_BUILD }}-${{ hashFiles('CMakeLists.txt', 'src/vcpkg.json') }}
           restore-keys: |
             windows-build-deps-v2-${{ env.TOOLSCREEN_FULL_BUILD }}-
@@ -120,24 +131,24 @@ jobs:
           $prebuiltLoggerPdbPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.pdb').Path
           $packagingEnabled = if ($env:TOOLSCREEN_FULL_BUILD -eq 'true') { 'ON' } else { 'OFF' }
 
-          cmake --preset vs2022-x64 -DTOOLSCREEN_ENABLE_JAR_PACKAGING="$packagingEnabled" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
+          cmake --preset ci-ninja-x64 -DTOOLSCREEN_ENABLE_JAR_PACKAGING="$packagingEnabled" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
 
       - name: Build DLLs and CLI integration test runner
-        shell: cmd
-        run: cmake --build --preset release --parallel --target Toolscreen toolscreen_gui_integration_tests
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target Toolscreen toolscreen_gui_integration_tests
 
       - name: Run CLI integration tests
-        shell: cmd
-        run: out\build\bin\Release\toolscreen_gui_integration_tests.exe --run-all
+        shell: pwsh
+        run: & "$env:GITHUB_WORKSPACE\$env:TOOLSCREEN_ARTIFACT_DIR\toolscreen_gui_integration_tests.exe" --run-all
 
       - name: Run fast CTest smoke tests
-        shell: cmd
-        run: ctest --preset release --tests-regex "^(toolscreen_artifact_exists|liblogger_artifact_exists)$"
+        shell: pwsh
+        run: ctest --preset ci-release --tests-regex "^(toolscreen_artifact_exists|liblogger_artifact_exists)$"
 
       - name: Prepare EXE packaging inputs
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
-        shell: cmd
-        run: cmake --build --preset release --parallel --target toolscreen_prepare_easyinject_exe_inputs
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target toolscreen_prepare_easyinject_exe_inputs
 
       - name: Reconfigure packaging preset
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
@@ -146,13 +157,13 @@ jobs:
           $prebuiltLoggerDllPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.dll').Path
           $prebuiltLoggerPdbPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.pdb').Path
 
-          cmake --preset vs2022-x64 -DTOOLSCREEN_ENABLE_JAR_PACKAGING=ON -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
+          cmake --preset ci-ninja-x64 -DTOOLSCREEN_ENABLE_JAR_PACKAGING=ON -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
 
       - name: Remove stale packaged artifacts
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
         shell: pwsh
         run: |
-          $outputDir = 'out/build/bin/Release'
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
           $patterns = @(
             'Toolscreen-*-double-click-me.jar'
             'Toolscreen-*-double-click-me.exe'
@@ -168,37 +179,37 @@ jobs:
 
       - name: Build installer EXE package
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
-        shell: cmd
-        run: cmake --build --preset release --parallel --target installer_exe
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target installer_exe
 
       - name: Build downloader EXE package
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
-        shell: cmd
-        run: cmake --build --preset release --parallel --target downloader_exe
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target downloader_exe
 
       - name: Build JAR package
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
-        shell: cmd
-        run: cmake --build --preset release --parallel --target jar
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target jar
 
       - name: Validate PE metadata
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
         shell: pwsh
         run: |
           $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts\verify_pe_metadata.ps1'
-          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE 'out\build\bin\Release'
+          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
           & $scriptPath -ArtifactDirectory $artifactDirectory
 
       - name: Run CTest packaging smoke tests
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
-        shell: cmd
-        run: ctest --preset release --exclude-regex "^toolscreen_integration_"
+        shell: pwsh
+        run: ctest --preset ci-release --exclude-regex "^toolscreen_integration_"
 
       - name: Rename release artifacts
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
         shell: pwsh
         run: |
-          $outputDir = 'out/build/bin/Release'
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
           $suffix = '-not-legal-for-speedruns'
 
           function Get-SingleArtifactPath {
@@ -246,14 +257,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           path: |
-            out/build/bin/Release/Toolscreen-not-legal-for-speedruns.dll
-            out/build/bin/Release/Toolscreen-not-legal-for-speedruns.pdb
-            out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.dll
-            out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.pdb
-            out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
-            out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.exe
-            out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.jar
-            out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.exe
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-not-legal-for-speedruns.dll
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-not-legal-for-speedruns.pdb
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/liblogger_x64-not-legal-for-speedruns.dll
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/liblogger_x64-not-legal-for-speedruns.pdb
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me-not-legal-for-speedruns.exe
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/toolscreen-downloader-not-legal-for-speedruns.jar
+            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/toolscreen-downloader-not-legal-for-speedruns.exe
 
       - name: Publish unsigned artifacts to GitHub release
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -265,6 +276,7 @@ jobs:
           $tag = '${{ steps.release_meta.outputs.tag }}'
           $title = '${{ steps.release_meta.outputs.title }}'
           $notesPath = Join-Path $env:RUNNER_TEMP 'unsigned-release-notes.md'
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
 
           @"
           Unsigned CI archive for Toolscreen.
@@ -285,17 +297,22 @@ jobs:
           }
 
           $assets = @(
-            'out/build/bin/Release/Toolscreen-not-legal-for-speedruns.dll',
-            'out/build/bin/Release/Toolscreen-not-legal-for-speedruns.pdb',
-            'out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.dll',
-            'out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.pdb'
+            (Join-Path $artifactDir 'Toolscreen-not-legal-for-speedruns.dll'),
+            (Join-Path $artifactDir 'Toolscreen-not-legal-for-speedruns.pdb'),
+            (Join-Path $artifactDir 'liblogger_x64-not-legal-for-speedruns.dll'),
+            (Join-Path $artifactDir 'liblogger_x64-not-legal-for-speedruns.pdb')
           )
 
-          $assets += (Get-ChildItem 'out/build/bin/Release' -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.jar').FullName
-          $assets += (Get-ChildItem 'out/build/bin/Release' -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.exe').FullName
+          $assets += (Get-ChildItem $artifactDir -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.jar').FullName
+          $assets += (Get-ChildItem $artifactDir -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.exe').FullName
           $assets += @(
-            'out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.jar',
-            'out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.exe'
+            (Join-Path $artifactDir 'toolscreen-downloader-not-legal-for-speedruns.jar'),
+            (Join-Path $artifactDir 'toolscreen-downloader-not-legal-for-speedruns.exe')
           )
 
           gh release upload $tag -R $repo --clobber $assets
+
+      - name: Show sccache stats
+        if: ${{ always() }}
+        shell: pwsh
+        run: sccache --show-stats

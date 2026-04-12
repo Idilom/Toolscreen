@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <atomic>
 
-// This works independently of OBS - the driver just needs to be installed
+// This works independently of OBS Studio - the driver just needs to be installed
 
 bool StartVirtualCamera(uint32_t width, uint32_t height);
 
