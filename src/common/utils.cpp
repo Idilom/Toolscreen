@@ -3054,7 +3054,7 @@ bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* sou
     s_lastHeight = height;
     s_lastPostedMs = nowMs;
 
-    InvalidateTrackedGameTextureId(false);
+    InvalidateTrackedGameTextureId(false, false);
     return true;
 }
 
@@ -3177,7 +3177,7 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
             return;
         }
 
-        InvalidateTrackedGameTextureId(false);
+        InvalidateTrackedGameTextureId(false, false);
         state.active = true;
         RequestCurrentModeClientResizeSync(hwnd, "window:borderless_on");
         Log("[WINDOW] Toggled borderless ON (" + std::to_string(targetW) + "x" + std::to_string(targetH) + ")");
@@ -3212,7 +3212,7 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
             return;
         }
 
-        InvalidateTrackedGameTextureId(false);
+        InvalidateTrackedGameTextureId(false, false);
         state.active = false;
         RequestCurrentModeClientResizeSync(hwnd, "window:borderless_off");
         const int centeredW = centeredRect.right - centeredRect.left;

@@ -270,8 +270,10 @@ void AttemptAggressiveGlViewportHook();
 void ApplyWindowsMouseSpeed();
 void ApplyKeyRepeatSettings();
 
-void InvalidateTrackedGameTextureId(bool clearSwapThread) {
-    g_cachedGameTextureId.store(UINT_MAX, std::memory_order_release);
+void InvalidateTrackedGameTextureId(bool clearSwapThread, bool clearCachedTexture) {
+    if (clearCachedTexture) {
+        g_cachedGameTextureId.store(UINT_MAX, std::memory_order_release);
+    }
     g_lastTrackedGameFramebufferTextureId.store(UINT_MAX, std::memory_order_release);
     g_lastTrackedGameTextureBindId.store(UINT_MAX, std::memory_order_release);
     if (clearSwapThread) {
@@ -918,19 +920,43 @@ void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     glBindTexture(target, texture);
 }
 
+static bool GetLatestViewportForHook(int& outModeW, int& outModeH, bool& outStretchEnabled, int& outStretchX, int& outStretchY,
+                                     int& outStretchW, int& outStretchH);
+
+static bool BoundTextureMatchesPreviousFrameModeSize() {
+    int modeW = 0;
+    int modeH = 0;
+    bool stretchEnabled = false;
+    int stretchX = 0;
+    int stretchY = 0;
+    int stretchW = 0;
+    int stretchH = 0;
+    if (!GetLatestViewportForHook(modeW, modeH, stretchEnabled, stretchX, stretchY, stretchW, stretchH)) {
+        return false;
+    }
+
+    if (stretchW <= 0 || stretchH <= 0) {
+        return false;
+    }
+
+    GLint textureWidth = 0;
+    GLint textureHeight = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &textureWidth);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &textureHeight);
+    return textureWidth == stretchW && textureHeight == stretchH;
+}
+
 
 static inline void BindTextureHook_Impl(GLBINDTEXTUREPROC next, GLenum target, GLuint texture) {
-
-    // only track valid 2D binds from the swapbuffers thread
+    if (next) next(target, texture);
     if (target == GL_TEXTURE_2D && texture != 0) {
         static thread_local const DWORD s_currentThreadId = GetCurrentThreadId();
         const DWORD lastSwapThreadId = g_lastSwapBuffersThreadId.load(std::memory_order_acquire);
-        if (lastSwapThreadId != 0 && s_currentThreadId == lastSwapThreadId) {
+        if (lastSwapThreadId != 0 && s_currentThreadId == lastSwapThreadId && BoundTextureMatchesPreviousFrameModeSize()) {
             g_lastTrackedGameTextureBindId.store(texture, std::memory_order_release);
         }
     }
 
-    if (next) next(target, texture);
 }
 
 void APIENTRY hkglBindTexture(GLenum target, GLuint texture) {

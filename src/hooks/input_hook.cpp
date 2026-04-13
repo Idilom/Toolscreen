@@ -567,7 +567,7 @@ static void SyncWindowMetricsFromMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LP
     if (shouldInvalidateScreenMetrics) { InvalidateCachedScreenMetrics(); }
     if (shouldRequestRecalc) { RequestScreenMetricsRecalculation(); }
     if (shouldInvalidateImGui) { InvalidateImGuiCache(); }
-    if (shouldResetGameTexture && clientSizeChanged) { InvalidateTrackedGameTextureId(false); }
+    if (shouldResetGameTexture && clientSizeChanged) { InvalidateTrackedGameTextureId(false, false); }
     if (clientSizeChanged) { shouldRecenterGui = true; }
 
     if (clientSizeChanged) {
@@ -1468,7 +1468,7 @@ InputHandlerResult HandleWmSizeModeDimensions(HWND hWnd, UINT uMsg, WPARAM wPara
     if (targetW <= 0 || targetH <= 0 || (msgW == targetW && msgH == targetH)) { return { false, 0 }; }
 
     const LPARAM adjustedSize = MAKELPARAM(targetW, targetH);
-    InvalidateTrackedGameTextureId(false);
+    InvalidateTrackedGameTextureId(false, false);
     LRESULT forwarded = CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, adjustedSize);
 
     return { true, forwarded };

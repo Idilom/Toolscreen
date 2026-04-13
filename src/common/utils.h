@@ -323,7 +323,7 @@ extern std::atomic<HCURSOR> g_specialCursorHandle;
 void Log(const std::string& message);
 void Log(const std::wstring& message);
 void APIENTRY BindTextureDirect(GLenum target, GLuint texture);
-void InvalidateTrackedGameTextureId(bool clearSwapThread = false);
+void InvalidateTrackedGameTextureId(bool clearSwapThread = false, bool clearCachedTexture = true);
 
 bool AcquireLatestLogSession(const std::wstring& logsDirectory, LogSession& outSession);
 void ReleaseLatestLogSession(LogSession& session);
