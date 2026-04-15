@@ -52,6 +52,94 @@ MirrorGammaMode GetGlobalMirrorGammaMode() {
     return static_cast<MirrorGammaMode>(v);
 }
 
+namespace {
+class MT_ScopedTextureSamplingGuard {
+public:
+    MT_ScopedTextureSamplingGuard(GLuint texture, GLint minFilter, GLint magFilter, GLenum textureUnit = GL_TEXTURE0,
+                                  bool clearBoundSampler = false)
+        : texture_(texture), textureUnit_(textureUnit) {
+        if (texture_ == 0) { return; }
+
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture_);
+        if (previousActiveTexture_ != static_cast<GLint>(textureUnit_)) {
+            glActiveTexture(textureUnit_);
+        }
+
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextureBinding_);
+        if (static_cast<GLuint>(previousTextureBinding_) != texture_) {
+            BindTextureDirect(GL_TEXTURE_2D, texture_);
+            restoreTextureBinding_ = true;
+        }
+
+        glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &previousMinFilter_);
+        glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &previousMagFilter_);
+
+        if (previousMinFilter_ != minFilter) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter);
+        }
+        if (previousMagFilter_ != magFilter) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magFilter);
+        }
+
+        if (clearBoundSampler && (GLEW_VERSION_3_3 || GLEW_ARB_sampler_objects)) {
+            glGetIntegerv(GL_SAMPLER_BINDING, &previousSampler_);
+            if (previousSampler_ != 0) {
+                glBindSampler(static_cast<GLuint>(textureUnit_ - GL_TEXTURE0), 0);
+                restoreSampler_ = true;
+            }
+        }
+
+        if (previousActiveTexture_ != static_cast<GLint>(textureUnit_)) {
+            glActiveTexture(previousActiveTexture_);
+        }
+
+        active_ = true;
+    }
+
+    ~MT_ScopedTextureSamplingGuard() {
+        if (!active_) { return; }
+
+        GLint currentActiveTexture = 0;
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &currentActiveTexture);
+        if (currentActiveTexture != static_cast<GLint>(textureUnit_)) {
+            glActiveTexture(textureUnit_);
+        }
+
+        GLint currentTextureBinding = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTextureBinding);
+        if (static_cast<GLuint>(currentTextureBinding) != texture_) {
+            BindTextureDirect(GL_TEXTURE_2D, texture_);
+        }
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, previousMinFilter_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, previousMagFilter_);
+
+        if (restoreSampler_) {
+            glBindSampler(static_cast<GLuint>(textureUnit_ - GL_TEXTURE0), static_cast<GLuint>(previousSampler_));
+        }
+        if (restoreTextureBinding_) {
+            BindTextureDirect(GL_TEXTURE_2D, static_cast<GLuint>(previousTextureBinding_));
+        }
+
+        if (currentActiveTexture != static_cast<GLint>(textureUnit_)) {
+            glActiveTexture(currentActiveTexture);
+        }
+    }
+
+private:
+    GLuint texture_ = 0;
+    GLenum textureUnit_ = GL_TEXTURE0;
+    GLint previousActiveTexture_ = GL_TEXTURE0;
+    GLint previousTextureBinding_ = 0;
+    GLint previousMinFilter_ = GL_NEAREST;
+    GLint previousMagFilter_ = GL_NEAREST;
+    GLint previousSampler_ = 0;
+    bool restoreTextureBinding_ = false;
+    bool restoreSampler_ = false;
+    bool active_ = false;
+};
+} // namespace
+
 // These shaders are created on the current mirror capture path.
 
 static const char* mt_passthrough_vert_shader = R"(#version 330 core
@@ -1613,74 +1701,78 @@ static bool MT_RenderSeparableDynamicBorder(MirrorInstance* inst, const Threaded
     glActiveTexture(GL_TEXTURE1);
     BindTextureDirect(GL_TEXTURE_2D, inst->tempCaptureTexture);
 
-    if (conf.colorPassthrough) {
-        MT_UseProgramCached(mt_dilateVerticalPassthroughProgram, stateCache);
-        if (!stateCache || !stateCache->dilateVerticalPassthroughBorderWidthValid ||
-            stateCache->dilateVerticalPassthroughBorderWidth != conf.dynamicBorderThickness) {
-            glUniform1i(mt_dilateVerticalPassthroughShaderLocs.borderWidth, conf.dynamicBorderThickness);
-            if (stateCache) {
-                stateCache->dilateVerticalPassthroughBorderWidth = conf.dynamicBorderThickness;
-                stateCache->dilateVerticalPassthroughBorderWidthValid = true;
+    {
+        MT_ScopedTextureSamplingGuard captureSamplingGuard(captureTexture, GL_NEAREST, GL_NEAREST);
+
+        if (conf.colorPassthrough) {
+            MT_UseProgramCached(mt_dilateVerticalPassthroughProgram, stateCache);
+            if (!stateCache || !stateCache->dilateVerticalPassthroughBorderWidthValid ||
+                stateCache->dilateVerticalPassthroughBorderWidth != conf.dynamicBorderThickness) {
+                glUniform1i(mt_dilateVerticalPassthroughShaderLocs.borderWidth, conf.dynamicBorderThickness);
+                if (stateCache) {
+                    stateCache->dilateVerticalPassthroughBorderWidth = conf.dynamicBorderThickness;
+                    stateCache->dilateVerticalPassthroughBorderWidthValid = true;
+                }
+            }
+            if (!stateCache || !stateCache->dilateVerticalPassthroughScreenPixelValid ||
+                stateCache->dilateVerticalPassthroughScreenPixelX != screenPixelX ||
+                stateCache->dilateVerticalPassthroughScreenPixelY != screenPixelY) {
+                glUniform2f(mt_dilateVerticalPassthroughShaderLocs.screenPixel, screenPixelX, screenPixelY);
+                if (stateCache) {
+                    stateCache->dilateVerticalPassthroughScreenPixelX = screenPixelX;
+                    stateCache->dilateVerticalPassthroughScreenPixelY = screenPixelY;
+                    stateCache->dilateVerticalPassthroughScreenPixelValid = true;
+                }
+            }
+            if (!stateCache || !stateCache->dilateVerticalPassthroughBorderColorValid ||
+                !MT_ColorEquals(stateCache->dilateVerticalPassthroughBorderColor, conf.borderColor)) {
+                glUniform4f(mt_dilateVerticalPassthroughShaderLocs.borderColor, conf.borderColor.r, conf.borderColor.g,
+                            conf.borderColor.b, conf.borderColor.a);
+                if (stateCache) {
+                    stateCache->dilateVerticalPassthroughBorderColor = conf.borderColor;
+                    stateCache->dilateVerticalPassthroughBorderColorValid = true;
+                }
+            }
+        } else {
+            MT_UseProgramCached(mt_dilateVerticalProgram, stateCache);
+            if (!stateCache || !stateCache->dilateVerticalBorderWidthValid ||
+                stateCache->dilateVerticalBorderWidth != conf.dynamicBorderThickness) {
+                glUniform1i(mt_dilateVerticalShaderLocs.borderWidth, conf.dynamicBorderThickness);
+                if (stateCache) {
+                    stateCache->dilateVerticalBorderWidth = conf.dynamicBorderThickness;
+                    stateCache->dilateVerticalBorderWidthValid = true;
+                }
+            }
+            if (!stateCache || !stateCache->dilateVerticalScreenPixelValid || stateCache->dilateVerticalScreenPixelX != screenPixelX ||
+                stateCache->dilateVerticalScreenPixelY != screenPixelY) {
+                glUniform2f(mt_dilateVerticalShaderLocs.screenPixel, screenPixelX, screenPixelY);
+                if (stateCache) {
+                    stateCache->dilateVerticalScreenPixelX = screenPixelX;
+                    stateCache->dilateVerticalScreenPixelY = screenPixelY;
+                    stateCache->dilateVerticalScreenPixelValid = true;
+                }
+            }
+            if (!stateCache || !stateCache->dilateVerticalOutputColorValid ||
+                !MT_ColorEquals(stateCache->dilateVerticalOutputColor, conf.outputColor)) {
+                glUniform4f(mt_dilateVerticalShaderLocs.outputColor, conf.outputColor.r, conf.outputColor.g, conf.outputColor.b,
+                            conf.outputColor.a);
+                if (stateCache) {
+                    stateCache->dilateVerticalOutputColor = conf.outputColor;
+                    stateCache->dilateVerticalOutputColorValid = true;
+                }
+            }
+            if (!stateCache || !stateCache->dilateVerticalBorderColorValid ||
+                !MT_ColorEquals(stateCache->dilateVerticalBorderColor, conf.borderColor)) {
+                glUniform4f(mt_dilateVerticalShaderLocs.borderColor, conf.borderColor.r, conf.borderColor.g, conf.borderColor.b,
+                            conf.borderColor.a);
+                if (stateCache) {
+                    stateCache->dilateVerticalBorderColor = conf.borderColor;
+                    stateCache->dilateVerticalBorderColorValid = true;
+                }
             }
         }
-        if (!stateCache || !stateCache->dilateVerticalPassthroughScreenPixelValid ||
-            stateCache->dilateVerticalPassthroughScreenPixelX != screenPixelX ||
-            stateCache->dilateVerticalPassthroughScreenPixelY != screenPixelY) {
-            glUniform2f(mt_dilateVerticalPassthroughShaderLocs.screenPixel, screenPixelX, screenPixelY);
-            if (stateCache) {
-                stateCache->dilateVerticalPassthroughScreenPixelX = screenPixelX;
-                stateCache->dilateVerticalPassthroughScreenPixelY = screenPixelY;
-                stateCache->dilateVerticalPassthroughScreenPixelValid = true;
-            }
-        }
-        if (!stateCache || !stateCache->dilateVerticalPassthroughBorderColorValid ||
-            !MT_ColorEquals(stateCache->dilateVerticalPassthroughBorderColor, conf.borderColor)) {
-            glUniform4f(mt_dilateVerticalPassthroughShaderLocs.borderColor, conf.borderColor.r, conf.borderColor.g,
-                        conf.borderColor.b, conf.borderColor.a);
-            if (stateCache) {
-                stateCache->dilateVerticalPassthroughBorderColor = conf.borderColor;
-                stateCache->dilateVerticalPassthroughBorderColorValid = true;
-            }
-        }
-    } else {
-        MT_UseProgramCached(mt_dilateVerticalProgram, stateCache);
-        if (!stateCache || !stateCache->dilateVerticalBorderWidthValid ||
-            stateCache->dilateVerticalBorderWidth != conf.dynamicBorderThickness) {
-            glUniform1i(mt_dilateVerticalShaderLocs.borderWidth, conf.dynamicBorderThickness);
-            if (stateCache) {
-                stateCache->dilateVerticalBorderWidth = conf.dynamicBorderThickness;
-                stateCache->dilateVerticalBorderWidthValid = true;
-            }
-        }
-        if (!stateCache || !stateCache->dilateVerticalScreenPixelValid || stateCache->dilateVerticalScreenPixelX != screenPixelX ||
-            stateCache->dilateVerticalScreenPixelY != screenPixelY) {
-            glUniform2f(mt_dilateVerticalShaderLocs.screenPixel, screenPixelX, screenPixelY);
-            if (stateCache) {
-                stateCache->dilateVerticalScreenPixelX = screenPixelX;
-                stateCache->dilateVerticalScreenPixelY = screenPixelY;
-                stateCache->dilateVerticalScreenPixelValid = true;
-            }
-        }
-        if (!stateCache || !stateCache->dilateVerticalOutputColorValid ||
-            !MT_ColorEquals(stateCache->dilateVerticalOutputColor, conf.outputColor)) {
-            glUniform4f(mt_dilateVerticalShaderLocs.outputColor, conf.outputColor.r, conf.outputColor.g, conf.outputColor.b,
-                        conf.outputColor.a);
-            if (stateCache) {
-                stateCache->dilateVerticalOutputColor = conf.outputColor;
-                stateCache->dilateVerticalOutputColorValid = true;
-            }
-        }
-        if (!stateCache || !stateCache->dilateVerticalBorderColorValid ||
-            !MT_ColorEquals(stateCache->dilateVerticalBorderColor, conf.borderColor)) {
-            glUniform4f(mt_dilateVerticalShaderLocs.borderColor, conf.borderColor.r, conf.borderColor.g, conf.borderColor.b,
-                        conf.borderColor.a);
-            if (stateCache) {
-                stateCache->dilateVerticalBorderColor = conf.borderColor;
-                stateCache->dilateVerticalBorderColorValid = true;
-            }
-        }
+        glDrawArrays(GL_TRIANGLES, 0, 6);
     }
-    glDrawArrays(GL_TRIANGLES, 0, 6);
 
     glActiveTexture(GL_TEXTURE1);
     BindTextureDirect(GL_TEXTURE_2D, 0);
@@ -1731,113 +1823,118 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
 
     MT_BindTextureCached(validCopyTexture, stateCache);
 
-    if (useRawOutput) {
-        MT_UseProgramCached(mt_passthroughProgram, stateCache);
-    } else if (useColorPassthrough) {
-        const int colorCount = (std::min)(static_cast<int>(conf.targetColors.size()), 8);
-        std::array<float, 24> targetColorData{};
-        for (int i = 0; i < colorCount; ++i) {
-            targetColorData[static_cast<size_t>(i) * 3 + 0] = conf.targetColors[i].r;
-            targetColorData[static_cast<size_t>(i) * 3 + 1] = conf.targetColors[i].g;
-            targetColorData[static_cast<size_t>(i) * 3 + 2] = conf.targetColors[i].b;
+    {
+        // Newer Minecraft versions can leave the live source texture with hostile sampler or filter state.
+        MT_ScopedTextureSamplingGuard sourceSamplingGuard(validCopyTexture, GL_NEAREST, GL_NEAREST, GL_TEXTURE0, true);
+
+        if (useRawOutput) {
+            MT_UseProgramCached(mt_passthroughProgram, stateCache);
+        } else if (useColorPassthrough) {
+            const int colorCount = (std::min)(static_cast<int>(conf.targetColors.size()), 8);
+            std::array<float, 24> targetColorData{};
+            for (int i = 0; i < colorCount; ++i) {
+                targetColorData[static_cast<size_t>(i) * 3 + 0] = conf.targetColors[i].r;
+                targetColorData[static_cast<size_t>(i) * 3 + 1] = conf.targetColors[i].g;
+                targetColorData[static_cast<size_t>(i) * 3 + 2] = conf.targetColors[i].b;
+            }
+
+            MT_UseProgramCached(mt_filterPassthroughProgram, stateCache);
+            if (mt_filterPassthroughShaderLocs.gammaMode >= 0 &&
+                (!stateCache || !stateCache->filterPassthroughGammaModeValid ||
+                 stateCache->filterPassthroughGammaMode != static_cast<int>(gammaMode))) {
+                glUniform1i(mt_filterPassthroughShaderLocs.gammaMode, static_cast<int>(gammaMode));
+                if (stateCache) {
+                    stateCache->filterPassthroughGammaMode = static_cast<int>(gammaMode);
+                    stateCache->filterPassthroughGammaModeValid = true;
+                }
+            }
+
+            if (!stateCache || !stateCache->filterPassthroughTargetColorStateValid ||
+                stateCache->filterPassthroughTargetColorCount != colorCount ||
+                !std::equal(targetColorData.begin(), targetColorData.begin() + (static_cast<size_t>(colorCount) * 3),
+                            stateCache->filterPassthroughTargetColors.begin())) {
+                glUniform1i(mt_filterPassthroughShaderLocs.targetColorCount, colorCount);
+                if (colorCount > 0) {
+                    glUniform3fv(mt_filterPassthroughShaderLocs.targetColors, colorCount, targetColorData.data());
+                }
+                if (stateCache) {
+                    stateCache->filterPassthroughTargetColorCount = colorCount;
+                    stateCache->filterPassthroughTargetColors = targetColorData;
+                    stateCache->filterPassthroughTargetColorStateValid = true;
+                }
+            }
+
+            if (!stateCache || !stateCache->filterPassthroughSensitivityValid ||
+                stateCache->filterPassthroughSensitivity != conf.colorSensitivity) {
+                glUniform1f(mt_filterPassthroughShaderLocs.sensitivity, conf.colorSensitivity);
+                if (stateCache) {
+                    stateCache->filterPassthroughSensitivity = conf.colorSensitivity;
+                    stateCache->filterPassthroughSensitivityValid = true;
+                }
+            }
+        } else {
+            const int colorCount = (std::min)(static_cast<int>(conf.targetColors.size()), 8);
+            std::array<float, 24> targetColorData{};
+            for (int i = 0; i < colorCount; ++i) {
+                targetColorData[static_cast<size_t>(i) * 3 + 0] = conf.targetColors[i].r;
+                targetColorData[static_cast<size_t>(i) * 3 + 1] = conf.targetColors[i].g;
+                targetColorData[static_cast<size_t>(i) * 3 + 2] = conf.targetColors[i].b;
+            }
+
+            MT_UseProgramCached(mt_filterProgram, stateCache);
+            if (mt_filterShaderLocs.gammaMode >= 0 &&
+                (!stateCache || !stateCache->filterGammaModeValid || stateCache->filterGammaMode != static_cast<int>(gammaMode))) {
+                glUniform1i(mt_filterShaderLocs.gammaMode, static_cast<int>(gammaMode));
+                if (stateCache) {
+                    stateCache->filterGammaMode = static_cast<int>(gammaMode);
+                    stateCache->filterGammaModeValid = true;
+                }
+            }
+
+            if (!stateCache || !stateCache->filterTargetColorStateValid || stateCache->filterTargetColorCount != colorCount ||
+                !std::equal(targetColorData.begin(), targetColorData.begin() + (static_cast<size_t>(colorCount) * 3),
+                            stateCache->filterTargetColors.begin())) {
+                glUniform1i(mt_filterShaderLocs.targetColorCount, colorCount);
+                if (colorCount > 0) {
+                    glUniform3fv(mt_filterShaderLocs.targetColors, colorCount, targetColorData.data());
+                }
+                if (stateCache) {
+                    stateCache->filterTargetColorCount = colorCount;
+                    stateCache->filterTargetColors = targetColorData;
+                    stateCache->filterTargetColorStateValid = true;
+                }
+            }
+
+            if (!stateCache || !stateCache->filterOutputColorValid || !MT_ColorEquals(stateCache->filterOutputColor, conf.outputColor)) {
+                glUniform4f(mt_filterShaderLocs.outputColor, conf.outputColor.r, conf.outputColor.g, conf.outputColor.b,
+                            conf.outputColor.a);
+                if (stateCache) {
+                    stateCache->filterOutputColor = conf.outputColor;
+                    stateCache->filterOutputColorValid = true;
+                }
+            }
+            if (!stateCache || !stateCache->filterSensitivityValid || stateCache->filterSensitivity != conf.colorSensitivity) {
+                glUniform1f(mt_filterShaderLocs.sensitivity, conf.colorSensitivity);
+                if (stateCache) {
+                    stateCache->filterSensitivity = conf.colorSensitivity;
+                    stateCache->filterSensitivityValid = true;
+                }
+            }
         }
 
-        MT_UseProgramCached(mt_filterPassthroughProgram, stateCache);
-        if (mt_filterPassthroughShaderLocs.gammaMode >= 0 &&
-            (!stateCache || !stateCache->filterPassthroughGammaModeValid ||
-             stateCache->filterPassthroughGammaMode != static_cast<int>(gammaMode))) {
-            glUniform1i(mt_filterPassthroughShaderLocs.gammaMode, static_cast<int>(gammaMode));
-            if (stateCache) {
-                stateCache->filterPassthroughGammaMode = static_cast<int>(gammaMode);
-                stateCache->filterPassthroughGammaModeValid = true;
-            }
+        if (useRawOutput) {
+            MT_SetBlendEnabledCached(false, stateCache);
+        } else {
+            MT_SetBlendEnabledCached(true, stateCache);
         }
 
-        if (!stateCache || !stateCache->filterPassthroughTargetColorStateValid ||
-            stateCache->filterPassthroughTargetColorCount != colorCount ||
-            !std::equal(targetColorData.begin(), targetColorData.begin() + (static_cast<size_t>(colorCount) * 3),
-                        stateCache->filterPassthroughTargetColors.begin())) {
-            glUniform1i(mt_filterPassthroughShaderLocs.targetColorCount, colorCount);
-            if (colorCount > 0) {
-                glUniform3fv(mt_filterPassthroughShaderLocs.targetColors, colorCount, targetColorData.data());
-            }
-            if (stateCache) {
-                stateCache->filterPassthroughTargetColorCount = colorCount;
-                stateCache->filterPassthroughTargetColors = targetColorData;
-                stateCache->filterPassthroughTargetColorStateValid = true;
-            }
-        }
-
-        if (!stateCache || !stateCache->filterPassthroughSensitivityValid ||
-            stateCache->filterPassthroughSensitivity != conf.colorSensitivity) {
-            glUniform1f(mt_filterPassthroughShaderLocs.sensitivity, conf.colorSensitivity);
-            if (stateCache) {
-                stateCache->filterPassthroughSensitivity = conf.colorSensitivity;
-                stateCache->filterPassthroughSensitivityValid = true;
-            }
-        }
-    } else {
-        const int colorCount = (std::min)(static_cast<int>(conf.targetColors.size()), 8);
-        std::array<float, 24> targetColorData{};
-        for (int i = 0; i < colorCount; ++i) {
-            targetColorData[static_cast<size_t>(i) * 3 + 0] = conf.targetColors[i].r;
-            targetColorData[static_cast<size_t>(i) * 3 + 1] = conf.targetColors[i].g;
-            targetColorData[static_cast<size_t>(i) * 3 + 2] = conf.targetColors[i].b;
-        }
-
-        MT_UseProgramCached(mt_filterProgram, stateCache);
-        if (mt_filterShaderLocs.gammaMode >= 0 &&
-            (!stateCache || !stateCache->filterGammaModeValid || stateCache->filterGammaMode != static_cast<int>(gammaMode))) {
-            glUniform1i(mt_filterShaderLocs.gammaMode, static_cast<int>(gammaMode));
-            if (stateCache) {
-                stateCache->filterGammaMode = static_cast<int>(gammaMode);
-                stateCache->filterGammaModeValid = true;
-            }
-        }
-
-        if (!stateCache || !stateCache->filterTargetColorStateValid || stateCache->filterTargetColorCount != colorCount ||
-            !std::equal(targetColorData.begin(), targetColorData.begin() + (static_cast<size_t>(colorCount) * 3),
-                        stateCache->filterTargetColors.begin())) {
-            glUniform1i(mt_filterShaderLocs.targetColorCount, colorCount);
-            if (colorCount > 0) {
-                glUniform3fv(mt_filterShaderLocs.targetColors, colorCount, targetColorData.data());
-            }
-            if (stateCache) {
-                stateCache->filterTargetColorCount = colorCount;
-                stateCache->filterTargetColors = targetColorData;
-                stateCache->filterTargetColorStateValid = true;
-            }
-        }
-
-        if (!stateCache || !stateCache->filterOutputColorValid || !MT_ColorEquals(stateCache->filterOutputColor, conf.outputColor)) {
-            glUniform4f(mt_filterShaderLocs.outputColor, conf.outputColor.r, conf.outputColor.g, conf.outputColor.b,
-                        conf.outputColor.a);
-            if (stateCache) {
-                stateCache->filterOutputColor = conf.outputColor;
-                stateCache->filterOutputColorValid = true;
-            }
-        }
-        if (!stateCache || !stateCache->filterSensitivityValid || stateCache->filterSensitivity != conf.colorSensitivity) {
-            glUniform1f(mt_filterShaderLocs.sensitivity, conf.colorSensitivity);
-            if (stateCache) {
-                stateCache->filterSensitivity = conf.colorSensitivity;
-                stateCache->filterSensitivityValid = true;
-            }
-        }
+        int padding = renderDirectToFinal ? 0 : ((conf.borderType == MirrorBorderType::Dynamic) ? conf.dynamicBorderThickness : 0);
+        const int drawWidth = renderDirectToFinal ? finalW : conf.captureWidth;
+        const int drawHeight = renderDirectToFinal ? finalH : conf.captureHeight;
+        MT_SetViewportCached(padding, padding, drawWidth, drawHeight, stateCache);
+        const int instanceCount = MT_UploadSourceRectInstances(sourceRectGpuCache, conf, gameW, gameH, stateCache);
+        glDrawArraysInstanced(GL_TRIANGLES, 0, 6, instanceCount);
     }
-
-    if (useRawOutput) {
-        MT_SetBlendEnabledCached(false, stateCache);
-    } else {
-        MT_SetBlendEnabledCached(true, stateCache);
-    }
-
-    int padding = renderDirectToFinal ? 0 : ((conf.borderType == MirrorBorderType::Dynamic) ? conf.dynamicBorderThickness : 0);
-    const int drawWidth = renderDirectToFinal ? finalW : conf.captureWidth;
-    const int drawHeight = renderDirectToFinal ? finalH : conf.captureHeight;
-    MT_SetViewportCached(padding, padding, drawWidth, drawHeight, stateCache);
-    const int instanceCount = MT_UploadSourceRectInstances(sourceRectGpuCache, conf, gameW, gameH, stateCache);
-    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, instanceCount);
 
     MT_SetBlendEnabledCached(false, stateCache);
 
@@ -1863,6 +1960,7 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
         }
 
         if (useRawOutput) {
+            MT_ScopedTextureSamplingGuard captureSamplingGuard(captureTexture, GL_NEAREST, GL_NEAREST);
             MT_BindFramebufferCached(captureFinalFbo, stateCache);
             MT_SetViewportCached(0, 0, finalW, finalH, stateCache);
 
@@ -1877,6 +1975,7 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
             }
             glDrawArrays(GL_TRIANGLES, 0, 6);
         } else if (useGradientOutput) {
+            MT_ScopedTextureSamplingGuard captureSamplingGuard(captureTexture, GL_NEAREST, GL_NEAREST);
             MT_BindFramebufferCached(captureFinalFbo, stateCache);
             MT_SetViewportCached(0, 0, finalW, finalH, stateCache);
             MT_SetClearColorCached(0.0f, 0.0f, 0.0f, 0.0f, stateCache);
@@ -1917,6 +2016,7 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
 
             glDrawArrays(GL_TRIANGLES, 0, 6);
         } else if (conf.borderType == MirrorBorderType::Static) {
+            MT_ScopedTextureSamplingGuard captureSamplingGuard(captureTexture, GL_NEAREST, GL_NEAREST);
             // Static border is rendered later during final mirror composition.
             MT_BindFramebufferCached(captureFinalFbo, stateCache);
             MT_SetViewportCached(0, 0, finalW, finalH, stateCache);
@@ -1932,6 +2032,7 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
             }
             glDrawArrays(GL_TRIANGLES, 0, 6);
         } else {
+            MT_ScopedTextureSamplingGuard captureSamplingGuard(captureTexture, GL_NEAREST, GL_NEAREST);
             MT_BindFramebufferCached(captureFinalFbo, stateCache);
             MT_SetViewportCached(0, 0, finalW, finalH, stateCache);
             MT_SetClearColorCached(0.0f, 0.0f, 0.0f, 0.0f, stateCache);

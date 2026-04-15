@@ -118,6 +118,77 @@ bool TryComputeVirtualCameraSyncBytes(int width, int height, size_t& yBytes, siz
     return true;
 }
 
+class ScopedTextureFilterGuard {
+public:
+    ScopedTextureFilterGuard(GLuint texture, GLint minFilter, GLint magFilter)
+        : texture_(texture) {
+        if (texture_ == 0) { return; }
+
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture_);
+        if (previousActiveTexture_ != GL_TEXTURE0) {
+            glActiveTexture(GL_TEXTURE0);
+        }
+
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextureBinding_);
+        if (static_cast<GLuint>(previousTextureBinding_) != texture_) {
+            BindTextureDirect(GL_TEXTURE_2D, texture_);
+            restoreTextureBinding_ = true;
+        }
+
+        glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &previousMinFilter_);
+        glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &previousMagFilter_);
+
+        if (previousMinFilter_ != minFilter) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter);
+        }
+        if (previousMagFilter_ != magFilter) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magFilter);
+        }
+
+        if (previousActiveTexture_ != GL_TEXTURE0) {
+            glActiveTexture(previousActiveTexture_);
+        }
+
+        active_ = true;
+    }
+
+    ~ScopedTextureFilterGuard() {
+        if (!active_) { return; }
+
+        GLint currentActiveTexture = 0;
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &currentActiveTexture);
+        if (currentActiveTexture != GL_TEXTURE0) {
+            glActiveTexture(GL_TEXTURE0);
+        }
+
+        GLint currentTextureBinding = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTextureBinding);
+        if (static_cast<GLuint>(currentTextureBinding) != texture_) {
+            BindTextureDirect(GL_TEXTURE_2D, texture_);
+        }
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, previousMinFilter_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, previousMagFilter_);
+
+        if (restoreTextureBinding_) {
+            BindTextureDirect(GL_TEXTURE_2D, static_cast<GLuint>(previousTextureBinding_));
+        }
+
+        if (currentActiveTexture != GL_TEXTURE0) {
+            glActiveTexture(currentActiveTexture);
+        }
+    }
+
+private:
+    GLuint texture_ = 0;
+    GLint previousActiveTexture_ = GL_TEXTURE0;
+    GLint previousTextureBinding_ = 0;
+    GLint previousMinFilter_ = GL_NEAREST;
+    GLint previousMagFilter_ = GL_NEAREST;
+    bool restoreTextureBinding_ = false;
+    bool active_ = false;
+};
+
 void LogVirtualCameraSyncGuardOnce(const std::string& reason, int width, int height, size_t totalBytes) {
     static int s_lastWidth = 0;
     static int s_lastHeight = 0;
@@ -3626,7 +3697,15 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
             }
 
-            glDrawArrays(GL_TRIANGLES, 0, 6);
+            const bool needsScaledMirrorSampling =
+                renderData.texture != 0 && renderData.screenW > 0 && renderData.screenH > 0 &&
+                (renderData.screenW != renderData.tex_w || renderData.screenH != renderData.tex_h);
+            if (needsScaledMirrorSampling) {
+                ScopedTextureFilterGuard mirrorSamplingGuard(renderData.texture, GL_NEAREST, GL_NEAREST);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            } else {
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
         }
     }
 
@@ -6469,18 +6548,6 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         }
     }
 
-    bool useFramebufferFallback = (gameTextureToUse == UINT_MAX);
-
-    /*
-    static bool fallbackLogged = false;
-    if (useFramebufferFallback && !fallbackLogged) {
-        Log("Mirror rendering using framebuffer fallback mode (glClear hook disabled for this game version)");
-        fallbackLogged = true;
-    } else if (!useFramebufferFallback && fallbackLogged) {
-        Log("Mirror rendering switched to standard texture mode (glClear hook active)");
-        fallbackLogged = false;
-    }*/
-
     {
         PROFILE_SCOPE_CAT("Set Viewport Geometry", "Rendering");
         std::lock_guard<std::mutex> lock(g_geometryMutex);
@@ -6491,164 +6558,11 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     if (hasMirrors) {
         PROFILE_SCOPE_CAT("Mirror Management", "Rendering");
 
-        // Lazy auto-start OBS hook work when the game texture is available.
-        if (!useFramebufferFallback && g_graphicsHookDetected.load()) { StartObsHookThread(); }
+        // Lazy auto-start OBS hook work once the graphics hook is available.
+        if (g_graphicsHookDetected.load()) { StartObsHookThread(); }
 
         // NOTE: Mirror capture config updates are now handled by logic_thread (UpdateActiveMirrorConfigs)
         // This avoids doing the config collection work on every frame of the render path.
-
-        // Framebuffer fallback mode: capture directly on the current thread when the game texture is unavailable.
-        if (useFramebufferFallback) {
-            auto now = std::chrono::steady_clock::now();
-
-            // Collect active mirrors for fallback rendering (use snapshot for thread safety)
-            std::vector<MirrorConfig> fallbackMirrors;
-            std::vector<ImageConfig> unusedImages;
-            std::vector<WindowOverlayConfig> unusedWindowOverlays;
-            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
-            const Config& fallbackConfig = configSnap ? *configSnap : g_config;
-            CollectActiveElementsForMode(fallbackConfig, modeToRender->id, false, fallbackMirrors, unusedImages,
-                                         unusedWindowOverlays, unusedBrowserOverlays, fullW, fullH);
-
-            std::vector<size_t> mirrorsNeedingUpdate;
-            mirrorsNeedingUpdate.reserve(fallbackMirrors.size());
-
-            {
-                std::shared_lock<std::shared_mutex> mirrorLock(g_mirrorInstancesMutex); // Read lock - checking which mirrors need update
-                for (size_t i = 0; i < fallbackMirrors.size(); ++i) {
-                    const auto& conf = fallbackMirrors[i];
-                    if (conf.input.empty() || conf.captureWidth <= 0 || conf.captureHeight <= 0) continue;
-
-                    auto it = g_mirrorInstances.find(conf.name);
-                    if (it == g_mirrorInstances.end()) continue;
-
-                    const MirrorInstance& inst = it->second;
-
-                    int padding = (conf.border.type == MirrorBorderType::Dynamic) ? conf.border.dynamicThickness : 0;
-                    int requiredFboW = conf.captureWidth + 2 * padding;
-                    int requiredFboH = conf.captureHeight + 2 * padding;
-                    bool needsResize = (inst.fbo_w != requiredFboW || inst.fbo_h != requiredFboH);
-
-                    bool needsUpdate = needsResize || inst.forceUpdateFrames > 0;
-                    if (!needsUpdate && !MirrorUsesEveryFrameUpdates(conf.fps)) {
-                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - inst.lastUpdateTime).count();
-                        needsUpdate = (elapsed >= (1000 / conf.fps));
-                    } else if (!needsUpdate && MirrorUsesEveryFrameUpdates(conf.fps)) {
-                        needsUpdate = true;
-                    }
-
-                    if (needsUpdate) { mirrorsNeedingUpdate.push_back(i); }
-                }
-            }
-
-            if (!mirrorsNeedingUpdate.empty()) {
-                glBindVertexArray(g_vao);
-                glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_ONE, GL_ONE);
-
-                PROFILE_SCOPE_CAT("Fallback Mirror Lock", "Rendering");
-                std::unique_lock<std::shared_mutex> mirrorLock(g_mirrorInstancesMutex); // Write lock - modifying instances
-
-                for (size_t idx : mirrorsNeedingUpdate) {
-                    const auto& conf = fallbackMirrors[idx];
-
-                    auto it = g_mirrorInstances.find(conf.name);
-                    if (it == g_mirrorInstances.end()) continue;
-
-                    MirrorInstance& inst = it->second;
-                    const bool needsFallbackFinalTarget = conf.rawOutput || conf.border.type == MirrorBorderType::Static;
-                    int padding = (conf.border.type == MirrorBorderType::Dynamic) ? conf.border.dynamicThickness : 0;
-                    int requiredFboW = conf.captureWidth + 2 * padding;
-                    int requiredFboH = conf.captureHeight + 2 * padding;
-
-                    if (inst.fbo_w != requiredFboW || inst.fbo_h != requiredFboH) {
-                        inst.fbo_w = requiredFboW;
-                        inst.fbo_h = requiredFboH;
-                        inst.forceUpdateFrames = 3;
-                        inst.cachedRenderState.isValid = false;
-
-                        BindTextureDirect(GL_TEXTURE_2D, inst.fboTexture);
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, inst.fbo_w, inst.fbo_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    }
-
-                    if (needsFallbackFinalTarget) {
-                        float finalScaleX = conf.output.separateScale ? conf.output.scaleX : conf.output.scale;
-                        float finalScaleY = conf.output.separateScale ? conf.output.scaleY : conf.output.scale;
-                        int requiredFinalW = static_cast<int>(inst.fbo_w * finalScaleX);
-                        int requiredFinalH = static_cast<int>(inst.fbo_h * finalScaleY);
-                        if (requiredFinalW > 0 && requiredFinalH > 0 && (inst.final_w != requiredFinalW || inst.final_h != requiredFinalH)) {
-                            BindTextureDirect(GL_TEXTURE_2D, inst.finalTexture);
-                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, requiredFinalW, requiredFinalH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                            inst.final_w = requiredFinalW;
-                            inst.final_h = requiredFinalH;
-                            inst.final_w_back = requiredFinalW;
-                            inst.final_h_back = requiredFinalH;
-                            inst.cachedRenderState.isValid = false;
-                            inst.cachedRenderStateBack.isValid = false;
-                        }
-                    }
-
-                    glBindFramebuffer(GL_FRAMEBUFFER, inst.fbo);
-                    if (oglViewport)
-                        oglViewport(0, 0, inst.fbo_w, inst.fbo_h);
-                    else
-                        glViewport(0, 0, inst.fbo_w, inst.fbo_h);
-                    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-                    glClear(GL_COLOR_BUFFER_BIT);
-
-                    glBindFramebuffer(GL_READ_FRAMEBUFFER, s.fb);
-                    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, inst.fbo);
-
-                    for (const auto& r : conf.input) {
-                        int capX, capY;
-                        GetRelativeCoords(r.relativeTo, r.x, r.y, conf.captureWidth, conf.captureHeight, current_gameW, current_gameH, capX,
-                                          capY);
-                        int capY_gl = current_gameH - capY - conf.captureHeight;
-
-                        float scaleX = static_cast<float>(currentGeo.finalW) / current_gameW;
-                        float scaleY = static_cast<float>(currentGeo.finalH) / current_gameH;
-
-                        int srcLeft = currentGeo.finalX + static_cast<int>(capX * scaleX);
-                        int srcBottom = fullH - currentGeo.finalY - static_cast<int>((capY + conf.captureHeight) * scaleY);
-                        int srcRight = currentGeo.finalX + static_cast<int>((capX + conf.captureWidth) * scaleX);
-                        int srcTop = fullH - currentGeo.finalY - static_cast<int>(capY * scaleY);
-
-                        int dstLeft = padding;
-                        int dstBottom = padding;
-                        int dstRight = padding + conf.captureWidth;
-                        int dstTop = padding + conf.captureHeight;
-
-                        BlitFramebufferDirect(srcLeft, srcBottom, srcRight, srcTop, dstLeft, dstBottom, dstRight, dstTop,
-                                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
-                    }
-
-                    if (needsFallbackFinalTarget && inst.finalFbo != 0 && inst.finalTexture != 0 && inst.final_w > 0 && inst.final_h > 0) {
-                        glBindFramebuffer(GL_READ_FRAMEBUFFER, inst.fbo);
-                        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, inst.finalFbo);
-                        BlitFramebufferDirect(0, 0, inst.fbo_w, inst.fbo_h, 0, 0, inst.final_w, inst.final_h, GL_COLOR_BUFFER_BIT,
-                                              GL_NEAREST);
-                    }
-
-                    glBindFramebuffer(GL_FRAMEBUFFER, inst.fbo);
-                    inst.lastUpdateTime = now;
-                    inst.hasValidContent = true;
-                    inst.hasFrameContent = true;
-                    inst.capturedAsRawOutput = true;
-                    if (inst.forceUpdateFrames > 0) { inst.forceUpdateFrames--; }
-                }
-
-                glDisable(GL_BLEND);
-            }
-        }
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
