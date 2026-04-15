@@ -2014,6 +2014,7 @@ static void PrepareSameThreadOverlayState(const GLState& s, int fullW, int fullH
         glBindSampler(0, 0);
         glBindSampler(1, 0);
     }
+    glActiveTexture(GL_TEXTURE0);
     glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
     glBlendColor(0.0f, 0.0f, 0.0f, 0.0f);
     glDepthMask(GL_FALSE);
@@ -3067,30 +3068,12 @@ static bool SelectSameThreadGameTexture(GLuint preferredTexture, int preferredW,
 }
 
 static bool SelectEyeZoomCaptureTexture(GLuint preferredTexture, int preferredW, int preferredH, GLuint& outTexture, int& outW,
-                                        int& outH, const char** outSourceName = nullptr) {
+                                        int& outH, const char** outSourceName = nullptr, bool preferPreferredFirst = false) {
     if (outSourceName) { *outSourceName = "none"; }
 
-    outTexture = GetReadyGameTexture();
-    outW = GetReadyGameWidth();
-    outH = GetReadyGameHeight();
-    if (outTexture != 0 && outW > 0 && outH > 0) {
-        if (outSourceName) { *outSourceName = "ready"; }
-        return true;
-    }
-
-    outTexture = GetSafeReadTexture();
-    if (outTexture != 0 && IsSampleableTexture2D(outTexture, &outW, &outH)) {
-        if (outSourceName) { *outSourceName = "safe_read"; }
-        return true;
-    }
-
-    outTexture = GetFallbackGameTexture();
-    outW = GetFallbackGameWidth();
-    outH = GetFallbackGameHeight();
-    if (outTexture != 0 && outW > 0 && outH > 0) {
-        if (outSourceName) { *outSourceName = "fallback"; }
-        return true;
-    }
+    (void)preferredW;
+    (void)preferredH;
+    (void)preferPreferredFirst;
 
     if (preferredTexture != 0 && preferredTexture != UINT_MAX && IsSampleableTexture2D(preferredTexture, &outW, &outH)) {
         outTexture = preferredTexture;
@@ -3141,6 +3124,7 @@ static void DrawPassthroughTextureRegion(GLuint textureId, const float sourceRec
     if (textureId == 0 || dstRight <= dstLeft || dstTop <= dstBottom || fullW <= 0 || fullH <= 0) { return; }
 
     glUseProgram(g_passthroughProgram);
+    glActiveTexture(GL_TEXTURE0);
     BindTextureDirect(GL_TEXTURE_2D, textureId);
     glUniform4f(g_passthroughShaderLocs.sourceRect, sourceRect[0], sourceRect[1], sourceRect[2], sourceRect[3]);
     glUniform1f(g_passthroughShaderLocs.opacity, opacity);
@@ -5195,6 +5179,7 @@ static void DrawFullscreenPassthroughTexture(GLuint textureId, const float sourc
     if (textureId == 0) { return; }
 
     glUseProgram(g_passthroughProgram);
+    glActiveTexture(GL_TEXTURE0);
     BindTextureDirect(GL_TEXTURE_2D, textureId);
     glUniform4f(g_passthroughShaderLocs.sourceRect, sourceRect[0], sourceRect[1], sourceRect[2], sourceRect[3]);
     glUniform1f(g_passthroughShaderLocs.opacity, opacity);
@@ -5530,17 +5515,7 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
 
     if (!useSnapshot &&
         !SelectEyeZoomCaptureTexture(preferredGameTexture, preferredGameW, preferredGameH, gameTextureToUse, gameTextureW,
-                                     gameTextureH, &selectedCaptureSource)) {
-        GLuint readyTexture = GetReadyGameTexture();
-        int readyW = GetReadyGameWidth();
-        int readyH = GetReadyGameHeight();
-        GLuint safeReadTexture = GetSafeReadTexture();
-        int safeReadW = 0;
-        int safeReadH = 0;
-        bool safeReadValid = (safeReadTexture != 0) && IsSampleableTexture2D(safeReadTexture, &safeReadW, &safeReadH);
-        GLuint fallbackTexture = GetFallbackGameTexture();
-        int fallbackW = GetFallbackGameWidth();
-        int fallbackH = GetFallbackGameHeight();
+                                     gameTextureH, &selectedCaptureSource, true)) {
         int preferredActualW = 0;
         int preferredActualH = 0;
         bool preferredValid =
@@ -5550,11 +5525,7 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             "no usable source preferredTex=" + std::to_string(preferredGameTexture) + " expected=" +
                 std::to_string(preferredGameW) + "x" + std::to_string(preferredGameH) + " actual=" +
                 std::to_string(preferredActualW) + "x" + std::to_string(preferredActualH) + " preferredValid=" +
-                std::to_string(preferredValid ? 1 : 0) + " readyTex=" + std::to_string(readyTexture) + " readySize=" +
-                std::to_string(readyW) + "x" + std::to_string(readyH) + " safeTex=" + std::to_string(safeReadTexture) +
-                " safeSize=" + std::to_string(safeReadW) + "x" + std::to_string(safeReadH) + " safeValid=" +
-                std::to_string(safeReadValid ? 1 : 0) + " fallbackTex=" + std::to_string(fallbackTexture) +
-                " fallbackSize=" + std::to_string(fallbackW) + "x" + std::to_string(fallbackH));
+                std::to_string(preferredValid ? 1 : 0));
         return;
     }
 
@@ -5757,6 +5728,45 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         return s_eyeZoomSnapshotTexture != 0 && s_eyeZoomSnapshotFBO != 0;
     };
 
+    auto EnsureEyeZoomTempAllocated = [&]() -> bool {
+        if (s_eyeZoomTempTexture == 0 || s_eyeZoomTempWidth != zoomOutputWidth || s_eyeZoomTempHeight != zoomOutputHeight) {
+            if (s_eyeZoomTempTexture != 0) { glDeleteTextures(1, &s_eyeZoomTempTexture); }
+            if (s_eyeZoomTempFBO != 0) { glDeleteFramebuffers(1, &s_eyeZoomTempFBO); }
+            s_eyeZoomTempTexture = 0;
+            s_eyeZoomTempFBO = 0;
+
+            glGenTextures(1, &s_eyeZoomTempTexture);
+            BindTextureDirect(GL_TEXTURE_2D, s_eyeZoomTempTexture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, zoomOutputWidth, zoomOutputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+            glGenFramebuffers(1, &s_eyeZoomTempFBO);
+            glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomTempFBO);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_eyeZoomTempTexture, 0);
+
+            const GLenum tempStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            if (tempStatus != GL_FRAMEBUFFER_COMPLETE) {
+                LogEyeZoomFramebufferStatusThrottled("temp_alloc", s_eyeZoomTempTexture, tempStatus, zoomOutputWidth,
+                                                    zoomOutputHeight);
+                glDeleteTextures(1, &s_eyeZoomTempTexture);
+                glDeleteFramebuffers(1, &s_eyeZoomTempFBO);
+                s_eyeZoomTempTexture = 0;
+                s_eyeZoomTempFBO = 0;
+                s_eyeZoomTempWidth = 0;
+                s_eyeZoomTempHeight = 0;
+                return false;
+            }
+
+            s_eyeZoomTempWidth = zoomOutputWidth;
+            s_eyeZoomTempHeight = zoomOutputHeight;
+        }
+
+        return s_eyeZoomTempTexture != 0 && s_eyeZoomTempFBO != 0;
+    };
+
     auto ForceOpaqueAlphaInCurrentDrawFbo = [&](int x, int y, int w, int h) {
         if (w <= 0 || h <= 0) { return; }
 
@@ -5791,7 +5801,7 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         }
         DrawPassthroughTextureRegion(s_eyeZoomSnapshotTexture, sourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW, fullH,
                                      opacity);
-        if (opacity >= 1.0f) {
+        if (opacity >= 1.0f && s.fb != 0) {
             ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
         }
     } else {
@@ -5801,30 +5811,59 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             static_cast<float>(srcRight - srcLeft) / gameTextureW,
             static_cast<float>(srcTop - srcBottom) / gameTextureH,
         };
+        const float fullSourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
+        GLuint displayTexture = gameTextureToUse;
+        const float* displaySourceRect = sourceRect;
+
+        if (s.fb == 0 && EnsureEyeZoomTempAllocated()) {
+            glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomTempFBO);
+            glDisable(GL_BLEND);
+            DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, 0, 0, s_eyeZoomTempWidth, s_eyeZoomTempHeight,
+                                         s_eyeZoomTempWidth, s_eyeZoomTempHeight, 1.0f);
+            displayTexture = s_eyeZoomTempTexture;
+            displaySourceRect = fullSourceRect;
+            LogEyeZoomDebugThrottled("present_path",
+                                     "target=default_fbo via_temp=1 tempTex=" + std::to_string(s_eyeZoomTempTexture) +
+                                         " tempSize=" + std::to_string(s_eyeZoomTempWidth) + "x" +
+                                         std::to_string(s_eyeZoomTempHeight) + " sourceTex=" +
+                                         std::to_string(gameTextureToUse));
+
+            glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
+            if (oglViewport)
+                oglViewport(0, 0, fullW, fullH);
+            else
+                glViewport(0, 0, fullW, fullH);
+        } else if (s.fb == 0) {
+            LogEyeZoomDebugThrottled("present_path",
+                                     "target=default_fbo via_temp=0 sourceTex=" + std::to_string(gameTextureToUse) +
+                                         " sourceSize=" + std::to_string(gameTextureW) + "x" +
+                                         std::to_string(gameTextureH));
+        }
+
         if (opacity < 1.0f) {
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         } else {
             glDisable(GL_BLEND);
         }
-        DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW, fullH,
+        DrawPassthroughTextureRegion(displayTexture, displaySourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW, fullH,
                                      opacity);
-        if (opacity >= 1.0f) {
+        if (opacity >= 1.0f && s.fb != 0) {
             ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
         }
 
         if (EnsureEyeZoomSnapshotAllocated()) {
             glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
             glDisable(GL_BLEND);
-            DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, 0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight,
+            DrawPassthroughTextureRegion(displayTexture, displaySourceRect, 0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight,
                                          s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight, 1.0f);
             s_eyeZoomSnapshotValid = true;
         } else {
             s_eyeZoomSnapshotValid = false;
             LogEyeZoomDebugThrottled("snapshot_copy_state",
                                      std::string("snapshot invalidated after copy source=") + selectedCaptureSource + " tex=" +
-                                         std::to_string(gameTextureToUse) + " size=" + std::to_string(gameTextureW) + "x" +
-                                         std::to_string(gameTextureH) + " snapshotTex=" +
+                                         std::to_string(displayTexture) + " size=" + std::to_string(zoomOutputWidth) + "x" +
+                                         std::to_string(zoomOutputHeight) + " snapshotTex=" +
                                          std::to_string(s_eyeZoomSnapshotTexture) + " snapshotSize=" +
                                          std::to_string(s_eyeZoomSnapshotWidth) + "x" +
                                          std::to_string(s_eyeZoomSnapshotHeight));
