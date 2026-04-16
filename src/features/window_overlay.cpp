@@ -786,7 +786,7 @@ std::string GetWindowOverlayAtPoint(int x, int y, int screenWidth, int screenHei
     std::vector<std::pair<std::string, WindowOverlayConfig>> activeOverlays;
     {
         auto overlaySnap = GetConfigSnapshot();
-        const ModeConfig* mode = overlaySnap ? GetModeFromSnapshot(*overlaySnap, currentModeId) : nullptr;
+        const ModeConfig* mode = overlaySnap ? GetModeFromSnapshotOrFallback(*overlaySnap, currentModeId) : nullptr;
         if (!mode) return "";
 
         for (auto it = mode->windowOverlayIds.rbegin(); it != mode->windowOverlayIds.rend(); ++it) {

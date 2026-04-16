@@ -182,6 +182,10 @@ const auto& GetTestCaseDefinitions() {
         {"profile-case-insensitive-collisions", &RunProfileCaseInsensitiveCollisionTest},
         {"profile-recover-missing-metadata", &RunProfileRecoverMissingMetadataTest},
         {"profile-async-save-skip-deleted-profile", &RunProfileAsyncSaveSkipDeletedProfileTest},
+        {"profile-switch-ninjabrain-async-stop", &RunProfileSwitchNinjabrainAsyncStopTest},
+        {"profile-switch-ninjabrain-async-restart", &RunProfileSwitchNinjabrainAsyncRestartTest},
+        {"profile-switch-invalid-default-mode-fallback", &RunProfileSwitchInvalidDefaultModeFallbackTest},
+        {"profile-switch-reader-mode-fallback", &RunProfileSwitchReaderModeFallbackTest},
         {"profile-switch-concurrent-readers", &RunProfileSwitchConcurrentReadersTest},
         {"profile-switch-concurrent-lifecycle", &RunProfileSwitchConcurrentLifecycleTest},
         {"profile-switch-concurrent-metadata-rebuild", &RunProfileSwitchConcurrentMetadataRebuildTest},
@@ -869,10 +873,28 @@ void PauseForTransientConsole() {
     std::getline(std::cin, ignored);
 }
 
+class ScopedTestProcessCleanup {
+  public:
+    ~ScopedTestProcessCleanup() {
+        try {
+            StopNinjabrainClient();
+            FlushLogs();
+
+            std::lock_guard<std::mutex> lock(g_logFileMutex);
+            if (logFile.is_open()) {
+                logFile.close();
+            }
+            logFile.clear();
+        } catch (...) {
+        }
+    }
+};
+
 } // namespace
 
 int main(int argc, char** argv) {
     try {
+        ScopedTestProcessCleanup cleanup;
         EnsureProcessDpiAwareness();
         const CommandLineOptions options = ParseCommandLine(argc, argv);
 

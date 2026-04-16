@@ -601,24 +601,28 @@ static void ApplyProfileSwitchRuntimeConfig(const Config& previousConfig) {
     }
 
     SaveTheme();
+
     if (ImGui::GetCurrentContext() != nullptr) {
         ApplyAppearanceConfig();
     }
+
     RequestDynamicGuiFontRefresh(true);
 
     ApplyKeyRepeatSettings();
+
     if (g_config.confineCursor) {
         ApplyConfineCursorToGameWindow();
     } else {
         ClipCursorDirect(NULL);
     }
+
     SetGlobalMirrorGammaMode(g_config.mirrorGammaMode);
 
     const bool previousNinjabrainEnabled = previousConfig.ninjabrainOverlay.enabled;
     const bool currentNinjabrainEnabled = g_config.ninjabrainOverlay.enabled;
     if (!currentNinjabrainEnabled) {
         if (previousNinjabrainEnabled) {
-            StopNinjabrainClient();
+            StopNinjabrainClientAsync();
         }
         return;
     }
@@ -629,7 +633,7 @@ static void ApplyProfileSwitchRuntimeConfig(const Config& previousConfig) {
     }
 
     if (previousConfig.ninjabrainOverlay.apiBaseUrl != g_config.ninjabrainOverlay.apiBaseUrl) {
-        RestartNinjabrainClient();
+        RestartNinjabrainClientAsync();
     }
 }
 
@@ -720,6 +724,7 @@ void SwitchProfile(const std::string& newProfileName) {
     std::string resolvedNewProfileName;
     bool failedToSavePreviousProfile = false;
     bool failedToSaveProfilesMetadata = false;
+
     const bool pendingConfigSave = g_configIsDirty.load(std::memory_order_acquire);
 
     {
@@ -770,14 +775,6 @@ void SwitchProfile(const std::string& newProfileName) {
 
     RemoveInvalidHotkeyModeReferences(g_config);
     ResetAllHotkeySecondaryModes(g_config);
-    {
-        std::lock_guard<std::mutex> lock(g_modeIdMutex);
-        g_currentModeId = g_config.defaultMode;
-        int nextIndex = 1 - g_currentModeIdIndex.load(std::memory_order_relaxed);
-        g_modeIdBuffers[nextIndex] = g_config.defaultMode;
-        g_currentModeIdIndex.store(nextIndex, std::memory_order_release);
-    }
-    WriteCurrentModeToFile(g_config.defaultMode);
 
     {
         std::lock_guard<std::mutex> lock(g_hotkeyMainKeysMutex);
@@ -792,7 +789,9 @@ void SwitchProfile(const std::string& newProfileName) {
         for (const auto& [id, inst] : g_userImages) {
             if (inst.isAnimated) {
                 for (GLuint tex : inst.frameTextures) {
-                    if (tex != 0) g_texturesToDelete.push_back(tex);
+                    if (tex != 0) {
+                        g_texturesToDelete.push_back(tex);
+                    }
                 }
             } else if (inst.textureId != 0) {
                 g_texturesToDelete.push_back(inst.textureId);
@@ -804,12 +803,21 @@ void SwitchProfile(const std::string& newProfileName) {
 
     g_allImagesLoaded = false;
     g_pendingImageLoad = true;
+
     RecalculateModeDimensions();
     RequestScreenMetricsRecalculation();
-    PublishConfigSnapshot();
+    PublishGuiConfigSnapshot();
 
+    {
+        std::lock_guard<std::mutex> lock(g_modeIdMutex);
+        g_currentModeId = g_config.defaultMode;
+        const int nextIndex = 1 - g_currentModeIdIndex.load(std::memory_order_relaxed);
+        g_modeIdBuffers[nextIndex] = g_config.defaultMode;
+        g_currentModeIdIndex.store(nextIndex, std::memory_order_release);
+    }
+
+    WriteCurrentModeToFile(g_config.defaultMode);
     ApplyProfileSwitchRuntimeConfig(previousConfig);
-
     g_configIsDirty.store(pendingConfigSave, std::memory_order_release);
 }
 

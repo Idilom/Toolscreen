@@ -196,7 +196,7 @@ void UpdateActiveMirrorConfigs() {
     if (currentModeId == s_lastMirrorConfigModeId && snapVer == s_lastMirrorConfigSnapshotVersion) {
         return;
     }
-    const ModeConfig* mode = GetModeFromSnapshot(cfg, currentModeId);
+    const ModeConfig* mode = GetModeFromSnapshotOrFallback(cfg, currentModeId);
     if (!mode) { return; }
 
     std::vector<std::string> currentMirrorIds = mode->mirrorIds;
@@ -321,7 +321,7 @@ void UpdateCachedScreenMetrics() {
         std::string currentModeId = GetPublishedCurrentModeId();
         int beforeModeW = 0;
         int beforeModeH = 0;
-        if (const ModeConfig* currentModeBefore = GetModeFromSnapshot(*baseSnapshot, currentModeId)) {
+        if (const ModeConfig* currentModeBefore = GetModeFromSnapshotOrFallback(*baseSnapshot, currentModeId)) {
             beforeModeW = currentModeBefore->width;
             beforeModeH = currentModeBefore->height;
         }
@@ -331,7 +331,7 @@ void UpdateCachedScreenMetrics() {
 
         int afterModeW = 0;
         int afterModeH = 0;
-        if (const ModeConfig* currentModeAfter = GetModeFromSnapshot(resolvedConfig, currentModeId)) {
+        if (const ModeConfig* currentModeAfter = GetModeFromSnapshotOrFallback(resolvedConfig, currentModeId)) {
             afterModeW = currentModeAfter->width;
             afterModeH = currentModeAfter->height;
         }
@@ -370,7 +370,7 @@ void UpdateCachedScreenMetrics() {
 
         if (sourceSnapshotStillCurrent) {
             const std::string activeModeIdAfterPublish = GetPublishedCurrentModeId();
-            if (const ModeConfig* activeMode = GetModeFromSnapshot(resolvedConfig, activeModeIdAfterPublish)) {
+            if (const ModeConfig* activeMode = GetModeFromSnapshotOrFallback(resolvedConfig, activeModeIdAfterPublish)) {
                 RetargetActiveModeTransition(*activeMode);
             }
         } else {
@@ -463,7 +463,7 @@ void UpdateCachedViewportMode() {
     // Get mode data via config snapshot (thread-safe, lock-free)
     auto cfgSnap = GetConfigSnapshot();
     if (!cfgSnap) return;
-    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    const ModeConfig* mode = GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId);
 
     int nextIndex = 1 - g_viewportModeCacheIndex.load(std::memory_order_relaxed);
     CachedModeViewport& cache = g_viewportModeCache[nextIndex];

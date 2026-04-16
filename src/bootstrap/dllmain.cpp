@@ -1436,7 +1436,7 @@ static bool GetLatestViewportForHook(int& outModeW, int& outModeH, bool& outStre
     auto cfgSnap = GetConfigSnapshot();
     if (!cfgSnap) { return false; }
 
-    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    const ModeConfig* mode = GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId);
     if (!mode) { return false; }
 
     if (s_cache.valid && s_cache.modeId != currentModeId) {
@@ -2186,7 +2186,7 @@ static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInp
             }
 
             auto inputCfgSnap = GetConfigSnapshot();
-            const ModeConfig* mode = inputCfgSnap ? GetModeFromSnapshot(*inputCfgSnap, modeId) : nullptr;
+            const ModeConfig* mode = inputCfgSnap ? GetModeFromSnapshotOrFallback(*inputCfgSnap, modeId) : nullptr;
             if (mode && mode->sensitivityOverrideEnabled) {
                 if (mode->separateXYSensitivity) {
                     sensitivityX = mode->modeSensitivityX;
@@ -2856,7 +2856,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             int modeWidth = 0, modeHeight = 0;
             bool modeValid = false;
             {
-                const ModeConfig* newMode = GetModeFromSnapshot(frameCfg, desiredModeId);
+                const ModeConfig* newMode = GetModeFromSnapshotOrFallback(frameCfg, desiredModeId);
                 if (newMode) {
                     modeWidth = newMode->width;
                     modeHeight = newMode->height;
@@ -2879,9 +2879,9 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         ModeConfig modeToRenderCopy;
         bool modeFound = false;
         {
-            const ModeConfig* tempMode = GetModeFromSnapshot(frameCfg, desiredModeId);
+            const ModeConfig* tempMode = GetModeFromSnapshotOrFallback(frameCfg, desiredModeId);
             if (!tempMode && g_isTransitioningMode) {
-                tempMode = GetModeFromSnapshot(frameCfg, lastFrameModeIdCopy);
+                tempMode = GetModeFromSnapshotOrFallback(frameCfg, lastFrameModeIdCopy);
             }
             if (tempMode) {
                 modeToRenderCopy = *tempMode;

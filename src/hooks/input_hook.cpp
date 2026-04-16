@@ -444,7 +444,7 @@ static void ResendCurrentModeWmSize(HWND hWnd, const char* source) {
     if (!cfgSnap) { return; }
 
     const std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
-    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    const ModeConfig* mode = GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId);
     if (!mode || mode->width <= 0 || mode->height <= 0) { return; }
 
     RequestWindowClientResize(hWnd, mode->width, mode->height, source);
@@ -1450,7 +1450,7 @@ InputHandlerResult HandleWmSizeModeDimensions(HWND hWnd, UINT uMsg, WPARAM wPara
     if (msgW <= 0 || msgH <= 0) { return { false, 0 }; }
 
     auto cfgSnap = GetConfigSnapshot();
-    const ModeConfig* mode = cfgSnap ? GetModeFromSnapshot(*cfgSnap, currentModeId) : nullptr;
+    const ModeConfig* mode = cfgSnap ? GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId) : nullptr;
     if (!mode || mode->width <= 0 || mode->height <= 0) { return { false, 0 }; }
 
     if (EqualsIgnoreCase(mode->id, "Fullscreen")) {

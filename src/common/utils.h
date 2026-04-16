@@ -393,6 +393,8 @@ ModeConfig* GetModeMutable(const std::string& id);
 MirrorConfig* GetMutableMirror(const std::string& name);
 
 const ModeConfig* GetModeFromSnapshot(const Config& config, const std::string& id);
+const ModeConfig* GetModeFromSnapshotOrFallback(const Config& config, const std::string& id,
+                                                std::string* resolvedId = nullptr);
 const MirrorConfig* GetMirrorFromSnapshot(const Config& config, const std::string& name);
 bool isWallTitleOrWaiting(const std::string& state);
 ModeViewportInfo GetCurrentModeViewport();

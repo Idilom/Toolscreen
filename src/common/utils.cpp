@@ -1863,6 +1863,36 @@ const ModeConfig* GetModeFromSnapshot(const Config& config, const std::string& i
     return nullptr;
 }
 
+const ModeConfig* GetModeFromSnapshotOrFallback(const Config& config, const std::string& id, std::string* resolvedId) {
+    if (const ModeConfig* mode = GetModeFromSnapshot(config, id)) {
+        if (resolvedId) {
+            *resolvedId = mode->id;
+        }
+        return mode;
+    }
+
+    if (!config.defaultMode.empty()) {
+        if (const ModeConfig* defaultMode = GetModeFromSnapshot(config, config.defaultMode)) {
+            if (resolvedId) {
+                *resolvedId = defaultMode->id;
+            }
+            return defaultMode;
+        }
+    }
+
+    if (!config.modes.empty()) {
+        if (resolvedId) {
+            *resolvedId = config.modes.front().id;
+        }
+        return &config.modes.front();
+    }
+
+    if (resolvedId) {
+        resolvedId->clear();
+    }
+    return nullptr;
+}
+
 const MirrorConfig* GetMirrorFromSnapshot(const Config& config, const std::string& name) {
     for (const auto& mirror : config.mirrors) {
         if (mirror.name == name) return &mirror;
@@ -1882,7 +1912,7 @@ ModeViewportInfo GetCurrentModeViewport_Internal() {
 
     // Use snapshot for thread-safe mode config lookup (called from multiple threads)
     auto vpSnap = GetConfigSnapshot();
-    const ModeConfig* mode = vpSnap ? GetModeFromSnapshot(*vpSnap, modeId) : nullptr;
+    const ModeConfig* mode = vpSnap ? GetModeFromSnapshotOrFallback(*vpSnap, modeId) : nullptr;
     if (!mode) {
         return info;
     }
@@ -3065,7 +3095,7 @@ static void RequestCurrentModeClientResizeSync(HWND hwnd, const char* source) {
     if (!cfgSnap) { return; }
 
     const std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
-    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    const ModeConfig* mode = GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId);
     if (!mode || mode->width <= 0 || mode->height <= 0) { return; }
 
     if (EqualsIgnoreCase(mode->id, "Fullscreen") && mode->useRelativeSize) {

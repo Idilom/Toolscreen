@@ -1143,6 +1143,10 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     profile-case-insensitive-collisions
     profile-recover-missing-metadata
     profile-async-save-skip-deleted-profile
+    profile-switch-ninjabrain-async-stop
+    profile-switch-ninjabrain-async-restart
+    profile-switch-invalid-default-mode-fallback
+    profile-switch-reader-mode-fallback
     profile-switch-concurrent-readers
     profile-switch-concurrent-lifecycle
     profile-switch-concurrent-metadata-rebuild
