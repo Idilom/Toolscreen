@@ -2383,6 +2383,27 @@ bool ResolvePresentedGameViewport(ModeViewportInfo& outViewport) {
     return true;
 }
 
+bool GetLatestGameViewportSize(int& outWidth, int& outHeight) {
+    const int width = lastViewportW.load(std::memory_order_relaxed);
+    const int height = lastViewportH.load(std::memory_order_relaxed);
+    if (width <= 0 || height <= 0) {
+        outWidth = 0;
+        outHeight = 0;
+        return false;
+    }
+
+    outWidth = width;
+    outHeight = height;
+    return true;
+}
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+void SetLatestGameViewportSizeForTests(int width, int height) {
+    lastViewportW.store((std::max)(0, width), std::memory_order_relaxed);
+    lastViewportH.store((std::max)(0, height), std::memory_order_relaxed);
+}
+#endif
+
 bool ResolvePresentedGameBlitRect(int& outDstX0, int& outDstY0, int& outDstX1, int& outDstY1) {
     int modeWidth = 0;
     int modeHeight = 0;

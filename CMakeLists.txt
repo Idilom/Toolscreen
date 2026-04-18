@@ -1104,6 +1104,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     profiler-unspecified-breakdown
     settings-gui-basic
     settings-gui-advanced
+    settings-mouse-translation-prefers-live-viewport
     settings-search-subcategory-filtering
     settings-search-specific-options
     settings-search-reset-on-close

@@ -369,6 +369,27 @@ void ResetProfileTestState(std::string_view caseName) {
     ExpectConfigLoadSucceeded(std::string(caseName) + " initial load");
 }
 
+class ScopedLatestGameViewportSizeOverride {
+  public:
+    ScopedLatestGameViewportSizeOverride(int width, int height) {
+        m_hadOriginal = GetLatestGameViewportSize(m_originalWidth, m_originalHeight);
+        SetLatestGameViewportSizeForTests(width, height);
+    }
+
+    ~ScopedLatestGameViewportSizeOverride() {
+        if (m_hadOriginal) {
+            SetLatestGameViewportSizeForTests(m_originalWidth, m_originalHeight);
+        } else {
+            SetLatestGameViewportSizeForTests(0, 0);
+        }
+    }
+
+  private:
+    int m_originalWidth = 0;
+    int m_originalHeight = 0;
+    bool m_hadOriginal = false;
+};
+
 std::filesystem::path GetProfilesDirectoryForTests() {
     return std::filesystem::path(g_toolscreenPath) / "profiles";
 }
@@ -486,6 +507,47 @@ void ExpectPublishedViewportMatchesMode(const std::string& expectedModeId, const
     Expect(cachedViewport.width == expectedMode->width, context + " should cache the expected viewport width.");
     Expect(cachedViewport.height == expectedMode->height, context + " should cache the expected viewport height.");
 }
+
+    void RunSettingsMouseTranslationPrefersLiveViewportTest(TestRunMode runMode = TestRunMode::Automated) {
+        (void)runMode;
+
+        DummyWindow window(kWindowWidth, kWindowHeight, false);
+        const std::filesystem::path root = PrepareCaseDirectory("settings_mouse_translation_prefers_live_viewport");
+        ResetGlobalTestState(root);
+
+        RECT clientRect{};
+        Expect(GetClientRect(window.hwnd(), &clientRect) != FALSE,
+            "Expected mouse translation regression test window to expose a client rect.");
+        const int clientWidth = clientRect.right - clientRect.left;
+        const int clientHeight = clientRect.bottom - clientRect.top;
+        Expect(clientWidth > 0 && clientHeight > 0,
+            "Expected mouse translation regression test window to expose a positive client size.");
+
+        g_config = MakeSingleModeProfileSnapshot("MouseTranslate", 800, 600);
+        g_configLoaded.store(true, std::memory_order_release);
+        PublishConfigSnapshot();
+        PublishCurrentModeForTests("MouseTranslate");
+
+        UpdateCachedWindowMetricsFromSize(clientWidth + 240, clientHeight + 180);
+        Expect(GetCachedWindowWidth() == clientWidth + 240,
+            "Expected the mouse translation regression test to stage a stale cached client width.");
+        Expect(GetCachedWindowHeight() == clientHeight + 180,
+            "Expected the mouse translation regression test to stage a stale cached client height.");
+
+        ScopedLatestGameViewportSizeOverride liveViewport(640, 480);
+
+        LPARAM translatedLParam = MAKELPARAM(clientWidth / 2, clientHeight / 2);
+        const InputHandlerResult result = HandleMouseCoordinateTranslationPhase(window.hwnd(), WM_MOUSEMOVE, 0, translatedLParam);
+            const int translatedX = static_cast<int>(static_cast<short>(LOWORD(translatedLParam)));
+            const int translatedY = static_cast<int>(static_cast<short>(HIWORD(translatedLParam)));
+
+        Expect(!result.consumed,
+            "Expected mouse coordinate translation to adjust WM_MOUSEMOVE in-place without consuming the message.");
+            Expect(translatedX == 320,
+            "Expected mouse coordinate translation to use the live game viewport width instead of a stale cached mode width.");
+            Expect(translatedY == 240,
+            "Expected mouse coordinate translation to use the live game viewport height instead of a stale cached mode height.");
+    }
 
 void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Automated) {
     (void)runMode;

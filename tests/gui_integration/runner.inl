@@ -143,6 +143,7 @@ const auto& GetTestCaseDefinitions() {
         {"profiler-unspecified-breakdown", &RunProfilerUnspecifiedBreakdownTest},
         {"settings-gui-basic", &RunSettingsGuiBasicTest},
         {"settings-gui-advanced", &RunSettingsGuiAdvancedTest},
+        {"settings-mouse-translation-prefers-live-viewport", &RunSettingsMouseTranslationPrefersLiveViewportTest},
         {"settings-search-subcategory-filtering", &RunSettingsSearchSubcategoryFilteringTest},
         {"settings-search-specific-options", &RunSettingsSearchSpecificOptionsTest},
         {"settings-search-reset-on-close", &RunSettingsSearchResetOnCloseTest},

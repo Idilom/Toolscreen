@@ -1969,29 +1969,76 @@ InputHandlerResult HandleMouseCoordinateTranslationPhase(HWND hWnd, UINT uMsg, W
 
     PROFILE_SCOPE("HandleMouseCoordinateTranslation");
 
-    // Resolve against the same presented viewport geometry the GL hooks use.
-    // This keeps cursor translation aligned with what is actually on screen.
-    ModeViewportInfo geo;
-    if (!ResolvePresentedGameViewport(geo)) {
-        const CachedModeViewport& cachedMode = g_viewportModeCache[g_viewportModeCacheIndex.load(std::memory_order_acquire)];
-        if (cachedMode.valid) {
-            geo.valid = true;
-            geo.width = cachedMode.width;
-            geo.height = cachedMode.height;
-            geo.stretchEnabled = cachedMode.stretchEnabled;
-            geo.stretchX = cachedMode.stretchX;
-            geo.stretchY = cachedMode.stretchY;
-            geo.stretchWidth = cachedMode.stretchWidth;
-            geo.stretchHeight = cachedMode.stretchHeight;
-        }
-    }
-    if (!geo.valid || geo.width <= 0 || geo.height <= 0 || geo.stretchWidth <= 0 || geo.stretchHeight <= 0) { return { false, 0 }; }
-
     RECT clientRect{};
     if (!GetClientRect(hWnd, &clientRect)) { return { false, 0 }; }
     const int clientW = clientRect.right - clientRect.left;
     const int clientH = clientRect.bottom - clientRect.top;
     if (clientW <= 0 || clientH <= 0) { return { false, 0 }; }
+
+    ModeViewportInfo geo;
+    const std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+    auto cfgSnap = GetConfigSnapshot();
+    const ModeConfig* currentMode = cfgSnap ? GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId) : nullptr;
+    const bool fullscreenMode = currentMode && EqualsIgnoreCase(currentMode->id, "Fullscreen");
+
+    // Start from the same presented viewport helper the GL hooks use, then correct the
+    // source size and any screen-sized output rects using live state from this message.
+    if (!ResolvePresentedGameViewport(geo)) {
+        if (!currentMode || currentMode->width <= 0 || currentMode->height <= 0) {
+            return { false, 0 };
+        }
+
+        geo.valid = true;
+        geo.x = 0;
+        geo.y = 0;
+        geo.width = currentMode->width;
+        geo.height = currentMode->height;
+        geo.stretchEnabled = currentMode->stretch.enabled;
+        if (fullscreenMode) {
+            geo.stretchX = 0;
+            geo.stretchY = 0;
+            geo.stretchWidth = clientW;
+            geo.stretchHeight = clientH;
+        } else if (currentMode->stretch.enabled) {
+            geo.stretchX = currentMode->stretch.x;
+            geo.stretchY = currentMode->stretch.y;
+            geo.stretchWidth = currentMode->stretch.width;
+            geo.stretchHeight = currentMode->stretch.height;
+        } else {
+            geo.stretchWidth = currentMode->width;
+            geo.stretchHeight = currentMode->height;
+            geo.stretchX = GetCenteredAxisOffset(clientW, geo.stretchWidth);
+            geo.stretchY = GetCenteredAxisOffset(clientH, geo.stretchHeight);
+        }
+    }
+
+    int liveViewportW = 0;
+    int liveViewportH = 0;
+    if (GetLatestGameViewportSize(liveViewportW, liveViewportH)) {
+        geo.width = liveViewportW;
+        geo.height = liveViewportH;
+    }
+
+    if (fullscreenMode) {
+        geo.stretchEnabled = true;
+        geo.stretchX = 0;
+        geo.stretchY = 0;
+        geo.stretchWidth = clientW;
+        geo.stretchHeight = clientH;
+    } else if (!geo.stretchEnabled) {
+        const int outputWidth = geo.stretchWidth > 0 ? geo.stretchWidth : (currentMode ? currentMode->width : geo.width);
+        const int outputHeight = geo.stretchHeight > 0 ? geo.stretchHeight : (currentMode ? currentMode->height : geo.height);
+        if (outputWidth <= 0 || outputHeight <= 0) {
+            return { false, 0 };
+        }
+
+        geo.stretchWidth = outputWidth;
+        geo.stretchHeight = outputHeight;
+        geo.stretchX = GetCenteredAxisOffset(clientW, outputWidth);
+        geo.stretchY = GetCenteredAxisOffset(clientH, outputHeight);
+    }
+
+    if (!geo.valid || geo.width <= 0 || geo.height <= 0 || geo.stretchWidth <= 0 || geo.stretchHeight <= 0) { return { false, 0 }; }
 
     const int viewportLeft = geo.stretchX;
     const int viewportTop = geo.stretchY;
