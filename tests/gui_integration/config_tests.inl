@@ -1123,32 +1123,17 @@ void RunConfigLoadFullscreenStretchRepairedTest(TestRunMode runMode = TestRunMod
                 "Expected to prime requested resize state for the Fullscreen external-resize regression test.");
             Expect(window.PumpMessages(), "Expected the Fullscreen external-resize regression test window to stay open after priming.");
 
-            RECT targetWindowRect{ 0, 0, initialClientW + 137, initialClientH + 59 };
-            const DWORD windowStyle = static_cast<DWORD>(GetWindowLongPtrW(window.hwnd(), GWL_STYLE));
-            const DWORD windowExStyle = static_cast<DWORD>(GetWindowLongPtrW(window.hwnd(), GWL_EXSTYLE));
-            Expect(AdjustWindowRectEx(&targetWindowRect, windowStyle, FALSE, windowExStyle) != FALSE,
-                "Expected to compute a resized outer window rect for the Fullscreen external-resize regression test.");
-
-            const int targetWindowW = targetWindowRect.right - targetWindowRect.left;
-            const int targetWindowH = targetWindowRect.bottom - targetWindowRect.top;
-            Expect(SetWindowPos(window.hwnd(), nullptr, 0, 0, targetWindowW, targetWindowH,
-                       SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) != FALSE,
-                "Expected to resize the regression-test window before routing the external resize through SubclassedWndProc.");
-            Expect(window.PumpMessages(), "Expected the Fullscreen external-resize regression test window to stay open after resizing.");
-
-            RECT resizedClientRect{};
-            Expect(GetClientRect(window.hwnd(), &resizedClientRect) != FALSE,
-                "Expected to read the resized client rect for the Fullscreen external-resize regression test.");
-            const int resizedClientW = resizedClientRect.right - resizedClientRect.left;
-            const int resizedClientH = resizedClientRect.bottom - resizedClientRect.top;
-            Expect(resizedClientW > 0 && resizedClientH > 0 && (resizedClientW != initialClientW || resizedClientH != initialClientH),
-                "Expected the Fullscreen external-resize regression test to produce a real client-size change.");
+            const int staleCachedW = (std::max)(1, initialClientW - 37);
+            const int staleCachedH = (std::max)(1, initialClientH - 23);
+            Expect(staleCachedW != initialClientW || staleCachedH != initialClientH,
+                "Expected the Fullscreen external-resize regression test to stage a stale cached client size.");
+            UpdateCachedWindowMetricsFromSize(staleCachedW, staleCachedH);
 
             WINDOWPOS pos{};
             pos.hwnd = window.hwnd();
-            pos.cx = targetWindowW;
-            pos.cy = targetWindowH;
-            pos.flags = SWP_NOACTIVATE;
+            pos.cx = initialClientW;
+            pos.cy = initialClientH;
+            pos.flags = SWP_NOACTIVATE | SWP_NOMOVE;
 
             const HWND previousSubclassedHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
             const WNDPROC previousOriginalWndProc = g_originalWndProc;
