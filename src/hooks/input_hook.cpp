@@ -2257,7 +2257,7 @@ static void ApplyPreferredOutputShiftState(const KeyRebind& rebind, bool shiftLa
 }
 
 static void EmitRebindTypedChar(HWND hWnd, const KeyRebind& rebind, bool shiftLayerActive, DWORD textVK,
-                                bool preferShiftedText, LPARAM charLParam) {
+                                bool preferShiftedText, UINT charMsg, LPARAM charLParam) {
     const uint32_t configuredUnicodeText =
         (shiftLayerActive && HasShiftLayerOutputUnicode(rebind))
             ? static_cast<uint32_t>(rebind.shiftLayerOutputUnicode)
@@ -2269,7 +2269,7 @@ static void EmitRebindTypedChar(HWND hWnd, const KeyRebind& rebind, bool shiftLa
         if (configuredUnicodeText <= 0xFFFFu) {
             SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, static_cast<WPARAM>(static_cast<WCHAR>(configuredUnicodeText)), charLParam);
         } else {
-            SendUnicodeScalarAsCharMessage(hWnd, WM_CHAR, configuredUnicodeText, charLParam);
+            SendUnicodeScalarAsCharMessage(hWnd, charMsg, configuredUnicodeText, charLParam);
         }
         return;
     }
@@ -2832,6 +2832,14 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
         triggerVK = normalizedCustomOutputVk;
     }
 
+    const bool isSystemKeyMsg = (uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP);
+    const bool sourceIsAlt = IsAltVk(vkCode) || IsAltVk(rawVkCode);
+    const bool altContextActive = isSystemKeyMsg && !sourceIsAlt;
+    const bool outputIsAlt = IsAltVk(triggerVK);
+    const bool outputHasAltContext = altContextActive || outputIsAlt;
+    const bool outputUsesSystemMessage = outputHasAltContext;
+    const UINT outputCharMsg = outputHasAltContext ? WM_SYSCHAR : WM_CHAR;
+
     if (ShouldMaskMenuModifierForRebind(rebind, vkCode, rawVkCode, isKeyDown, isAutoRepeatKeyDown, triggerVK)) {
         (void)SendMenuMaskKeyTap();
     }
@@ -2905,13 +2913,13 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
         if (typedOutputDisabled) {
             return;
         }
-        EmitRebindTypedChar(hWnd, rebind, shiftLayerActive, textVK, preferShiftedText, charLParam);
+        EmitRebindTypedChar(hWnd, rebind, shiftLayerActive, textVK, preferShiftedText, outputCharMsg, charLParam);
     };
 
     if (triggerVK == 0) {
         if (isKeyDown && fromKeyIsNonChar) {
             const UINT textScanCode = GetScanCodeWithExtendedFlag((effectiveCustomOutputVk != 0) ? textVK : defaultTextVK);
-            const LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, false, 1, false, false);
+            const LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, outputHasAltContext, 1, false, false);
             emitTypedCharForSource(charLParam);
         }
         return { true, 0 };
@@ -2961,19 +2969,12 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
 
         if (isKeyDown && fromKeyIsNonCharMouse) {
             const UINT textScanCode = GetScanCodeWithExtendedFlag(textVK);
-            LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, false, 1, false, false);
+            LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, outputHasAltContext, 1, false, false);
             emitTypedCharForSource(charLParam);
         }
 
         return { true, mouseResult };
     }
-
-    const bool isSystemKeyMsg = (uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP);
-    const bool sourceIsAlt = IsAltVk(vkCode) || IsAltVk(rawVkCode);
-    const bool altContextActive = isSystemKeyMsg && !sourceIsAlt;
-    const bool outputIsAlt = IsAltVk(triggerVK);
-    const bool outputHasAltContext = altContextActive || outputIsAlt;
-    const bool outputUsesSystemMessage = outputHasAltContext;
     UINT outputMsg = isKeyDown ? (outputUsesSystemMessage ? WM_SYSKEYDOWN : WM_KEYDOWN)
                                : (outputUsesSystemMessage ? WM_SYSKEYUP : WM_KEYUP);
 
@@ -3202,19 +3203,19 @@ InputHandlerResult HandleCustomCharNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam,
     if (uMsg != WM_TOOLSCREEN_CHAR_NO_REBIND) { return { false, 0 }; }
     PROFILE_SCOPE("HandleCustomCharNoRebind");
 
-    //HandleCharLogging(WM_CHAR, wParam, lParam);
+    const UINT forwardedMsg = ((lParam & (static_cast<LPARAM>(1) << 29)) != 0) ? WM_SYSCHAR : WM_CHAR;
 
     if (g_showGui.load()) {
-        ImGuiInputQueue_EnqueueWin32Message(hWnd, WM_CHAR, wParam, lParam);
+        ImGuiInputQueue_EnqueueWin32Message(hWnd, forwardedMsg, wParam, lParam);
         return { true, 1 };
     }
 
-    if (g_originalWndProc) { return { true, CallWindowProc(g_originalWndProc, hWnd, WM_CHAR, wParam, lParam) }; }
-    return { true, DefWindowProc(hWnd, WM_CHAR, wParam, lParam) };
+    if (g_originalWndProc) { return { true, CallWindowProc(g_originalWndProc, hWnd, forwardedMsg, wParam, lParam) }; }
+    return { true, DefWindowProc(hWnd, forwardedMsg, wParam, lParam) };
 }
 
 InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (uMsg != WM_CHAR) { return { false, 0 }; }
+    if (uMsg != WM_CHAR && uMsg != WM_SYSCHAR) { return { false, 0 }; }
     PROFILE_SCOPE("HandleCharRebinding");
 
     auto charRebindCfg = GetConfigSnapshot();

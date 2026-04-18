@@ -517,6 +517,31 @@ void RunKeyRebindRuntimeFullForwardingTest(TestRunMode runMode = TestRunMode::Au
     Expect(keyUpResult.result == kCapturedWndProcResult, "Expected full rebind WM_KEYUP to forward through the original WNDPROC.");
     Expect(capture.messages.size() == 1, "Expected full rebind WM_KEYUP to forward exactly one key message.");
     ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Full rebind WM_KEYUP");
+
+    capture.Clear();
+    const LPARAM systemKeyDownLParam = BuildTestKeyboardMessageLParam('A', true, true);
+    const InputHandlerResult systemKeyDownResult = HandleKeyRebinding(window.hwnd(), WM_SYSKEYDOWN, 'A', systemKeyDownLParam);
+    Expect(systemKeyDownResult.consumed, "Expected full rebind WM_SYSKEYDOWN to be consumed.");
+    Expect(systemKeyDownResult.result == kCapturedWndProcResult,
+           "Expected full rebind WM_SYSKEYDOWN to forward through the original WNDPROC.");
+    Expect(capture.messages.size() == 1, "Expected full rebind WM_SYSKEYDOWN to forward exactly one key message.");
+    ExpectCapturedMessage(capture, 0, WM_SYSKEYDOWN, 'B', "Full rebind WM_SYSKEYDOWN");
+
+    capture.Clear();
+    const InputHandlerResult systemCharResult = HandleCharRebinding(window.hwnd(), WM_SYSCHAR, static_cast<WPARAM>('a'), systemKeyDownLParam);
+    Expect(systemCharResult.consumed, "Expected full rebind WM_SYSCHAR to be consumed.");
+    Expect(systemCharResult.result == kCapturedWndProcResult,
+           "Expected full rebind WM_SYSCHAR to forward through the original WNDPROC.");
+    Expect(capture.messages.size() == 1, "Expected full rebind WM_SYSCHAR to forward exactly one character message.");
+    ExpectCapturedMessage(capture, 0, WM_SYSCHAR, 'b', "Full rebind WM_SYSCHAR");
+
+    capture.Clear();
+    const InputHandlerResult systemKeyUpResult = HandleKeyRebinding(window.hwnd(), WM_SYSKEYUP, 'A', BuildTestKeyboardMessageLParam('A', false, true));
+    Expect(systemKeyUpResult.consumed, "Expected full rebind WM_SYSKEYUP to be consumed.");
+    Expect(systemKeyUpResult.result == kCapturedWndProcResult,
+           "Expected full rebind WM_SYSKEYUP to forward through the original WNDPROC.");
+    Expect(capture.messages.size() == 1, "Expected full rebind WM_SYSKEYUP to forward exactly one key message.");
+    ExpectCapturedMessage(capture, 0, WM_SYSKEYUP, 'B', "Full rebind WM_SYSKEYUP");
 }
 
 void RunKeyRebindRuntimeSplitVkOutputTest(TestRunMode runMode = TestRunMode::Automated) {
@@ -543,6 +568,19 @@ void RunKeyRebindRuntimeSplitVkOutputTest(TestRunMode runMode = TestRunMode::Aut
     Expect(charResult.consumed, "Expected split rebind WM_CHAR to be consumed.");
     Expect(capture.messages.size() == 1, "Expected split rebind WM_CHAR to forward exactly one character message.");
     ExpectCapturedMessage(capture, 0, WM_CHAR, 'c', "Split rebind typed WM_CHAR");
+
+    capture.Clear();
+    const LPARAM systemSourceLParam = BuildTestKeyboardMessageLParam('A', true, true);
+    const InputHandlerResult systemKeyDownResult = HandleKeyRebinding(window.hwnd(), WM_SYSKEYDOWN, 'A', systemSourceLParam);
+    Expect(systemKeyDownResult.consumed, "Expected split rebind WM_SYSKEYDOWN to be consumed.");
+    Expect(capture.messages.size() == 1, "Expected split rebind WM_SYSKEYDOWN to forward exactly one key message.");
+    ExpectCapturedMessage(capture, 0, WM_SYSKEYDOWN, 'B', "Split rebind trigger WM_SYSKEYDOWN");
+
+    capture.Clear();
+    const InputHandlerResult systemCharResult = HandleCharRebinding(window.hwnd(), WM_SYSCHAR, static_cast<WPARAM>('a'), systemSourceLParam);
+    Expect(systemCharResult.consumed, "Expected split rebind WM_SYSCHAR to be consumed.");
+    Expect(capture.messages.size() == 1, "Expected split rebind WM_SYSCHAR to forward exactly one character message.");
+    ExpectCapturedMessage(capture, 0, WM_SYSCHAR, 'c', "Split rebind typed WM_SYSCHAR");
 }
 
 void RunKeyRebindRuntimeSplitUnicodeOutputTest(TestRunMode runMode = TestRunMode::Automated) {
