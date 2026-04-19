@@ -7,6 +7,7 @@
 #include "mirror_thread.h"
 #include "obs_thread.h"
 #include "common/i18n.h"
+#include "common/ninjabrain_information_messages.h"
 #include "common/profiler.h"
 #include "common/font_assets.h"
 #include "gui/imgui_input_queue.h"
@@ -9035,6 +9036,10 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     const float infoLineGap = 2.0f * scale * infoFontScale;
     const float infoIconSize = infoLineH * 0.82f * std::clamp(nb.informationMessagesIconScale, 0.25f, 4.0f);
     const float infoTextInset = infoIconSize + infoIconTextMargin;
+    std::array<NinjabrainFormattedInformationMessage, kNinjabrainInformationMessageLimit> formattedInformationMessages{};
+    for (int index = 0; index < data.informationMessageCount; ++index) {
+        formattedInformationMessages[index] = FormatNinjabrainInformationMessage(data.informationMessages[index]);
+    }
 
     auto isAsciiSpace = [](char ch) {
         return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
@@ -9045,11 +9050,15 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         while (next < end && ((*next & 0xC0) == 0x80)) { ++next; }
         return next;
     };
-    auto measureWrappedText = [&](const std::string& text, float wrapWidth, float* outMaxLineWidth = nullptr) {
+    struct WrappedInfoTextLine {
+        size_t startOffset = 0;
+        size_t endOffset = 0;
+        float width = 0.0f;
+    };
+    auto buildWrappedInfoTextLines = [&](const std::string& text, float wrapWidth) {
+        std::vector<WrappedInfoTextLine> lines;
         const char* cursor = text.c_str();
         const char* end = cursor + text.size();
-        int lineCount = 0;
-        float maxLineWidth = 0.0f;
 
         while (cursor < end) {
             while (cursor < end && isAsciiSpace(*cursor)) { ++cursor; }
@@ -9061,14 +9070,72 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             const char* lineEnd = wrap;
             while (lineEnd > cursor && isAsciiSpace(lineEnd[-1])) { --lineEnd; }
 
-            maxLineWidth = (std::max)(maxLineWidth, font->CalcTextSizeA(infoFs, FLT_MAX, 0.0f, cursor, lineEnd).x);
-            ++lineCount;
+            lines.push_back({
+                static_cast<size_t>(cursor - text.c_str()),
+                static_cast<size_t>(lineEnd - text.c_str()),
+                font->CalcTextSizeA(infoFs, FLT_MAX, 0.0f, cursor, lineEnd).x,
+            });
             cursor = wrap;
         }
 
-        if (lineCount == 0) { lineCount = 1; }
+        if (lines.empty()) {
+            lines.push_back({0, 0, 0.0f});
+        }
+
+        return lines;
+    };
+    auto measureWrappedText = [&](const NinjabrainFormattedInformationMessage& message, float wrapWidth,
+                                  float* outMaxLineWidth = nullptr) {
+        const auto lines = buildWrappedInfoTextLines(message.plainText, wrapWidth);
+        float maxLineWidth = 0.0f;
+        for (const WrappedInfoTextLine& line : lines) {
+            maxLineWidth = (std::max)(maxLineWidth, line.width);
+        }
         if (outMaxLineWidth) { *outMaxLineWidth = maxLineWidth; }
-        return lineCount * infoLineH + (lineCount - 1) * infoLineGap;
+        return static_cast<float>(lines.size()) * infoLineH +
+               static_cast<float>((std::max)(0, static_cast<int>(lines.size()) - 1)) * infoLineGap;
+    };
+    auto drawWrappedText = [&](const NinjabrainFormattedInformationMessage& message, float textX, float textY,
+                               float wrapWidth, ImU32 defaultColor) {
+        const auto lines = buildWrappedInfoTextLines(message.plainText, wrapWidth);
+        float lineY = textY;
+        for (const WrappedInfoTextLine& line : lines) {
+            float lineX = textX;
+            size_t runStartOffset = 0;
+            for (const NinjabrainInformationTextRun& run : message.runs) {
+                const size_t runEndOffset = runStartOffset + run.text.size();
+                if (runEndOffset <= line.startOffset) {
+                    runStartOffset = runEndOffset;
+                    continue;
+                }
+                if (runStartOffset >= line.endOffset) {
+                    break;
+                }
+
+                const size_t localStart = (std::max)(line.startOffset, runStartOffset) - runStartOffset;
+                const size_t localEnd = (std::min)(line.endOffset, runEndOffset) - runStartOffset;
+                if (localEnd > localStart) {
+                    const std::string part = run.text.substr(localStart, localEnd - localStart);
+                    if (!part.empty()) {
+                        ImU32 partColor = defaultColor;
+                        if (run.hasColor) {
+                            partColor = IM_COL32(
+                                (run.colorRgb >> 16) & 0xFF,
+                                (run.colorRgb >> 8) & 0xFF,
+                                run.colorRgb & 0xFF,
+                                255);
+                        }
+
+                        drawText(infoFs, ImVec2(lineX, lineY), partColor, part.c_str());
+                        lineX += font->CalcTextSizeA(infoFs, FLT_MAX, 0.0f, part.c_str()).x;
+                    }
+                }
+
+                runStartOffset = runEndOffset;
+            }
+
+            lineY += infoLineH + infoLineGap;
+        }
     };
     auto measureInfoMessagesBlock = [&](float contentWidth) {
         if (!hasInformationMessages) { return 0.0f; }
@@ -9076,7 +9143,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         const float wrapWidth = (std::max)(1.0f, contentWidth - infoTextInset);
         float totalHeight = infoMessageMarginTop + infoMessageMarginBottom;
         for (int index = 0; index < data.informationMessageCount; ++index) {
-            const float messageTextHeight = measureWrappedText(data.informationMessages[index].message, wrapWidth);
+            const float messageTextHeight = measureWrappedText(formattedInformationMessages[index], wrapWidth);
             totalHeight += (std::max)(messageTextHeight, infoIconSize);
         }
         return totalHeight;
@@ -9135,29 +9202,14 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         float y = top + infoMessageMarginTop;
         for (int index = 0; index < data.informationMessageCount; ++index) {
             const auto& message = data.informationMessages[index];
-            const float messageTextHeight = measureWrappedText(message.message, wrapWidth);
+            const auto& formattedMessage = formattedInformationMessages[index];
+            const float messageTextHeight = measureWrappedText(formattedMessage, wrapWidth);
             const float messageHeight = (std::max)(messageTextHeight, infoIconSize);
             const float rowCenterY = y + messageHeight * 0.5f;
             drawInfoMessageIcon(message, iconCenterX, rowCenterY);
 
-            const char* cursor = message.message.c_str();
-            const char* end = cursor + message.message.size();
             float textY = y + (messageHeight - messageTextHeight) * 0.5f;
-            while (cursor < end) {
-                while (cursor < end && isAsciiSpace(*cursor)) { ++cursor; }
-                if (cursor >= end) { break; }
-
-                const char* wrap = font->CalcWordWrapPosition(infoFs, cursor, end, wrapWidth);
-                if (wrap == cursor) { wrap = nextUtf8Char(cursor, end); }
-
-                const char* lineEnd = wrap;
-                while (lineEnd > cursor && isAsciiSpace(lineEnd[-1])) { --lineEnd; }
-
-                std::string line(cursor, lineEnd);
-                drawText(infoFs, ImVec2(messageTextX, textY), messageColor, line.c_str());
-                textY += infoLineH + infoLineGap;
-                cursor = wrap;
-            }
+            drawWrappedText(formattedMessage, messageTextX, textY, wrapWidth, messageColor);
 
             y += messageHeight;
             if (index + 1 < data.informationMessageCount) {

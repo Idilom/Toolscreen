@@ -138,6 +138,7 @@ const auto& GetTestCaseDefinitions() {
         {"mode-image-overlay-render-png", &RunModeImageOverlayRenderPngTest},
         {"mode-image-overlay-render-mpeg", &RunModeImageOverlayRenderMpegTest},
         {"mode-ninjabrain-overlay-render", &RunModeNinjabrainOverlayRenderTest},
+        {"render-ninjabrain-information-message-translation-spans", &RunRenderNinjabrainInformationMessageTranslationSpansTest},
         {"rebind-indicator-renders-below-settings-gui", &RunRebindIndicatorRendersBelowSettingsGuiTest},
         {"config-error-gui", &RunConfigErrorGuiTest},
         {"profiler-unspecified-breakdown", &RunProfilerUnspecifiedBreakdownTest},
@@ -229,7 +230,7 @@ const auto& GetTestGroupDefinitions() {
     static const std::vector<TestGroupDefinition> testGroups = {
         {"config", {"config-default-", "config-roundtrip", "config-load-"}, {"fullscreen-relative-external-resize-skips-stale-resend"}},
         {"rebind", {"key-rebind-"}, {}},
-        {"render", {"mode-"}, {"rebind-indicator-renders-below-settings-gui"}},
+        {"render", {"mode-"}, {"rebind-indicator-renders-below-settings-gui", "render-ninjabrain-information-message-translation-spans"}},
         {"settings-and-ui", {"settings-"}, {"config-error-gui", "profiler-unspecified-breakdown"}},
         {"logs-and-profiles", {"log-", "profile-"}, {}},
     };

@@ -1099,6 +1099,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     mode-image-overlay-render-png
     mode-image-overlay-render-mpeg
     mode-ninjabrain-overlay-render
+    render-ninjabrain-information-message-translation-spans
     rebind-indicator-renders-below-settings-gui
     config-error-gui
     profiler-unspecified-breakdown

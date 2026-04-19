@@ -1,4 +1,5 @@
 #include "common/i18n.h"
+#include "common/ninjabrain_information_messages.h"
 #include "common/font_assets.h"
 #include "common/profiler.h"
 #include "common/utils.h"

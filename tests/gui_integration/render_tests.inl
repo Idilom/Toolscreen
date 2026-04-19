@@ -1378,6 +1378,61 @@ void RunModeNinjabrainOverlayRenderTest(TestRunMode runMode = TestRunMode::Autom
     CleanupShaders();
 }
 
+void RunRenderNinjabrainInformationMessageTranslationSpansTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+
+    struct RestoreEnglishTranslation {
+        ~RestoreEnglishTranslation() {
+            if (!LoadTranslation("en")) {
+                std::cerr << "WARN: Failed to reload embedded English translations after the Ninjabrain information-message translation test." << std::endl;
+            }
+        }
+    } restoreEnglishTranslation;
+
+    Expect(LoadTranslation("zh_CN"), "Expected embedded zh_CN translations to load for the Ninjabrain information-message translation test.");
+
+    NinjabrainInformationMessage combinedCertaintyMessage;
+    combinedCertaintyMessage.severity = "INFO";
+    combinedCertaintyMessage.type = "COMBINED_CERTAINTY";
+    combinedCertaintyMessage.message =
+        "Nether coords (-221, 223) have <span style=\"color:#00CE29;\">+84.3%</span> chance to hit the stronghold (it is between the top 2 offsets).";
+
+    const NinjabrainFormattedInformationMessage formattedCombinedCertainty =
+        FormatNinjabrainInformationMessage(combinedCertaintyMessage);
+    Expect(
+        formattedCombinedCertainty.plainText == "下界坐标 (-221, 223) 有 +84.3% 的概率命中要塞（这在最大的两个偏移点之间）。",
+        "Expected the combined-certainty information message to translate through the overlay formatter while preserving the span text.");
+    Expect(formattedCombinedCertainty.runs.size() >= 3,
+           "Expected the combined-certainty information message formatter to split the translated text into multiple styled runs.");
+
+    bool foundGreenCertaintyRun = false;
+    for (const NinjabrainInformationTextRun& run : formattedCombinedCertainty.runs) {
+        if (!run.hasColor || run.text != "+84.3%") {
+            continue;
+        }
+
+        foundGreenCertaintyRun = run.colorRgb == 0x00CE29;
+        if (foundGreenCertaintyRun) {
+            break;
+        }
+    }
+    Expect(foundGreenCertaintyRun,
+           "Expected the translated combined-certainty information message to preserve the original green span color.");
+
+    NinjabrainInformationMessage nextThrowMessage;
+    nextThrowMessage.severity = "INFO";
+    nextThrowMessage.type = "NEXT_THROW_DIRECTION";
+    nextThrowMessage.message = "Go left 1 blocks, or right 3 blocks, for ~95% certainty after next measurement.";
+
+    const NinjabrainFormattedInformationMessage formattedNextThrow =
+        FormatNinjabrainInformationMessage(nextThrowMessage);
+    Expect(
+        formattedNextThrow.plainText == "向左 1 个方块，或者向右 3 个方块，在下次测量时将有 ~95% 的准确性。",
+        "Expected the next-throw information message to translate through the overlay formatter.");
+    Expect(formattedNextThrow.runs.size() == 1 && !formattedNextThrow.runs[0].hasColor,
+           "Expected the next-throw information message to remain a single unstyled run after translation.");
+}
+
 void RunRebindIndicatorRendersBelowSettingsGuiTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
