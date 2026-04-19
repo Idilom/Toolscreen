@@ -11,6 +11,8 @@
 #include <unordered_set>
 #include <thread>
 
+bool PublishConfigSnapshotIfUnchanged(const std::shared_ptr<const Config>& expectedSnapshot, const Config& config);
+
 std::atomic<bool> g_logicThreadRunning{ false };
 static std::thread g_logicThread;
 static std::atomic<bool> g_logicThreadShouldStop{ false };
@@ -194,7 +196,7 @@ void UpdateActiveMirrorConfigs() {
     if (currentModeId == s_lastMirrorConfigModeId && snapVer == s_lastMirrorConfigSnapshotVersion) {
         return;
     }
-    const ModeConfig* mode = GetModeFromSnapshot(cfg, currentModeId);
+    const ModeConfig* mode = GetModeFromSnapshotOrFallback(cfg, currentModeId);
     if (!mode) { return; }
 
     std::vector<std::string> currentMirrorIds = mode->mirrorIds;
@@ -319,7 +321,7 @@ void UpdateCachedScreenMetrics() {
         std::string currentModeId = GetPublishedCurrentModeId();
         int beforeModeW = 0;
         int beforeModeH = 0;
-        if (const ModeConfig* currentModeBefore = GetModeFromSnapshot(*baseSnapshot, currentModeId)) {
+        if (const ModeConfig* currentModeBefore = GetModeFromSnapshotOrFallback(*baseSnapshot, currentModeId)) {
             beforeModeW = currentModeBefore->width;
             beforeModeH = currentModeBefore->height;
         }
@@ -329,7 +331,7 @@ void UpdateCachedScreenMetrics() {
 
         int afterModeW = 0;
         int afterModeH = 0;
-        if (const ModeConfig* currentModeAfter = GetModeFromSnapshot(resolvedConfig, currentModeId)) {
+        if (const ModeConfig* currentModeAfter = GetModeFromSnapshotOrFallback(resolvedConfig, currentModeId)) {
             afterModeW = currentModeAfter->width;
             afterModeH = currentModeAfter->height;
         }
@@ -357,7 +359,7 @@ void UpdateCachedScreenMetrics() {
         const bool shouldEnforceModeSize = !fullscreenStretchMode && (modeSizeChanged || shouldEnforceForExternalResize);
         const bool shouldSendWmSize = shouldSendStartupWmSize || shouldSendFullscreenModeSize || shouldEnforceModeSize;
 
-        const bool sourceSnapshotStillCurrent = (GetConfigSnapshot() == baseSnapshot);
+        const bool sourceSnapshotStillCurrent = PublishConfigSnapshotIfUnchanged(baseSnapshot, resolvedConfig);
         const bool sameModeStillActive = (GetPublishedCurrentModeId() == currentModeId);
 
         if (sourceSnapshotStillCurrent && sameModeStillActive && afterModeW > 0 && afterModeH > 0 && shouldSendWmSize &&
@@ -366,8 +368,16 @@ void UpdateCachedScreenMetrics() {
             if (hwnd) { RequestWindowClientResize(hwnd, afterModeW, afterModeH, "logic_thread:screen_metrics"); }
         }
 
-        // Publish updated snapshot so reader threads see the recalculated dimensions.
-        if (sourceSnapshotStillCurrent) { PublishConfigSnapshot(resolvedConfig); }
+        if (sourceSnapshotStillCurrent) {
+            const std::string activeModeIdAfterPublish = GetPublishedCurrentModeId();
+            if (const ModeConfig* activeMode = GetModeFromSnapshotOrFallback(resolvedConfig, activeModeIdAfterPublish)) {
+                RetargetActiveModeTransition(*activeMode);
+            }
+        } else {
+            // A concurrent publish won the snapshot race. Retry next tick against
+            // the newer config so resize-driven mode dimensions do not stay stale.
+            s_screenMetricsRecalcRequested.store(true, std::memory_order_relaxed);
+        }
 
         if (startupShouldRunNow) { s_startupMetricsResyncPending.store(false, std::memory_order_relaxed); }
     }
@@ -453,7 +463,7 @@ void UpdateCachedViewportMode() {
     // Get mode data via config snapshot (thread-safe, lock-free)
     auto cfgSnap = GetConfigSnapshot();
     if (!cfgSnap) return;
-    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    const ModeConfig* mode = GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId);
 
     int nextIndex = 1 - g_viewportModeCacheIndex.load(std::memory_order_relaxed);
     CachedModeViewport& cache = g_viewportModeCache[nextIndex];

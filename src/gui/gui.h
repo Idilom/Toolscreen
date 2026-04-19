@@ -82,6 +82,14 @@ struct GuiTestKeyboardLayoutKeyLabels {
     std::string shiftLayerText;
 };
 
+enum class GuiTestKeyboardLayoutDisableTarget {
+    None,
+    All,
+    Types,
+    TypesVkShift,
+    Triggers,
+};
+
 enum class GuiTestKeyboardLayoutBindTarget {
     None,
     FullOutputVk,
@@ -121,7 +129,10 @@ void RequestGuiTestKeyboardLayoutRemoveCustomKey(DWORD vk);
 void RequestGuiTestKeyboardLayoutConfirmRemoveCustomKey();
 void RequestGuiTestKeyboardLayoutOpenCustomInputPicker();
 void RequestGuiTestKeyboardLayoutSelectCustomInputScan(DWORD scan);
+void RequestGuiTestKeyboardLayoutSetDisabledTarget(GuiTestKeyboardLayoutDisableTarget target, bool disabled);
+void RequestGuiTestKeyboardLayoutSetOutputDisabled(bool disabled);
 void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode);
+void RequestGuiTestKeyboardLayoutSetScrollWheelEnabled(bool enabled);
 void RequestGuiTestKeyboardLayoutSetCursorStateView(GuiTestKeyboardLayoutCursorStateView view);
 void RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget target);
 void RequestGuiTestKeyboardLayoutSetShiftLayerUppercase(bool enabled);
@@ -498,6 +509,21 @@ struct CursorsConfig {
     CursorConfig wall;
     CursorConfig ingame;
 };
+struct CursorTrailConfig {
+    bool enabled = ConfigDefaults::CURSOR_TRAIL_ENABLED;
+    int lifetimeMs = ConfigDefaults::CURSOR_TRAIL_LIFETIME_MS;
+    int stampSpacingPx = ConfigDefaults::CURSOR_TRAIL_STAMP_SPACING_PX;
+    int spriteSizePx = ConfigDefaults::CURSOR_TRAIL_SPRITE_SIZE_PX;
+    float tailSizeScale = ConfigDefaults::CURSOR_TRAIL_TAIL_SIZE_SCALE;
+    bool useVelocitySize = ConfigDefaults::CURSOR_TRAIL_USE_VELOCITY_SIZE;
+    float velocitySizeIntensity = ConfigDefaults::CURSOR_TRAIL_VELOCITY_SIZE_INTENSITY;
+    Color color = { ConfigDefaults::CURSOR_TRAIL_COLOR_R, ConfigDefaults::CURSOR_TRAIL_COLOR_G, ConfigDefaults::CURSOR_TRAIL_COLOR_B };
+    bool useGradient = ConfigDefaults::CURSOR_TRAIL_USE_GRADIENT;
+    Color tailColor = { ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_R, ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_G, ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_B };
+    float opacity = ConfigDefaults::CURSOR_TRAIL_OPACITY;
+    std::string blendMode = ConfigDefaults::CURSOR_TRAIL_BLEND_MODE;
+    std::string spritePath = ConfigDefaults::CURSOR_TRAIL_SPRITE_PATH;
+};
 enum class EyeZoomOverlayDisplayMode { Manual, Fit, Stretch };
 
 enum class EyeZoomFontSizeMode {
@@ -578,13 +604,16 @@ struct KeyRebind {
     bool enabled = true;
     std::string cursorState = kKeyRebindCursorStateAny;
 
+    bool triggerOutputDisabled = false;
     bool useCustomOutput = false;
+    bool baseOutputDisabled = false;
     DWORD customOutputVK = 0;
     DWORD customOutputUnicode = 0;
     DWORD customOutputScanCode = 0;
     bool baseOutputShifted = false;
     bool shiftLayerEnabled = false;
     bool shiftLayerUsesCapsLock = false;
+    bool shiftLayerOutputDisabled = false;
     DWORD shiftLayerOutputVK = 0;
     DWORD shiftLayerOutputUnicode = 0;
     bool shiftLayerOutputShifted = false;
@@ -760,6 +789,7 @@ struct Config {
     std::vector<DWORD> windowOverlaysHotkey = {};
     std::vector<DWORD> ninjabrainOverlayHotkey = {};
     CursorsConfig cursors;
+    CursorTrailConfig cursorTrail;
     std::string fontPath = ConfigDefaults::CONFIG_DEFAULT_GUI_FONT_PATH;
     std::string lang = "en";
     int fpsLimit = 0;

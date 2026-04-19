@@ -1680,6 +1680,44 @@ void CursorsConfigFromToml(const toml::table& tbl, CursorsConfig& cfg) {
     if (auto t = GetTable(tbl, "ingame")) { CursorConfigFromToml(*t, cfg.ingame); }
 }
 
+void CursorTrailConfigToToml(const CursorTrailConfig& cfg, toml::table& out) {
+    out.insert("enabled", cfg.enabled);
+    out.insert("lifetimeMs", cfg.lifetimeMs);
+    out.insert("stampSpacingPx", cfg.stampSpacingPx);
+    out.insert("spriteSizePx", cfg.spriteSizePx);
+    out.insert("tailSizeScale", cfg.tailSizeScale);
+    out.insert("useVelocitySize", cfg.useVelocitySize);
+    out.insert("velocitySizeIntensity", cfg.velocitySizeIntensity);
+    out.insert("color", ColorToTomlArray(cfg.color));
+    out.insert("useGradient", cfg.useGradient);
+    out.insert("tailColor", ColorToTomlArray(cfg.tailColor));
+    out.insert("opacity", cfg.opacity);
+    out.insert("blendMode", cfg.blendMode);
+    out.insert("spritePath", cfg.spritePath);
+}
+
+void CursorTrailConfigFromToml(const toml::table& tbl, CursorTrailConfig& cfg) {
+    cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::CURSOR_TRAIL_ENABLED);
+    cfg.lifetimeMs = std::clamp(GetOr(tbl, "lifetimeMs", ConfigDefaults::CURSOR_TRAIL_LIFETIME_MS), 50, 500);
+    cfg.stampSpacingPx = std::clamp(GetOr(tbl, "stampSpacingPx", ConfigDefaults::CURSOR_TRAIL_STAMP_SPACING_PX), 1, 64);
+    cfg.spriteSizePx = std::clamp(GetOr(tbl, "spriteSizePx", ConfigDefaults::CURSOR_TRAIL_SPRITE_SIZE_PX), 4, 256);
+    cfg.tailSizeScale = std::clamp(GetOr(tbl, "tailSizeScale", ConfigDefaults::CURSOR_TRAIL_TAIL_SIZE_SCALE), 0.0f, 2.0f);
+    cfg.useVelocitySize = GetOr(tbl, "useVelocitySize", ConfigDefaults::CURSOR_TRAIL_USE_VELOCITY_SIZE);
+    cfg.velocitySizeIntensity = std::clamp(GetOr(tbl, "velocitySizeIntensity", ConfigDefaults::CURSOR_TRAIL_VELOCITY_SIZE_INTENSITY), 0.0f, 1.0f);
+    cfg.color = ColorFromTomlArray(GetArray(tbl, "color"),
+                                   Color{ ConfigDefaults::CURSOR_TRAIL_COLOR_R,
+                                          ConfigDefaults::CURSOR_TRAIL_COLOR_G,
+                                          ConfigDefaults::CURSOR_TRAIL_COLOR_B });
+    cfg.useGradient = GetOr(tbl, "useGradient", ConfigDefaults::CURSOR_TRAIL_USE_GRADIENT);
+    cfg.tailColor = ColorFromTomlArray(GetArray(tbl, "tailColor"),
+                                       Color{ ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_R,
+                                              ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_G,
+                                              ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_B });
+    cfg.opacity = std::clamp(GetOr(tbl, "opacity", ConfigDefaults::CURSOR_TRAIL_OPACITY), 0.0f, 1.0f);
+    cfg.blendMode = GetStringOr(tbl, "blendMode", ConfigDefaults::CURSOR_TRAIL_BLEND_MODE);
+    cfg.spritePath = GetStringOr(tbl, "spritePath", ConfigDefaults::CURSOR_TRAIL_SPRITE_PATH);
+}
+
 void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
     out.insert("cloneWidth", cfg.cloneWidth);
     out.insert("overlayWidth", cfg.overlayWidth);
@@ -1848,13 +1886,16 @@ void KeyRebindToToml(const KeyRebind& cfg, toml::table& out) {
     if (cursorState != kKeyRebindCursorStateAny) {
         out.insert("cursorState", cursorState);
     }
+    out.insert("triggerOutputDisabled", cfg.triggerOutputDisabled);
     out.insert("useCustomOutput", cfg.useCustomOutput);
+    out.insert("baseOutputDisabled", cfg.baseOutputDisabled);
     out.insert("customOutputVK", static_cast<int64_t>(cfg.customOutputVK));
     out.insert("customOutputUnicode", static_cast<int64_t>(cfg.customOutputUnicode));
     out.insert("customOutputScanCode", static_cast<int64_t>(cfg.customOutputScanCode));
     out.insert("baseOutputShifted", cfg.baseOutputShifted);
     out.insert("shiftLayerEnabled", cfg.shiftLayerEnabled);
     out.insert("shiftLayerUsesCapsLock", cfg.shiftLayerUsesCapsLock);
+    out.insert("shiftLayerOutputDisabled", cfg.shiftLayerOutputDisabled);
     out.insert("shiftLayerOutputVK", static_cast<int64_t>(cfg.shiftLayerOutputVK));
     out.insert("shiftLayerOutputUnicode", static_cast<int64_t>(cfg.shiftLayerOutputUnicode));
     out.insert("shiftLayerOutputShifted", cfg.shiftLayerOutputShifted);
@@ -1943,7 +1984,9 @@ void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {
     cfg.toKey = static_cast<DWORD>(GetOr<int64_t>(tbl, "toKey", 0));
     cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::KEY_REBIND_ENABLED);
     cfg.cursorState = NormalizeKeyRebindCursorStateId(GetStringOr(tbl, "cursorState", kKeyRebindCursorStateAny));
+    cfg.triggerOutputDisabled = GetOr(tbl, "triggerOutputDisabled", ConfigDefaults::KEY_REBIND_TRIGGER_OUTPUT_DISABLED);
     cfg.useCustomOutput = GetOr(tbl, "useCustomOutput", ConfigDefaults::KEY_REBIND_USE_CUSTOM_OUTPUT);
+    cfg.baseOutputDisabled = GetOr(tbl, "baseOutputDisabled", ConfigDefaults::KEY_REBIND_BASE_OUTPUT_DISABLED);
     cfg.customOutputVK = static_cast<DWORD>(GetOr<int64_t>(tbl, "customOutputVK", ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_VK));
     cfg.customOutputUnicode = ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_UNICODE;
     if (auto u = tbl["customOutputUnicode"]) {
@@ -1965,6 +2008,8 @@ void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {
     cfg.shiftLayerEnabled = GetOr(tbl, "shiftLayerEnabled", ConfigDefaults::KEY_REBIND_SHIFT_LAYER_ENABLED);
     cfg.shiftLayerUsesCapsLock =
         GetOr(tbl, "shiftLayerUsesCapsLock", ConfigDefaults::KEY_REBIND_SHIFT_LAYER_USES_CAPS_LOCK);
+    cfg.shiftLayerOutputDisabled =
+        GetOr(tbl, "shiftLayerOutputDisabled", ConfigDefaults::KEY_REBIND_SHIFT_LAYER_OUTPUT_DISABLED);
     cfg.shiftLayerOutputVK =
         static_cast<DWORD>(GetOr<int64_t>(tbl, "shiftLayerOutputVK", ConfigDefaults::KEY_REBIND_SHIFT_LAYER_OUTPUT_VK));
     cfg.shiftLayerOutputUnicode = ConfigDefaults::KEY_REBIND_SHIFT_LAYER_OUTPUT_UNICODE;
@@ -2299,6 +2344,10 @@ void ConfigToToml(const Config& config, toml::table& out) {
     toml::table cursorsTbl;
     CursorsConfigToToml(config.cursors, cursorsTbl);
     out.insert("cursors", cursorsTbl);
+
+    toml::table cursorTrailTbl;
+    CursorTrailConfigToToml(config.cursorTrail, cursorTrailTbl);
+    out.insert("cursorTrail", cursorTrailTbl);
 
     toml::table keyRebindsTbl;
     KeyRebindsConfigToToml(config.keyRebinds, keyRebindsTbl);
@@ -2721,6 +2770,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
 
     if (auto t = GetTable(tbl, "cursors")) { CursorsConfigFromToml(*t, config.cursors); }
 
+    if (auto t = GetTable(tbl, "cursorTrail")) { CursorTrailConfigFromToml(*t, config.cursorTrail); }
+
     if (auto t = GetTable(tbl, "keyRebinds")) { KeyRebindsConfigFromToml(*t, config.keyRebinds); }
 
     if (auto t = GetTable(tbl, "appearance")) { AppearanceConfigFromToml(*t, config.appearance); }
@@ -2863,6 +2914,7 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "eyezoom",
         "ninjabrainOverlay",
         "cursors",
+        "cursorTrail",
         "keyRebinds",
         "appearance",
         "mode",

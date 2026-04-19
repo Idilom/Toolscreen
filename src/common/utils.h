@@ -323,7 +323,7 @@ extern std::atomic<HCURSOR> g_specialCursorHandle;
 void Log(const std::string& message);
 void Log(const std::wstring& message);
 void APIENTRY BindTextureDirect(GLenum target, GLuint texture);
-void InvalidateTrackedGameTextureId(bool clearSwapThread = false);
+void InvalidateTrackedGameTextureId(bool clearSwapThread = false, bool clearCachedTexture = true);
 
 bool AcquireLatestLogSession(const std::wstring& logsDirectory, LogSession& outSession);
 void ReleaseLatestLogSession(LogSession& session);
@@ -393,10 +393,19 @@ ModeConfig* GetModeMutable(const std::string& id);
 MirrorConfig* GetMutableMirror(const std::string& name);
 
 const ModeConfig* GetModeFromSnapshot(const Config& config, const std::string& id);
+const ModeConfig* GetModeFromSnapshotOrFallback(const Config& config, const std::string& id,
+                                                std::string* resolvedId = nullptr);
 const MirrorConfig* GetMirrorFromSnapshot(const Config& config, const std::string& name);
 bool isWallTitleOrWaiting(const std::string& state);
 ModeViewportInfo GetCurrentModeViewport();
 ModeViewportInfo GetCurrentModeViewport_Internal(); // Lock-free implementation using double-buffered mode ID
+bool ResolvePresentedGameViewport(ModeViewportInfo& outViewport);
+bool ResolvePresentedGameBlitRect(int& outDstX0, int& outDstY0, int& outDstX1, int& outDstY1);
+bool GetLatestGameViewportSize(int& outWidth, int& outHeight);
+void InvalidateLatestGameViewportSize();
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+void SetLatestGameViewportSizeForTests(int width, int height);
+#endif
 
 GLuint CompileShader(GLenum type, const char* source);
 GLuint CreateShaderProgram(const char* vert, const char* frag);

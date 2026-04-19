@@ -973,6 +973,198 @@ void RunConfigLoadFullscreenStretchRepairedTest(TestRunMode runMode = TestRunMod
                       runMode);
 }
 
+        void RunConfigLoadFullscreenManualDimensionsPreservedTest(TestRunMode runMode = TestRunMode::Automated) {
+            RunConfigLoadCase("config_load_fullscreen_manual_dimensions_preserved",
+                     []() {
+                         Config config;
+                         config.defaultMode = "Fullscreen";
+
+                         ModeConfig fullscreenMode;
+                         fullscreenMode.id = "Fullscreen";
+                         fullscreenMode.useRelativeSize = false;
+                         fullscreenMode.relativeWidth = -1.0f;
+                         fullscreenMode.relativeHeight = -1.0f;
+                         fullscreenMode.width = 1280;
+                         fullscreenMode.height = 720;
+                         fullscreenMode.manualWidth = 1280;
+                         fullscreenMode.manualHeight = 720;
+                         fullscreenMode.stretch.enabled = false;
+                         fullscreenMode.stretch.x = 33;
+                         fullscreenMode.stretch.y = 44;
+                         fullscreenMode.stretch.width = 55;
+                         fullscreenMode.stretch.height = 66;
+                         config.modes.push_back(fullscreenMode);
+
+                         WriteConfigFixtureToDisk(config);
+                     },
+                     []() {
+                         ExpectConfigLoadSucceeded("config-load-fullscreen-manual-dimensions-preserved");
+                         const ModeConfig& fullscreenMode = FindModeOrThrow("Fullscreen");
+
+                         Expect(!fullscreenMode.useRelativeSize,
+                             "Expected Fullscreen manual sizing to stay in manual-pixel mode after recalculation.");
+                         Expect(fullscreenMode.relativeWidth < 0.0f && fullscreenMode.relativeHeight < 0.0f,
+                             "Expected Fullscreen manual sizing to keep relative dimensions disabled.");
+                         Expect(fullscreenMode.width == 1280 && fullscreenMode.height == 720,
+                             "Expected Fullscreen manual render dimensions to preserve the configured internal size.");
+                         Expect(fullscreenMode.manualWidth == 1280 && fullscreenMode.manualHeight == 720,
+                             "Expected Fullscreen manual dimensions to preserve their persisted values.");
+                         Expect(fullscreenMode.stretch.enabled, "Expected Fullscreen stretch to remain forced on.");
+                         Expect(fullscreenMode.stretch.x == 0 && fullscreenMode.stretch.y == 0,
+                             "Expected Fullscreen stretch origin to stay pinned to the top-left corner.");
+                     },
+                     runMode);
+        }
+
+        void RunConfigLoadFullscreenRelativeDimensionsPreservedTest(TestRunMode runMode = TestRunMode::Automated) {
+            constexpr float kRelativeWidth = 0.625f;
+            constexpr float kRelativeHeight = 0.4f;
+            int expectedWidth = 1;
+            int expectedHeight = 1;
+
+            RunConfigLoadCase("config_load_fullscreen_relative_dimensions_preserved",
+                     [&]() {
+                         Config config;
+                         config.defaultMode = "Fullscreen";
+
+                         ModeConfig fullscreenMode;
+                         fullscreenMode.id = "Fullscreen";
+                         fullscreenMode.useRelativeSize = true;
+                         fullscreenMode.relativeWidth = kRelativeWidth;
+                         fullscreenMode.relativeHeight = kRelativeHeight;
+                         fullscreenMode.width = 999;
+                         fullscreenMode.height = 555;
+                         fullscreenMode.manualWidth = 1234;
+                         fullscreenMode.manualHeight = 678;
+                         fullscreenMode.stretch.enabled = false;
+                         fullscreenMode.stretch.x = 33;
+                         fullscreenMode.stretch.y = 44;
+                         fullscreenMode.stretch.width = 55;
+                         fullscreenMode.stretch.height = 66;
+                         config.modes.push_back(fullscreenMode);
+
+                         const int liveScreenWidth = (std::max)(1, GetCachedWindowWidth());
+                         const int liveScreenHeight = (std::max)(1, GetCachedWindowHeight());
+                         expectedWidth = (std::max)(1, static_cast<int>(std::lround(kRelativeWidth * static_cast<float>(liveScreenWidth))));
+                         expectedHeight = (std::max)(1, static_cast<int>(std::lround(kRelativeHeight * static_cast<float>(liveScreenHeight))));
+
+                         WriteConfigFixtureToDisk(config);
+                     },
+                     [&]() {
+                         ExpectConfigLoadSucceeded("config-load-fullscreen-relative-dimensions-preserved");
+                         const ModeConfig& fullscreenMode = FindModeOrThrow("Fullscreen");
+
+                         Expect(fullscreenMode.useRelativeSize,
+                             "Expected Fullscreen percentage sizing to stay marked as relative after recalculation.");
+                         ExpectFloatNear(fullscreenMode.relativeWidth, kRelativeWidth,
+                                "Expected Fullscreen relativeWidth to preserve the configured percentage.");
+                         ExpectFloatNear(fullscreenMode.relativeHeight, kRelativeHeight,
+                                "Expected Fullscreen relativeHeight to preserve the configured percentage.");
+                         Expect(fullscreenMode.width == expectedWidth,
+                             "Expected Fullscreen relative width to be recomputed from the live client width.");
+                         Expect(fullscreenMode.height == expectedHeight,
+                             "Expected Fullscreen relative height to be recomputed from the live client height.");
+                         Expect(fullscreenMode.manualWidth == 1234 && fullscreenMode.manualHeight == 678,
+                             "Expected Fullscreen relative sizing to preserve the persisted manual fallback dimensions.");
+                         Expect(fullscreenMode.stretch.enabled, "Expected Fullscreen stretch to remain forced on.");
+                         Expect(fullscreenMode.stretch.x == 0 && fullscreenMode.stretch.y == 0,
+                             "Expected Fullscreen stretch origin to stay pinned to the top-left corner.");
+                     },
+                     runMode);
+        }
+
+        void RunFullscreenRelativeExternalResizeSkipsStaleResendTest(TestRunMode runMode = TestRunMode::Automated) {
+            DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+            const std::filesystem::path root = PrepareCaseDirectory("fullscreen_relative_external_resize_skips_stale_resend");
+            ResetGlobalTestState(root);
+
+            RECT initialClientRect{};
+            Expect(GetClientRect(window.hwnd(), &initialClientRect) != FALSE,
+                "Expected to read the initial client rect for the Fullscreen external-resize regression test.");
+            const int initialClientW = initialClientRect.right - initialClientRect.left;
+            const int initialClientH = initialClientRect.bottom - initialClientRect.top;
+            Expect(initialClientW > 0 && initialClientH > 0,
+                "Expected the Fullscreen external-resize regression test window to have a valid initial client size.");
+            UpdateCachedWindowMetricsFromSize(initialClientW, initialClientH);
+
+            g_config = Config();
+            g_config.defaultMode = "Fullscreen";
+            g_config.restoreWindowedModeOnFullscreenExit = false;
+
+            ModeConfig fullscreenMode;
+            fullscreenMode.id = "Fullscreen";
+            fullscreenMode.useRelativeSize = true;
+            fullscreenMode.relativeWidth = 0.8f;
+            fullscreenMode.relativeHeight = 0.7f;
+            fullscreenMode.width = (std::max)(1, static_cast<int>(std::lround(fullscreenMode.relativeWidth * static_cast<float>(initialClientW))));
+            fullscreenMode.height = (std::max)(1, static_cast<int>(std::lround(fullscreenMode.relativeHeight * static_cast<float>(initialClientH))));
+            fullscreenMode.manualWidth = fullscreenMode.width;
+            fullscreenMode.manualHeight = fullscreenMode.height;
+            fullscreenMode.stretch.enabled = true;
+            fullscreenMode.stretch.x = 0;
+            fullscreenMode.stretch.y = 0;
+            fullscreenMode.stretch.width = initialClientW;
+            fullscreenMode.stretch.height = initialClientH;
+            g_config.modes.push_back(fullscreenMode);
+            PublishConfigSnapshot();
+            g_configLoaded.store(true, std::memory_order_release);
+
+            {
+             std::lock_guard<std::mutex> lock(g_modeIdMutex);
+             g_currentModeId = "Fullscreen";
+             const int nextIndex = 1 - g_currentModeIdIndex.load(std::memory_order_relaxed);
+             g_modeIdBuffers[nextIndex] = "Fullscreen";
+             g_currentModeIdIndex.store(nextIndex, std::memory_order_release);
+            }
+
+            constexpr int kSentinelRequestedW = 321;
+            constexpr int kSentinelRequestedH = 654;
+            Expect(RequestWindowClientResize(window.hwnd(), kSentinelRequestedW, kSentinelRequestedH, "test:prime_resize_state"),
+                "Expected to prime requested resize state for the Fullscreen external-resize regression test.");
+            Expect(window.PumpMessages(), "Expected the Fullscreen external-resize regression test window to stay open after priming.");
+
+            const int staleCachedW = (std::max)(1, initialClientW - 37);
+            const int staleCachedH = (std::max)(1, initialClientH - 23);
+            Expect(staleCachedW != initialClientW || staleCachedH != initialClientH,
+                "Expected the Fullscreen external-resize regression test to stage a stale cached client size.");
+            UpdateCachedWindowMetricsFromSize(staleCachedW, staleCachedH);
+
+            WINDOWPOS pos{};
+            pos.hwnd = window.hwnd();
+            pos.cx = initialClientW;
+            pos.cy = initialClientH;
+            pos.flags = SWP_NOACTIVATE | SWP_NOMOVE;
+
+            const HWND previousSubclassedHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+            const WNDPROC previousOriginalWndProc = g_originalWndProc;
+            g_subclassedHwnd.store(window.hwnd(), std::memory_order_release);
+            g_originalWndProc = &DefWindowProcW;
+
+            try {
+             (void)SubclassedWndProc(window.hwnd(), WM_WINDOWPOSCHANGED, 0, reinterpret_cast<LPARAM>(&pos));
+            } catch (...) {
+             g_originalWndProc = previousOriginalWndProc;
+             g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
+             throw;
+            }
+
+            g_originalWndProc = previousOriginalWndProc;
+            g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
+
+            int requestedW = 0;
+            int requestedH = 0;
+            int previousRequestedW = 0;
+            int previousRequestedH = 0;
+            Expect(GetRecentRequestedWindowClientResizes(requestedW, requestedH, previousRequestedW, previousRequestedH),
+                "Expected requested resize history to be available for the Fullscreen external-resize regression test.");
+            Expect(requestedW == kSentinelRequestedW && requestedH == kSentinelRequestedH,
+                "Expected external resize handling to avoid reposting stale Fullscreen relative WM_SIZE before logic-thread recalculation.");
+
+            if (runMode == TestRunMode::Visual) {
+             RunVisualLoop(window, "fullscreen-relative-external-resize-skips-stale-resend", &RenderInteractiveSettingsFrame);
+            }
+        }
+
 void RunConfigLoadPreemptiveSyncExistingModeTest(TestRunMode runMode = TestRunMode::Automated) {
     RunConfigLoadCase("config_load_preemptive_sync_existing_mode",
                       []() {

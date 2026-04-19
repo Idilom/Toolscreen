@@ -4,7 +4,7 @@
 #include <atomic>
 #include <windows.h>
 
-// This thread hooks into OBS's graphics-hook to redirect capture from backbuffer to our overlay texture
+// OBS capture redirect state used by the main glBlitFramebuffer hook.
 
 void StartObsHookThread();
 void StopObsHookThread();
@@ -20,8 +20,19 @@ extern std::atomic<int> g_obsPre113OffsetY;
 extern std::atomic<int> g_obsPre113ContentW;
 extern std::atomic<int> g_obsPre113ContentH;
 
-void ObsBlitFramebufferDirect(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
-							  GLint dstY1, GLbitfield mask, GLenum filter);
+void BlitFramebufferDirect(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
+						   GLint dstY1, GLbitfield mask, GLenum filter);
+bool TryObsBlitFramebufferRedirect(GLint readFBO,
+						   GLint srcX0,
+						   GLint srcY0,
+						   GLint srcX1,
+						   GLint srcY1,
+						   GLint dstX0,
+						   GLint dstY0,
+						   GLint dstX1,
+						   GLint dstY1,
+						   GLbitfield mask,
+						   GLenum filter);
 
 void CaptureBackbufferForObs(int width, int height);
 

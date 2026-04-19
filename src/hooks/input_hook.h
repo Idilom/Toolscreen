@@ -1,16 +1,18 @@
 #pragma once
 
+#include <atomic>
 #include <Windows.h>
 #include <string>
 
 extern WNDPROC g_originalWndProc;
+extern std::atomic<HWND> g_subclassedHwnd;
 
 struct InputHandlerResult {
     bool consumed;
     LRESULT result;
 };
 
-// Custom message: treat payload as WM_CHAR without running HandleCharRebinding.
+// Custom message: treat payload as WM_CHAR/WM_SYSCHAR without running HandleCharRebinding.
 inline constexpr UINT WM_TOOLSCREEN_CHAR_NO_REBIND = WM_APP + 0x2A1;
 // Custom messages: treat payload as WM_KEYDOWN/WM_KEYUP without running HandleKeyRebinding.
 inline constexpr UINT WM_TOOLSCREEN_KEYDOWN_NO_REBIND = WM_APP + 0x2A2;

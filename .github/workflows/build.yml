@@ -2,56 +2,84 @@ name: Build
 
 on:
   push:
+    paths-ignore:
+      - README.md
+      - docs/**
+      - LICENSE
+      - .github/ISSUE_TEMPLATE/**
   pull_request:
-  workflow_dispatch:
+    paths-ignore:
+      - README.md
+      - docs/**
+      - LICENSE
+      - .github/ISSUE_TEMPLATE/**
 
 permissions:
   actions: read
   contents: read
 
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  build_core:
     runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: read
     env:
-      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-      SIGNPATH_ORGANIZATION_ID: '0126c615-e5f1-4fed-a438-6b8de149c8f4'
-      SIGNPATH_PROJECT_SLUG: 'Toolscreen'
-      SIGNPATH_SIGNING_POLICY_SLUG: 'test-signing'
-      SIGNPATH_DLL_ARTIFACT_CONFIGURATION_SLUG: 'dll'
-      SIGNPATH_JAR_ARTIFACT_CONFIGURATION_SLUG: 'jar'
-      SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG: 'installer'
-      SIGNPATH_DOWNLOADER_ARTIFACT_CONFIGURATION_SLUG: 'downloader'
+      TOOLSCREEN_BUILD_DIR: 'out/build-ci'
+      TOOLSCREEN_ARTIFACT_DIR: 'out/build-ci/bin/Release'
+      TOOLSCREEN_PACKAGING_BUILD_DIR: 'out/build-ci-package'
+      TOOLSCREEN_PACKAGING_ARTIFACT_DIR: 'out/build-ci-package/bin/Release'
+      TOOLSCREEN_RELEASE_DIR: 'out/release-unsigned'
+      VCPKG_DEFAULT_BINARY_CACHE: '${{ github.workspace }}/.cache/vcpkg/archives'
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite'
+      VCPKG_DISABLE_METRICS: '1'
+      SCCACHE_GHA_ENABLED: 'true'
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Resolve SignPath artifact version
-        id: signpath_version
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        shell: pwsh
-        run: |
-          $versionFile = Join-Path $env:GITHUB_WORKSPACE 'ToolscreenVersion.cmake'
-          $versionContent = Get-Content $versionFile -Raw
-
-          $majorMatch = [regex]::Match($versionContent, 'set\(TOOLSCREEN_VERSION_MAJOR\s+(\d+)\)')
-          $minorMatch = [regex]::Match($versionContent, 'set\(TOOLSCREEN_VERSION_MINOR\s+(\d+)\)')
-          $patchMatch = [regex]::Match($versionContent, 'set\(TOOLSCREEN_VERSION_PATCH\s+(\d+)\)')
-
-          if (-not $majorMatch.Success -or -not $minorMatch.Success -or -not $patchMatch.Success) {
-            throw "Failed to parse version from $versionFile"
-          }
-
-          $version = '{0}.{1}.{2}' -f $majorMatch.Groups[1].Value, $minorMatch.Groups[1].Value, $patchMatch.Groups[1].Value
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
         with:
-          distribution: temurin
-          java-version: '17'
+          arch: x64
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Restore CMake dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.TOOLSCREEN_BUILD_DIR }}/_deps
+            ${{ env.TOOLSCREEN_BUILD_DIR }}/downloads
+          key: windows-build-deps-v3-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'src/vcpkg.json') }}
+          restore-keys: |
+            windows-build-deps-v3-
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: windows-vcpkg-binary-v1-${{ hashFiles('src/vcpkg.json') }}
+          restore-keys: |
+            windows-vcpkg-binary-v1-
+
+      - name: Restore prebuilt liblogger cache
+        id: prebuilt_liblogger_cache
+        uses: actions/cache@v4
+        with:
+          path: out/prebuilt-liblogger
+          key: windows-prebuilt-liblogger-v1-${{ hashFiles('liblogger/LibLoggerVersion.cmake', 'scripts/fetch_signed_liblogger.ps1') }}
+          restore-keys: |
+            windows-prebuilt-liblogger-v1-
 
       - name: Fetch latest signed liblogger artifacts
+        if: ${{ steps.prebuilt_liblogger_cache.outputs.cache-hit != 'true' }}
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -59,277 +87,132 @@ jobs:
           $destination = Join-Path (Get-Location) 'out/prebuilt-liblogger'
           & .\scripts\fetch_signed_liblogger.ps1 -DestinationDirectory $destination
 
-      - name: Configure build preset
+      - name: Configure core build preset
         shell: pwsh
         run: |
           $prebuiltLoggerDllPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.dll').Path
-          $prebuiltLoggerPdbPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.pdb').Path
 
-          if ($env:SIGNPATH_API_TOKEN -and $env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
-            $signedDllPath = (Join-Path (Get-Location) 'out/build/bin/Release/Toolscreen.signed-package-input.dll')
-            cmake --preset vs2022-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
-          } else {
-            cmake --preset vs2022-x64 -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
-          }
+          cmake --preset ci-ninja-x64 -DTOOLSCREEN_ENABLE_JAR_PACKAGING=OFF -DTOOLSCREEN_ENABLE_EXE_PACKAGING=OFF -DTOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS=OFF -DTOOLSCREEN_STAGE_LIBLOGGER_PDB=OFF -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath"
 
-      - name: Build unsigned DLLs
-        shell: cmd
-        run: cmake --build --preset release --target Toolscreen
+      - name: Build DLLs and GUI integration test runner
+        shell: pwsh
+        run: cmake --build --preset ci-release --parallel --target Toolscreen toolscreen_gui_integration_tests
 
-      - name: Build CLI integration test runner
-        shell: cmd
-        run: cmake --build --preset release --target toolscreen_gui_integration_tests
+      - name: Run fast CTest smoke tests
+        shell: pwsh
+        run: ctest --preset ci-release --tests-regex "^(toolscreen_artifact_exists|liblogger_artifact_exists)$"
 
-      - name: Run CLI integration tests
-        shell: cmd
-        run: out\build\bin\Release\toolscreen_gui_integration_tests.exe --run-all
+      - name: Run GUI integration tests in parallel
+        shell: pwsh
+        run: |
+          & "$env:GITHUB_WORKSPACE\$env:TOOLSCREEN_ARTIFACT_DIR\toolscreen_gui_integration_tests.exe" --run-groups-parallel
 
-      - name: Upload DLL for SignPath
-        id: signpath_dll_upload
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        uses: actions/upload-artifact@v4
+      - name: Set up Java 17
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/setup-java@v4
         with:
-          name: toolscreen-signpath-dll-input
-          if-no-files-found: error
-          retention-days: 1
-          path: out/build/bin/Release/Toolscreen.dll
+          distribution: temurin
+          java-version: '17'
 
-      - name: Submit DLL to SignPath with origin verification
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        uses: signpath/github-action-submit-signing-request@v2
+      - name: Restore Maven repository cache
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache@v4
         with:
-          api-token: ${{ env.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ env.SIGNPATH_DLL_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.signpath_dll_upload.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: out/signpath-dll-output
-          parameters: |
-            version: ${{ toJSON(steps.signpath_version.outputs.version) }}
+          path: ~/.m2/repository
+          key: windows-maven-v2-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            windows-maven-v2-
 
-      - name: Preserve signed DLL for packaging
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
+      - name: Configure packaging build preset
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: pwsh
         run: |
-          $artifactDllPath = 'out/build/bin/Release/Toolscreen.dll'
-          $signedDllPath = 'out/build/bin/Release/Toolscreen.signed-package-input.dll'
-          $downloadedSignedDllPath = 'out/signpath-dll-output/Toolscreen.dll'
+          $toolscreenDllPath = (Resolve-Path "$env:TOOLSCREEN_ARTIFACT_DIR/Toolscreen.dll").Path
+          $libloggerDllPath = (Resolve-Path "$env:TOOLSCREEN_ARTIFACT_DIR/liblogger_x64.dll").Path
 
-          if (-not (Test-Path $artifactDllPath)) {
-            throw "Expected unsigned DLL not found: $artifactDllPath"
-          }
-
-          if (-not (Test-Path $downloadedSignedDllPath)) {
-            throw "Expected signed DLL download not found: $downloadedSignedDllPath"
-          }
-
-          if (Test-Path $signedDllPath) {
-            Remove-Item -Path $signedDllPath -Force
-          }
-
-          Copy-Item -Path $downloadedSignedDllPath -Destination $signedDllPath -Force
-          Copy-Item -Path $downloadedSignedDllPath -Destination $artifactDllPath -Force
-
-      - name: Prepare EXE packaging inputs
-        shell: cmd
-        run: cmake --build --preset release --target toolscreen_prepare_easyinject_exe_inputs
-
-      - name: Reconfigure packaging preset
-        shell: pwsh
-        run: |
-          $prebuiltLoggerDllPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.dll').Path
-          $prebuiltLoggerPdbPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.pdb').Path
-
-          if ($env:SIGNPATH_API_TOKEN -and $env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
-            $signedDllPath = (Resolve-Path 'out/build/bin/Release/Toolscreen.signed-package-input.dll').Path
-            cmake --preset vs2022-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
-          } else {
-            cmake --preset vs2022-x64 -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
-          }
-
-      - name: Remove stale packaged artifacts
-        shell: pwsh
-        run: |
-          $outputDir = 'out/build/bin/Release'
-          $patterns = @(
-            'Toolscreen-*-double-click-me.jar'
-            'Toolscreen-*-double-click-me.exe'
-            'toolscreen-downloader.jar'
-            'toolscreen-downloader.exe'
-          )
-
-          foreach ($pattern in $patterns) {
-            Get-ChildItem -Path $outputDir -File -Filter $pattern -ErrorAction SilentlyContinue | Remove-Item -Force
-          }
-
-      - name: Build installer EXE package
-        shell: cmd
-        run: cmake --build --preset release --target installer_exe
-
-      - name: Build downloader EXE package
-        shell: cmd
-        run: cmake --build --preset release --target downloader_exe
+          cmake --preset ci-ninja-x64-packaging -DTOOLSCREEN_ENABLE_EXE_PACKAGING=OFF -DTOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS=OFF -DTOOLSCREEN_STAGE_LIBLOGGER_PDB=OFF -DTOOLSCREEN_PACKAGING_DLL_PATH="$toolscreenDllPath" -DTOOLSCREEN_PACKAGING_LIBLOGGER_PATH="$libloggerDllPath"
 
       - name: Build JAR package
-        shell: cmd
-        run: cmake --build --preset release --target jar
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        shell: pwsh
+        run: cmake --build --preset ci-package --parallel --target jar
 
-      - name: Validate PE metadata for SignPath
+      - name: Assemble unsigned release inputs
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: pwsh
         run: |
-          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts\verify_pe_metadata.ps1'
-          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE 'out\build\bin\Release'
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_RELEASE_DIR
+          $coreDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
+          $jarDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_PACKAGING_ARTIFACT_DIR
+
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+
+          Copy-Item -Path (Join-Path $coreDir 'Toolscreen.dll') -Destination (Join-Path $releaseDir 'Toolscreen.dll') -Force
+          Copy-Item -Path (Join-Path $coreDir 'Toolscreen.pdb') -Destination (Join-Path $releaseDir 'Toolscreen.pdb') -Force
+          Copy-Item -Path (Join-Path $coreDir 'liblogger_x64.dll') -Destination (Join-Path $releaseDir 'liblogger_x64.dll') -Force
+
+          $jarPath = Get-ChildItem -Path $jarDir -File -Filter 'Toolscreen-*-double-click-me.jar' | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $jarPath) {
+            throw "Expected packaged Toolscreen jar in $jarDir"
+          }
+
+          Copy-Item -Path $jarPath -Destination (Join-Path $releaseDir (Split-Path $jarPath -Leaf)) -Force
+
+      - name: Strip private symbols from unsigned PDB
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        shell: pwsh
+        run: |
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_RELEASE_DIR
+          $pdbPath = Join-Path $artifactDir 'Toolscreen.pdb'
+
+          if (-not (Test-Path $pdbPath)) {
+            throw "Expected unsigned Toolscreen PDB not found: $pdbPath"
+          }
+
+          $pdbCopyCommand = Get-Command pdbcopy.exe -ErrorAction SilentlyContinue
+          $pdbCopyPath = if ($pdbCopyCommand) {
+            $pdbCopyCommand.Path
+          } else {
+            Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits" -Recurse -Filter pdbcopy.exe -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+
+          if (-not $pdbCopyPath) {
+            Write-Warning 'pdbcopy.exe not found; keeping the full Toolscreen.pdb for this unsigned build.'
+            return
+          }
+
+          $temporaryDirectory = Join-Path $env:RUNNER_TEMP 'toolscreen-pdbcopy'
+          $strippedPdbPath = Join-Path $temporaryDirectory 'Toolscreen.pdb'
+          New-Item -ItemType Directory -Force -Path $temporaryDirectory | Out-Null
+          Remove-Item -Path $strippedPdbPath -Force -ErrorAction SilentlyContinue
+
+          $beforeSizeBytes = (Get-Item $pdbPath).Length
+          & $pdbCopyPath $pdbPath $strippedPdbPath -p
+
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $strippedPdbPath)) {
+            throw "Failed to strip private symbols from $pdbPath using $pdbCopyPath"
+          }
+
+          Remove-Item -Path $pdbPath -Force
+          Move-Item -Path $strippedPdbPath -Destination $pdbPath
+
+          $afterSizeBytes = (Get-Item $pdbPath).Length
+          Write-Host ('Reduced Toolscreen.pdb from {0} MiB to {1} MiB using PDBCopy.' -f [math]::Round($beforeSizeBytes / 1MB, 2), [math]::Round($afterSizeBytes / 1MB, 2))
+
+      - name: Validate unsigned PE metadata
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        shell: pwsh
+        run: |
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts\verify_unsigned_pe_metadata.ps1'
+          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_RELEASE_DIR
           & $scriptPath -ArtifactDirectory $artifactDirectory
 
-      - name: Run CTest packaging smoke tests
-        shell: cmd
-        run: ctest --preset release --exclude-regex "^toolscreen_integration_"
-
-      - name: Upload main installer JAR for SignPath
-        id: signpath_jar_upload
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: toolscreen-signpath-main-installer-jar-input
-          if-no-files-found: error
-          retention-days: 1
-          path: out/build/bin/Release/Toolscreen-*-double-click-me.jar
-
-      - name: Submit main installer JAR to SignPath with origin verification
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: ${{ env.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ env.SIGNPATH_JAR_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.signpath_jar_upload.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: out/signpath-jar-output
-          parameters: |
-            version: ${{ toJSON(steps.signpath_version.outputs.version) }}
-
-      - name: Replace main installer JAR with origin-verified signed output
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        shell: pwsh
-        run: |
-          $jarMatches = Get-ChildItem 'out/build/bin/Release' -File -Filter 'Toolscreen-*-double-click-me.jar'
-          $signedJarMatches = Get-ChildItem 'out/signpath-jar-output' -File -Filter 'Toolscreen-*-double-click-me.jar'
-
-          if ($jarMatches.Count -ne 1) {
-            throw "Expected exactly one unsigned main installer JAR, found $($jarMatches.Count)"
-          }
-
-          if ($signedJarMatches.Count -ne 1) {
-            throw "Expected exactly one signed main installer JAR, found $($signedJarMatches.Count)"
-          }
-
-          Copy-Item -Path $signedJarMatches[0].FullName -Destination $jarMatches[0].FullName -Force
-
-      - name: Upload installer EXE for SignPath
-        id: signpath_installer_upload
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: toolscreen-signpath-installer-exe-input
-          if-no-files-found: error
-          retention-days: 1
-          path: out/build/bin/Release/Toolscreen-*-double-click-me.exe
-
-      - name: Submit installer EXE to SignPath with origin verification
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: ${{ env.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ env.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.signpath_installer_upload.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: out/signpath-installer-exe-output
-          parameters: |
-            version: ${{ toJSON(steps.signpath_version.outputs.version) }}
-
-      - name: Replace installer EXE with origin-verified signed output
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        shell: pwsh
-        run: |
-          $installerMatches = Get-ChildItem 'out/build/bin/Release' -File -Filter 'Toolscreen-*-double-click-me.exe'
-          $signedInstallerMatches = Get-ChildItem 'out/signpath-installer-exe-output' -File -Filter 'Toolscreen-*-double-click-me.exe'
-
-          if ($installerMatches.Count -ne 1) {
-            throw "Expected exactly one unsigned installer EXE, found $($installerMatches.Count)"
-          }
-
-          if ($signedInstallerMatches.Count -ne 1) {
-            throw "Expected exactly one signed installer EXE, found $($signedInstallerMatches.Count)"
-          }
-
-          Copy-Item -Path $signedInstallerMatches[0].FullName -Destination $installerMatches[0].FullName -Force
-
-      - name: Upload downloader EXE for SignPath
-        id: signpath_downloader_upload
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: toolscreen-signpath-downloader-exe-input
-          if-no-files-found: error
-          retention-days: 1
-          path: out/build/bin/Release/toolscreen-downloader.exe
-
-      - name: Submit downloader EXE to SignPath with origin verification
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: ${{ env.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ env.SIGNPATH_DOWNLOADER_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.signpath_downloader_upload.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: out/signpath-downloader-exe-output
-          parameters: |
-            version: ${{ toJSON(steps.signpath_version.outputs.version) }}
-
-      - name: Replace downloader EXE with origin-verified signed output
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        shell: pwsh
-        run: |
-          $downloaderPath = 'out/build/bin/Release/toolscreen-downloader.exe'
-          $signedDownloaderPath = 'out/signpath-downloader-exe-output/toolscreen-downloader.exe'
-
-          if (-not (Test-Path $downloaderPath)) {
-            throw "Expected unsigned downloader EXE not found: $downloaderPath"
-          }
-
-          if (-not (Test-Path $signedDownloaderPath)) {
-            throw "Expected signed downloader EXE not found: $signedDownloaderPath"
-          }
-
-          Copy-Item -Path $signedDownloaderPath -Destination $downloaderPath -Force
-
-      - name: Restore signed DLL to release output
-        if: ${{ github.event_name == 'workflow_dispatch' && env.SIGNPATH_API_TOKEN != '' }}
-        shell: pwsh
-        run: |
-          $signedDllPath = 'out/build/bin/Release/Toolscreen.signed-package-input.dll'
-          $artifactDllPath = 'out/build/bin/Release/Toolscreen.dll'
-
-          if (-not (Test-Path $signedDllPath)) {
-            throw "Expected preserved signed DLL not found: $signedDllPath"
-          }
-
-          Copy-Item -Path $signedDllPath -Destination $artifactDllPath -Force
-
       - name: Rename release artifacts
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         shell: pwsh
         run: |
-          $outputDir = 'out/build/bin/Release'
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_RELEASE_DIR
           $suffix = '-not-legal-for-speedruns'
 
           function Get-SingleArtifactPath {
@@ -351,11 +234,7 @@ jobs:
             Join-Path $outputDir 'Toolscreen.dll'
             Join-Path $outputDir 'Toolscreen.pdb'
             Join-Path $outputDir 'liblogger_x64.dll'
-            Join-Path $outputDir 'liblogger_x64.pdb'
             Get-SingleArtifactPath 'Toolscreen-*-double-click-me.jar' 'main installer jar'
-            Get-SingleArtifactPath 'Toolscreen-*-double-click-me.exe' 'main installer exe'
-            Join-Path $outputDir 'toolscreen-downloader.jar'
-            Join-Path $outputDir 'toolscreen-downloader.exe'
           )
 
           foreach ($filePath in $filesToRename) {
@@ -368,26 +247,21 @@ jobs:
             Move-Item -Path $item.FullName -Destination (Join-Path $item.DirectoryName $renamed)
           }
 
-      - name: Upload release artifacts
+      - name: Upload unsigned release artifacts
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/upload-artifact@v4
         with:
-          name: toolscreen-release-artifacts
+          name: toolscreen-unsigned-artifacts
+          compression-level: 6
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
           path: |
-            out/build/bin/Release/Toolscreen-not-legal-for-speedruns.dll
-            out/build/bin/Release/Toolscreen-not-legal-for-speedruns.pdb
-            out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.dll
-            out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.pdb
-            out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
-            out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.exe
-            out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.jar
-            out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.exe
+            ${{ env.TOOLSCREEN_RELEASE_DIR }}/Toolscreen-not-legal-for-speedruns.dll
+            ${{ env.TOOLSCREEN_RELEASE_DIR }}/Toolscreen-not-legal-for-speedruns.pdb
+            ${{ env.TOOLSCREEN_RELEASE_DIR }}/liblogger_x64-not-legal-for-speedruns.dll
+            ${{ env.TOOLSCREEN_RELEASE_DIR }}/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
 
-      - name: Upload final signed JAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: toolscreen-final-signed-jar
-          if-no-files-found: error
-          retention-days: 14
-          path: out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
+      - name: Show sccache stats
+        if: ${{ always() }}
+        shell: pwsh
+        run: sccache --show-stats

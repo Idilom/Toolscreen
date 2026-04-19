@@ -3,6 +3,25 @@ struct TestCaseDefinition {
     void (*run)(TestRunMode runMode);
 };
 
+struct TestGroupDefinition {
+    const char* name;
+    std::vector<std::string_view> prefixes;
+    std::vector<std::string_view> explicitTestCaseNames;
+};
+
+struct ResolvedTestGroupDefinition {
+    const char* name;
+    std::vector<const TestCaseDefinition*> testCases;
+};
+
+struct ParallelTestGroupResult {
+    std::string groupName;
+    DWORD exitCode = 1;
+    std::string stdoutText;
+    std::string stderrText;
+    std::string failureMessage;
+};
+
 const auto& GetTestCaseDefinitions() {
     static const std::vector<TestCaseDefinition> testCases = {
         {"config-default-load", &RunConfigDefaultLoadTest},
@@ -64,16 +83,24 @@ const auto& GetTestCaseDefinitions() {
         {"key-rebind-runtime-full-caps-lock-honored", &RunKeyRebindRuntimeFullCapsLockHonoredTest},
         {"key-rebind-runtime-split-caps-lock-ignored", &RunKeyRebindRuntimeSplitCapsLockIgnoredWithoutOptInTest},
         {"key-rebind-runtime-non-typable-trigger-consumes-char", &RunKeyRebindRuntimeNonTypableTriggerConsumesCharTest},
+        {"key-rebind-runtime-trigger-disabled-still-types", &RunKeyRebindRuntimeTriggerDisabledStillTypesTest},
+        {"key-rebind-runtime-types-disabled-still-triggers", &RunKeyRebindRuntimeTypesDisabledStillTriggersTest},
+        {"key-rebind-runtime-shift-types-disabled-still-triggers", &RunKeyRebindRuntimeShiftTypesDisabledStillTriggersTest},
         {"key-rebind-runtime-mouse-source-emits-key-and-char", &RunKeyRebindRuntimeMouseSourceEmitsKeyAndCharTest},
         {"key-rebind-runtime-modifier-output-released-on-deactivate", &RunKeyRebindRuntimeModifierOutputReleasedOnDeactivateTest},
+        {"key-rebind-runtime-custom-modifier-output-uses-synthetic-key", &RunKeyRebindRuntimeCustomModifierOutputUsesSyntheticKeyTest},
+        {"key-rebind-runtime-wndproc-keeps-synthetic-modifier-held", &RunKeyRebindRuntimeWndProcKeepsSyntheticModifierHeldTest},
         {"key-rebind-runtime-disabled-rebind-ignored", &RunKeyRebindRuntimeDisabledRebindIgnoredTest},
         {"key-rebind-runtime-cursor-state-priority-and-fallback", &RunKeyRebindRuntimeCursorStatePriorityAndFallbackTest},
         {"key-rebind-gui-keyboard-layout-full-bind-and-trigger", &RunKeyRebindGuiKeyboardLayoutFullBindAndTriggerTest},
         {"key-rebind-gui-keyboard-layout-split-bind-and-trigger", &RunKeyRebindGuiKeyboardLayoutSplitBindAndTriggerTest},
+        {"key-rebind-gui-keyboard-layout-disabled-output", &RunKeyRebindGuiKeyboardLayoutDisabledOutputTest},
+        {"key-rebind-gui-keyboard-layout-split-disabled-targets", &RunKeyRebindGuiKeyboardLayoutSplitDisabledTargetsTest},
         {"key-rebind-gui-keyboard-layout-mouse-source-bind-and-trigger", &RunKeyRebindGuiKeyboardLayoutMouseSourceBindAndTriggerTest},
         {"key-rebind-gui-keyboard-layout-mouse-trigger-label-mapping", &RunKeyRebindGuiKeyboardLayoutMouseTriggerLabelMappingTest},
         {"key-rebind-gui-keyboard-layout-xbutton-trigger-label-mapping", &RunKeyRebindGuiKeyboardLayoutXButtonTriggerLabelMappingTest},
         {"key-rebind-gui-keyboard-layout-scroll-trigger-label-mapping", &RunKeyRebindGuiKeyboardLayoutScrollTriggerLabelMappingTest},
+        {"key-rebind-gui-keyboard-layout-scroll-source-popup-options", &RunKeyRebindGuiKeyboardLayoutScrollSourcePopupOptionsTest},
         {"key-rebind-gui-keyboard-layout-cursor-state-override", &RunKeyRebindGuiKeyboardLayoutCursorStateOverrideTest},
         {"key-rebind-gui-keyboard-layout-add-custom-bind-button", &RunKeyRebindGuiKeyboardLayoutAddCustomBindButtonTest},
         {"key-rebind-gui-keyboard-layout-remove-custom-bind-button", &RunKeyRebindGuiKeyboardLayoutRemoveCustomBindButtonTest},
@@ -84,6 +111,9 @@ const auto& GetTestCaseDefinitions() {
         {"key-rebind-gui-keyboard-layout-scan-picker-filter", &RunKeyRebindGuiKeyboardLayoutScanPickerFilterTest},
         {"key-rebind-gui-keyboard-layout-scan-picker-reset-to-default", &RunKeyRebindGuiKeyboardLayoutScanPickerResetToDefaultTest},
         {"config-load-fullscreen-stretch-repaired", &RunConfigLoadFullscreenStretchRepairedTest},
+        {"config-load-fullscreen-manual-dimensions-preserved", &RunConfigLoadFullscreenManualDimensionsPreservedTest},
+        {"config-load-fullscreen-relative-dimensions-preserved", &RunConfigLoadFullscreenRelativeDimensionsPreservedTest},
+        {"fullscreen-relative-external-resize-skips-stale-resend", &RunFullscreenRelativeExternalResizeSkipsStaleResendTest},
         {"config-load-preemptive-sync-existing-mode", &RunConfigLoadPreemptiveSyncExistingModeTest},
         {"config-load-thin-min-width-enforced", &RunConfigLoadThinMinWidthEnforcedTest},
         {"config-load-browser-overlay-defaults", &RunConfigLoadBrowserOverlayDefaultsTest},
@@ -113,6 +143,7 @@ const auto& GetTestCaseDefinitions() {
         {"profiler-unspecified-breakdown", &RunProfilerUnspecifiedBreakdownTest},
         {"settings-gui-basic", &RunSettingsGuiBasicTest},
         {"settings-gui-advanced", &RunSettingsGuiAdvancedTest},
+        {"settings-mouse-translation-prefers-live-viewport", &RunSettingsMouseTranslationPrefersLiveViewportTest},
         {"settings-search-subcategory-filtering", &RunSettingsSearchSubcategoryFilteringTest},
         {"settings-search-specific-options", &RunSettingsSearchSpecificOptionsTest},
         {"settings-search-reset-on-close", &RunSettingsSearchResetOnCloseTest},
@@ -155,6 +186,10 @@ const auto& GetTestCaseDefinitions() {
         {"profile-case-insensitive-collisions", &RunProfileCaseInsensitiveCollisionTest},
         {"profile-recover-missing-metadata", &RunProfileRecoverMissingMetadataTest},
         {"profile-async-save-skip-deleted-profile", &RunProfileAsyncSaveSkipDeletedProfileTest},
+        {"profile-switch-ninjabrain-async-stop", &RunProfileSwitchNinjabrainAsyncStopTest},
+        {"profile-switch-ninjabrain-async-restart", &RunProfileSwitchNinjabrainAsyncRestartTest},
+        {"profile-switch-invalid-default-mode-fallback", &RunProfileSwitchInvalidDefaultModeFallbackTest},
+        {"profile-switch-reader-mode-fallback", &RunProfileSwitchReaderModeFallbackTest},
         {"profile-switch-concurrent-readers", &RunProfileSwitchConcurrentReadersTest},
         {"profile-switch-concurrent-lifecycle", &RunProfileSwitchConcurrentLifecycleTest},
         {"profile-switch-concurrent-metadata-rebuild", &RunProfileSwitchConcurrentMetadataRebuildTest},
@@ -174,13 +209,258 @@ const TestCaseDefinition* FindTestCaseDefinition(std::string_view testCaseName) 
     return nullptr;
 }
 
+bool GroupIncludesTestCaseName(const TestGroupDefinition& testGroup, std::string_view testCaseName) {
+    for (const std::string_view prefix : testGroup.prefixes) {
+        if (testCaseName.starts_with(prefix)) {
+            return true;
+        }
+    }
+
+    for (const std::string_view explicitTestCaseName : testGroup.explicitTestCaseNames) {
+        if (explicitTestCaseName == testCaseName) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+const auto& GetTestGroupDefinitions() {
+    static const std::vector<TestGroupDefinition> testGroups = {
+        {"config", {"config-default-", "config-roundtrip", "config-load-"}, {"fullscreen-relative-external-resize-skips-stale-resend"}},
+        {"rebind", {"key-rebind-"}, {}},
+        {"render", {"mode-"}, {"rebind-indicator-renders-below-settings-gui"}},
+        {"settings-and-ui", {"settings-"}, {"config-error-gui", "profiler-unspecified-breakdown"}},
+        {"logs-and-profiles", {"log-", "profile-"}, {}},
+    };
+
+    return testGroups;
+}
+
+const auto& GetResolvedTestGroupDefinitions() {
+    static const std::vector<ResolvedTestGroupDefinition> resolvedTestGroups = []() {
+        const auto& testCases = GetTestCaseDefinitions();
+        const auto& testGroups = GetTestGroupDefinitions();
+
+        std::vector<size_t> assignmentCounts(testCases.size(), 0);
+        std::vector<ResolvedTestGroupDefinition> resolvedGroups;
+        resolvedGroups.reserve(testGroups.size());
+
+        for (const TestGroupDefinition& testGroup : testGroups) {
+            ResolvedTestGroupDefinition resolvedGroup;
+            resolvedGroup.name = testGroup.name;
+
+            for (size_t index = 0; index < testCases.size(); ++index) {
+                const TestCaseDefinition& testCase = testCases[index];
+                if (!GroupIncludesTestCaseName(testGroup, testCase.name)) {
+                    continue;
+                }
+
+                resolvedGroup.testCases.push_back(&testCase);
+                ++assignmentCounts[index];
+            }
+
+            if (resolvedGroup.testCases.empty()) {
+                throw std::runtime_error("GUI integration test group has no cases: " + std::string(testGroup.name));
+            }
+
+            resolvedGroups.push_back(std::move(resolvedGroup));
+        }
+
+        for (size_t index = 0; index < testCases.size(); ++index) {
+            if (assignmentCounts[index] == 1) {
+                continue;
+            }
+
+            const std::string testCaseName = testCases[index].name;
+            if (assignmentCounts[index] == 0) {
+                throw std::runtime_error("GUI integration test case is not assigned to a CI group: " + testCaseName);
+            }
+
+            throw std::runtime_error("GUI integration test case is assigned to multiple CI groups: " + testCaseName);
+        }
+
+        return resolvedGroups;
+    }();
+
+    return resolvedTestGroups;
+}
+
+const ResolvedTestGroupDefinition* FindTestGroupDefinition(std::string_view testGroupName) {
+    for (const ResolvedTestGroupDefinition& testGroup : GetResolvedTestGroupDefinitions()) {
+        if (std::string_view(testGroup.name) == testGroupName) {
+            return &testGroup;
+        }
+    }
+
+    return nullptr;
+}
+
+std::string DescribeWindowsError(const DWORD errorCode) {
+    LPSTR messageBuffer = nullptr;
+    const DWORD messageLength = FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        errorCode,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPSTR>(&messageBuffer),
+        0,
+        nullptr);
+
+    std::string message;
+    if (messageLength == 0 || messageBuffer == nullptr) {
+        message = "Windows error " + std::to_string(errorCode);
+    } else {
+        message.assign(messageBuffer, messageLength);
+        while (!message.empty() && (message.back() == '\r' || message.back() == '\n')) {
+            message.pop_back();
+        }
+    }
+
+    if (messageBuffer != nullptr) {
+        LocalFree(messageBuffer);
+    }
+
+    return message;
+}
+
+std::wstring GetCurrentExecutablePath() {
+    std::wstring executablePath(MAX_PATH, L'\0');
+
+    while (true) {
+        const DWORD copiedLength = GetModuleFileNameW(nullptr, executablePath.data(), static_cast<DWORD>(executablePath.size()));
+        if (copiedLength == 0) {
+            throw std::runtime_error("Failed to query current executable path: " + DescribeWindowsError(GetLastError()));
+        }
+
+        if (copiedLength < executablePath.size() - 1) {
+            executablePath.resize(copiedLength);
+            return executablePath;
+        }
+
+        executablePath.resize(executablePath.size() * 2);
+    }
+}
+
+std::string ReadTextFileIfExists(const std::filesystem::path& filePath) {
+    std::ifstream stream(filePath, std::ios::binary);
+    if (!stream.is_open()) {
+        return {};
+    }
+
+    return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+}
+
+ParallelTestGroupResult RunTestGroupInChildProcess(std::string_view testGroupName, const std::filesystem::path& logDirectory) {
+    ParallelTestGroupResult result;
+    result.groupName = std::string(testGroupName);
+
+    SECURITY_ATTRIBUTES securityAttributes{};
+    securityAttributes.nLength = sizeof(securityAttributes);
+    securityAttributes.bInheritHandle = TRUE;
+
+    const std::filesystem::path stdoutPath = logDirectory / (result.groupName + ".stdout.log");
+    const std::filesystem::path stderrPath = logDirectory / (result.groupName + ".stderr.log");
+
+    HANDLE stdoutHandle = CreateFileW(stdoutPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, &securityAttributes,
+                                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (stdoutHandle == INVALID_HANDLE_VALUE) {
+        throw std::runtime_error("Failed to open stdout log for group '" + result.groupName + "': " +
+                                 DescribeWindowsError(GetLastError()));
+    }
+
+    HANDLE stderrHandle = CreateFileW(stderrPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, &securityAttributes,
+                                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (stderrHandle == INVALID_HANDLE_VALUE) {
+        CloseHandle(stdoutHandle);
+        throw std::runtime_error("Failed to open stderr log for group '" + result.groupName + "': " +
+                                 DescribeWindowsError(GetLastError()));
+    }
+
+    STARTUPINFOW startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
+    startupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startupInfo.hStdOutput = stdoutHandle;
+    startupInfo.hStdError = stderrHandle;
+
+    PROCESS_INFORMATION processInfo{};
+    const std::wstring executablePath = GetCurrentExecutablePath();
+    const std::wstring workingDirectory = std::filesystem::current_path().wstring();
+    std::wstring commandLine = L"toolscreen_gui_integration_tests.exe --run-group ";
+    commandLine += Utf8ToWide(result.groupName);
+
+    std::vector<wchar_t> commandLineBuffer(commandLine.begin(), commandLine.end());
+    commandLineBuffer.push_back(L'\0');
+
+    const BOOL created = CreateProcessW(executablePath.c_str(), commandLineBuffer.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                        nullptr, workingDirectory.c_str(), &startupInfo, &processInfo);
+
+    CloseHandle(stdoutHandle);
+    CloseHandle(stderrHandle);
+
+    if (!created) {
+        throw std::runtime_error("Failed to launch GUI integration group '" + result.groupName + "': " +
+                                 DescribeWindowsError(GetLastError()));
+    }
+
+    CloseHandle(processInfo.hThread);
+
+    WaitForSingleObject(processInfo.hProcess, INFINITE);
+    if (GetExitCodeProcess(processInfo.hProcess, &result.exitCode) == FALSE) {
+        const DWORD errorCode = GetLastError();
+        CloseHandle(processInfo.hProcess);
+        throw std::runtime_error("Failed to query exit code for GUI integration group '" + result.groupName + "': " +
+                                 DescribeWindowsError(errorCode));
+    }
+
+    CloseHandle(processInfo.hProcess);
+
+    result.stdoutText = ReadTextFileIfExists(stdoutPath);
+    result.stderrText = ReadTextFileIfExists(stderrPath);
+    return result;
+}
+
+void PrintParallelTestGroupResult(const ParallelTestGroupResult& result) {
+    std::cout << "===== BEGIN GROUP " << result.groupName << " =====" << std::endl;
+
+    if (!result.stdoutText.empty()) {
+        std::cout << result.stdoutText;
+        if (!result.stdoutText.ends_with('\n')) {
+            std::cout << std::endl;
+        }
+    }
+
+    if (!result.stderrText.empty()) {
+        std::cerr << result.stderrText;
+        if (!result.stderrText.ends_with('\n')) {
+            std::cerr << std::endl;
+        }
+    }
+
+    if (!result.failureMessage.empty()) {
+        std::cerr << "FAIL: " << result.failureMessage << std::endl;
+    }
+
+    std::cout << "===== END GROUP " << result.groupName << " =====" << std::endl;
+}
+
 void RunTestCaseByName(std::string_view testCaseName, TestRunMode runMode = TestRunMode::Automated);
+void RunTestGroupByName(std::string_view testGroupName);
+void RunAllTestGroupsInParallel();
 void RunAllTestCases();
 
 void PrintTestCaseList(std::ostream& stream) {
     stream << "Available test cases:" << std::endl;
     for (const TestCaseDefinition& testCase : GetTestCaseDefinitions()) {
         stream << "  " << testCase.name << std::endl;
+    }
+}
+
+void PrintTestGroupList(std::ostream& stream) {
+    stream << "Available test groups:" << std::endl;
+    for (const ResolvedTestGroupDefinition& testGroup : GetResolvedTestGroupDefinitions()) {
+        stream << "  " << testGroup.name << " (" << testGroup.testCases.size() << " cases)" << std::endl;
     }
 }
 
@@ -346,15 +626,22 @@ void PrintUsage(std::ostream& stream) {
     stream << "Usage:" << std::endl;
     stream << "  toolscreen_gui_integration_tests" << std::endl;
     stream << "  toolscreen_gui_integration_tests --run-all" << std::endl;
+    stream << "  toolscreen_gui_integration_tests --run-group <group-name>" << std::endl;
+    stream << "  toolscreen_gui_integration_tests --run-groups-parallel" << std::endl;
     stream << "  toolscreen_gui_integration_tests <test-case>" << std::endl;
     stream << "  toolscreen_gui_integration_tests --visual [<test-case>]" << std::endl;
     stream << "  toolscreen_gui_integration_tests --list" << std::endl;
+    stream << "  toolscreen_gui_integration_tests --list-groups" << std::endl;
     stream << "  toolscreen_gui_integration_tests --help" << std::endl;
     stream << std::endl;
     stream << "No arguments opens a launcher GUI where you can choose which test mode to run." << std::endl;
     stream << "Use --run-all for pure CLI pass/fail execution of every test case." << std::endl;
+    stream << "Use --run-group to execute one CI-oriented batch of test cases in declaration order." << std::endl;
+    stream << "Use --run-groups-parallel to execute all CI groups concurrently from one parent runner process." << std::endl;
     stream << "Visual mode keeps the dummy Win32/WGL window open so the GUI can be inspected interactively." << std::endl;
     stream << "If no visual test case is provided, it defaults to " << kDefaultVisualTestCase << "." << std::endl;
+    stream << std::endl;
+    PrintTestGroupList(stream);
     stream << std::endl;
     PrintTestCaseList(stream);
 }
@@ -363,8 +650,11 @@ struct CommandLineOptions {
     bool openLauncher = false;
     bool showUsage = false;
     bool listOnly = false;
+    bool listGroupsOnly = false;
     bool runAll = false;
+    bool runGroupsParallel = false;
     TestRunMode runMode = TestRunMode::Automated;
+    std::string groupName;
     std::string testCaseName;
 };
 
@@ -400,6 +690,16 @@ CommandLineOptions ParseCommandLine(int argc, char** argv) {
         return options;
     }
 
+    if (firstArg == "--list-groups") {
+        if (argc != 2) {
+            throw std::runtime_error("--list-groups does not accept additional arguments.");
+        }
+
+        CommandLineOptions options;
+        options.listGroupsOnly = true;
+        return options;
+    }
+
     if (firstArg == "--run-all") {
         if (argc != 2) {
             throw std::runtime_error("--run-all does not accept additional arguments.");
@@ -407,6 +707,26 @@ CommandLineOptions ParseCommandLine(int argc, char** argv) {
 
         CommandLineOptions options;
         options.runAll = true;
+        return options;
+    }
+
+    if (firstArg == "--run-groups-parallel") {
+        if (argc != 2) {
+            throw std::runtime_error("--run-groups-parallel does not accept additional arguments.");
+        }
+
+        CommandLineOptions options;
+        options.runGroupsParallel = true;
+        return options;
+    }
+
+    if (firstArg == "--run-group") {
+        if (argc != 3) {
+            throw std::runtime_error("--run-group requires exactly one group name.");
+        }
+
+        CommandLineOptions options;
+        options.groupName = argv[2];
         return options;
     }
 
@@ -456,6 +776,86 @@ void RunTestCaseByName(std::string_view testCaseName, TestRunMode runMode) {
     std::cout << std::endl;
 }
 
+void RunTestGroupByName(std::string_view testGroupName) {
+    const ResolvedTestGroupDefinition* testGroup = FindTestGroupDefinition(testGroupName);
+    if (testGroup == nullptr) {
+        throw std::runtime_error("Unknown test group: " + std::string(testGroupName));
+    }
+
+    std::cout << "Running GUI integration test group '" << testGroup->name << "' with "
+              << testGroup->testCases.size() << " cases." << std::endl;
+
+    for (const TestCaseDefinition* testCase : testGroup->testCases) {
+        RunTestCaseByName(testCase->name);
+    }
+
+    std::cout << "PASS group " << testGroup->name << std::endl;
+}
+
+void RunAllTestGroupsInParallel() {
+    const auto& testGroups = GetResolvedTestGroupDefinitions();
+
+    std::cout << "Running all GUI integration test groups in parallel." << std::endl;
+    PrintTestGroupList(std::cout);
+
+    const std::filesystem::path logDirectory = std::filesystem::temp_directory_path() /
+                                              "toolscreen_gui_integration_parallel" /
+                                              std::filesystem::path(std::to_string(GetCurrentProcessId()));
+    std::error_code directoryError;
+    std::filesystem::remove_all(logDirectory, directoryError);
+    directoryError.clear();
+    std::filesystem::create_directories(logDirectory, directoryError);
+    if (directoryError) {
+        throw std::runtime_error("Failed to create parallel GUI integration log directory: " + Narrow(logDirectory.wstring()));
+    }
+
+    std::vector<ParallelTestGroupResult> results(testGroups.size());
+    std::vector<std::thread> workers;
+    workers.reserve(testGroups.size());
+
+    for (size_t index = 0; index < testGroups.size(); ++index) {
+        workers.emplace_back([&, index]() {
+            results[index].groupName = testGroups[index].name;
+            try {
+                results[index] = RunTestGroupInChildProcess(testGroups[index].name, logDirectory);
+            } catch (const std::exception& ex) {
+                results[index].failureMessage = ex.what();
+                results[index].exitCode = 1;
+            }
+        });
+    }
+
+    for (std::thread& worker : workers) {
+        worker.join();
+    }
+
+    std::vector<std::string> failedGroups;
+    for (const ParallelTestGroupResult& result : results) {
+        PrintParallelTestGroupResult(result);
+
+        if (!result.failureMessage.empty() || result.exitCode != 0) {
+            failedGroups.push_back(result.groupName);
+        }
+    }
+
+    std::error_code cleanupError;
+    std::filesystem::remove_all(logDirectory, cleanupError);
+
+    if (!failedGroups.empty()) {
+        std::string failureSummary;
+        for (size_t index = 0; index < failedGroups.size(); ++index) {
+            if (index > 0) {
+                failureSummary += ", ";
+            }
+            failureSummary += failedGroups[index];
+        }
+
+        throw std::runtime_error("Parallel GUI integration groups failed: " + failureSummary);
+    }
+
+    std::cout << "PASS all GUI integration test groups [parallel]" << std::endl;
+}
+
 void RunAllTestCases() {
     for (const TestCaseDefinition& testCase : GetTestCaseDefinitions()) {
         RunTestCaseByName(testCase.name);
@@ -477,10 +877,28 @@ void PauseForTransientConsole() {
     std::getline(std::cin, ignored);
 }
 
+class ScopedTestProcessCleanup {
+  public:
+    ~ScopedTestProcessCleanup() {
+        try {
+            StopNinjabrainClient();
+            FlushLogs();
+
+            std::lock_guard<std::mutex> lock(g_logFileMutex);
+            if (logFile.is_open()) {
+                logFile.close();
+            }
+            logFile.clear();
+        } catch (...) {
+        }
+    }
+};
+
 } // namespace
 
 int main(int argc, char** argv) {
     try {
+        ScopedTestProcessCleanup cleanup;
         EnsureProcessDpiAwareness();
         const CommandLineOptions options = ParseCommandLine(argc, argv);
 
@@ -499,10 +917,25 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        if (options.listGroupsOnly) {
+            PrintTestGroupList(std::cout);
+            return 0;
+        }
+
         if (options.runAll) {
             std::cout << "Running all GUI integration tests." << std::endl;
             PrintTestCaseList(std::cout);
             RunAllTestCases();
+            return 0;
+        }
+
+        if (options.runGroupsParallel) {
+            RunAllTestGroupsInParallel();
+            return 0;
+        }
+
+        if (!options.groupName.empty()) {
+            RunTestGroupByName(options.groupName);
             return 0;
         }
 

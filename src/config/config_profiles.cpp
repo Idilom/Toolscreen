@@ -117,14 +117,69 @@ static std::wstring MakeTempSiblingPath(const std::wstring& finalPath, const wch
         .wstring();
 }
 
+static bool IsTransientProfileFileError(const DWORD errorCode) {
+    return errorCode == ERROR_ACCESS_DENIED ||
+           errorCode == ERROR_LOCK_VIOLATION ||
+           errorCode == ERROR_SHARING_VIOLATION;
+}
+
+template <typename Operation>
+static bool RetryProfileFileOperation(Operation&& operation) {
+    constexpr int kMaxAttempts = 60;
+    constexpr DWORD kRetryDelayMs = 5;
+
+    DWORD lastError = ERROR_SUCCESS;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        if (operation()) {
+            return true;
+        }
+
+        lastError = GetLastError();
+        if (!IsTransientProfileFileError(lastError) || attempt == (kMaxAttempts - 1)) {
+            SetLastError(lastError);
+            return false;
+        }
+
+        Sleep(kRetryDelayMs);
+    }
+
+    SetLastError(lastError);
+    return false;
+}
+
+static bool DeletePathIfPresentWithRetries(const std::wstring& path) {
+    return RetryProfileFileOperation([&]() {
+        if (DeleteFileW(path.c_str())) {
+            return true;
+        }
+
+        const DWORD errorCode = GetLastError();
+        if (errorCode == ERROR_FILE_NOT_FOUND || errorCode == ERROR_PATH_NOT_FOUND) {
+            SetLastError(ERROR_SUCCESS);
+            return true;
+        }
+
+        SetLastError(errorCode);
+        return false;
+    });
+}
+
+static bool MovePathWithRetries(const std::wstring& fromPath, const std::wstring& toPath, const DWORD flags) {
+    return RetryProfileFileOperation([&]() {
+        return MoveFileExW(fromPath.c_str(), toPath.c_str(), flags | MOVEFILE_WRITE_THROUGH);
+    });
+}
+
 static bool ReplacePathAtomically(const std::wstring& tempPath, const std::wstring& finalPath) {
-    if (MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    if (MovePathWithRetries(tempPath, finalPath, MOVEFILE_REPLACE_EXISTING)) {
         return true;
     }
 
-    std::error_code removeError;
-    std::filesystem::remove(std::filesystem::path(finalPath), removeError);
-    if (MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_WRITE_THROUGH)) {
+    if (!DeletePathIfPresentWithRetries(finalPath)) {
+        return false;
+    }
+
+    if (MovePathWithRetries(tempPath, finalPath, 0)) {
         return true;
     }
 
@@ -138,7 +193,7 @@ static bool RenamePathReplacingExisting(const std::wstring& fromPath, const std:
         return true;
     }
 
-    if (MoveFileExW(fromPath.c_str(), toPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    if (MovePathWithRetries(fromPath, toPath, MOVEFILE_REPLACE_EXISTING)) {
         return true;
     }
 
@@ -147,15 +202,15 @@ static bool RenamePathReplacingExisting(const std::wstring& fromPath, const std:
     }
 
     const std::wstring tempPath = MakeTempSiblingPath(fromPath, L".rename-");
-    if (!MoveFileExW(fromPath.c_str(), tempPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    if (!MovePathWithRetries(fromPath, tempPath, MOVEFILE_REPLACE_EXISTING)) {
         return false;
     }
 
-    if (MoveFileExW(tempPath.c_str(), toPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    if (MovePathWithRetries(tempPath, toPath, MOVEFILE_REPLACE_EXISTING)) {
         return true;
     }
 
-    MoveFileExW(tempPath.c_str(), fromPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    MovePathWithRetries(tempPath, fromPath, MOVEFILE_REPLACE_EXISTING);
     return false;
 }
 
@@ -497,6 +552,7 @@ void ApplyProfileFields(const Config& src, Config& dst, const ProfileSectionSele
     if (sections.inputsMouse) {
         dst.keyRebinds = src.keyRebinds;
         dst.cursors = src.cursors;
+        dst.cursorTrail = src.cursorTrail;
         dst.allowCursorEscape = src.allowCursorEscape;
         dst.confineCursor = src.confineCursor;
         dst.mouseSensitivity = src.mouseSensitivity;
@@ -546,24 +602,28 @@ static void ApplyProfileSwitchRuntimeConfig(const Config& previousConfig) {
     }
 
     SaveTheme();
+
     if (ImGui::GetCurrentContext() != nullptr) {
         ApplyAppearanceConfig();
     }
+
     RequestDynamicGuiFontRefresh(true);
 
     ApplyKeyRepeatSettings();
+
     if (g_config.confineCursor) {
         ApplyConfineCursorToGameWindow();
     } else {
         ClipCursorDirect(NULL);
     }
+
     SetGlobalMirrorGammaMode(g_config.mirrorGammaMode);
 
     const bool previousNinjabrainEnabled = previousConfig.ninjabrainOverlay.enabled;
     const bool currentNinjabrainEnabled = g_config.ninjabrainOverlay.enabled;
     if (!currentNinjabrainEnabled) {
         if (previousNinjabrainEnabled) {
-            StopNinjabrainClient();
+            StopNinjabrainClientAsync();
         }
         return;
     }
@@ -574,7 +634,7 @@ static void ApplyProfileSwitchRuntimeConfig(const Config& previousConfig) {
     }
 
     if (previousConfig.ninjabrainOverlay.apiBaseUrl != g_config.ninjabrainOverlay.apiBaseUrl) {
-        RestartNinjabrainClient();
+        RestartNinjabrainClientAsync();
     }
 }
 
@@ -665,6 +725,7 @@ void SwitchProfile(const std::string& newProfileName) {
     std::string resolvedNewProfileName;
     bool failedToSavePreviousProfile = false;
     bool failedToSaveProfilesMetadata = false;
+
     const bool pendingConfigSave = g_configIsDirty.load(std::memory_order_acquire);
 
     {
@@ -715,14 +776,6 @@ void SwitchProfile(const std::string& newProfileName) {
 
     RemoveInvalidHotkeyModeReferences(g_config);
     ResetAllHotkeySecondaryModes(g_config);
-    {
-        std::lock_guard<std::mutex> lock(g_modeIdMutex);
-        g_currentModeId = g_config.defaultMode;
-        int nextIndex = 1 - g_currentModeIdIndex.load(std::memory_order_relaxed);
-        g_modeIdBuffers[nextIndex] = g_config.defaultMode;
-        g_currentModeIdIndex.store(nextIndex, std::memory_order_release);
-    }
-    WriteCurrentModeToFile(g_config.defaultMode);
 
     {
         std::lock_guard<std::mutex> lock(g_hotkeyMainKeysMutex);
@@ -737,7 +790,9 @@ void SwitchProfile(const std::string& newProfileName) {
         for (const auto& [id, inst] : g_userImages) {
             if (inst.isAnimated) {
                 for (GLuint tex : inst.frameTextures) {
-                    if (tex != 0) g_texturesToDelete.push_back(tex);
+                    if (tex != 0) {
+                        g_texturesToDelete.push_back(tex);
+                    }
                 }
             } else if (inst.textureId != 0) {
                 g_texturesToDelete.push_back(inst.textureId);
@@ -749,12 +804,21 @@ void SwitchProfile(const std::string& newProfileName) {
 
     g_allImagesLoaded = false;
     g_pendingImageLoad = true;
+
     RecalculateModeDimensions();
     RequestScreenMetricsRecalculation();
-    PublishConfigSnapshot();
+    PublishGuiConfigSnapshot();
 
+    {
+        std::lock_guard<std::mutex> lock(g_modeIdMutex);
+        g_currentModeId = g_config.defaultMode;
+        const int nextIndex = 1 - g_currentModeIdIndex.load(std::memory_order_relaxed);
+        g_modeIdBuffers[nextIndex] = g_config.defaultMode;
+        g_currentModeIdIndex.store(nextIndex, std::memory_order_release);
+    }
+
+    WriteCurrentModeToFile(g_config.defaultMode);
     ApplyProfileSwitchRuntimeConfig(previousConfig);
-
     g_configIsDirty.store(pendingConfigSave, std::memory_order_release);
 }
 
