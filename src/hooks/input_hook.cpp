@@ -3292,6 +3292,7 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
     auto charRebindCfg = GetConfigSnapshot();
     if (!charRebindCfg || !charRebindCfg->keyRebinds.enabled) { return { false, 0 }; }
+    const bool logHotkeyDebug = charRebindCfg->debug.showHotkeyDebug;
     const bool cursorVisible = IsCursorVisible();
 
     WCHAR inputChar = static_cast<WCHAR>(wParam);
@@ -3346,8 +3347,10 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
                 if (outputVK == 0) {
                     if (RebindCannotType(rebind)) {
-                        Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
-                            " (trigger cannot type)");
+                        if (logHotkeyDebug) {
+                            Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
+                                " (trigger cannot type)");
+                        }
                         return { true, 0 };
                     }
                     return { false, 0 };
@@ -3375,13 +3378,17 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 }
 
                 if (outputChar == 0) {
-                    Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
-                        " (output VK has no WM_CHAR)");
+                    if (logHotkeyDebug) {
+                        Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
+                            " (output VK has no WM_CHAR)");
+                    }
                     return { true, 0 };
                 }
 
-                Log("[REBIND WM_CHAR] Remapping char code " + std::to_string(static_cast<unsigned int>(inputChar)) + " -> " +
-                    std::to_string(static_cast<unsigned int>(outputChar)));
+                if (logHotkeyDebug) {
+                    Log("[REBIND WM_CHAR] Remapping char code " + std::to_string(static_cast<unsigned int>(inputChar)) + " -> " +
+                        std::to_string(static_cast<unsigned int>(outputChar)));
+                }
 
                 return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, outputChar, lParam) };
             }
