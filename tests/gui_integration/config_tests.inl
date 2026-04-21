@@ -935,6 +935,153 @@ showIndicator = true
                       runMode);
 }
 
+void RunConfigLoadKeyRebindCannotTypeClearsTypedOutputTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_key_rebind_cannot_type_clears_typed_output",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[keyRebinds]
+enabled = true
+resolveRebindTargetsForHotkeys = false
+toggleHotkey = []
+
+[[keyRebinds.rebinds]]
+fromKey = 74
+toKey = 36
+enabled = true
+useCustomOutput = true
+baseOutputDisabled = true
+customOutputVK = 75
+customOutputUnicode = "U+00F8"
+customOutputScanCode = 30
+baseOutputShifted = true
+shiftLayerEnabled = true
+shiftLayerUsesCapsLock = true
+shiftLayerOutputDisabled = true
+shiftLayerOutputVK = 76
+shiftLayerOutputUnicode = "U+00D8"
+shiftLayerOutputShifted = true
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-key-rebind-cannot-type-clears-typed-output");
+                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
+
+                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+                          Expect(rebind.useCustomOutput,
+                                 "Expected cannot-type sanitization to preserve trigger-side scan overrides.");
+                          Expect(rebind.customOutputScanCode == 30,
+                                 "Expected cannot-type sanitization to keep the trigger-side scan override.");
+                          Expect(!rebind.baseOutputDisabled,
+                                 "Expected cannot-type sanitization to clear the base typed-output disabled flag.");
+                          Expect(rebind.customOutputVK == 0,
+                                 "Expected cannot-type sanitization to clear invalid base typed-output VK overrides.");
+                          Expect(rebind.customOutputUnicode == 0,
+                                 "Expected cannot-type sanitization to clear invalid base typed-output Unicode overrides.");
+                          Expect(!rebind.baseOutputShifted,
+                                 "Expected cannot-type sanitization to clear invalid base shifted text state.");
+                          Expect(!rebind.shiftLayerEnabled,
+                                 "Expected cannot-type sanitization to disable invalid shift-layer typed output.");
+                          Expect(!rebind.shiftLayerUsesCapsLock,
+                                 "Expected cannot-type sanitization to clear invalid shift-layer Caps Lock state.");
+                          Expect(!rebind.shiftLayerOutputDisabled,
+                                 "Expected cannot-type sanitization to clear invalid shift-layer disabled state.");
+                          Expect(rebind.shiftLayerOutputVK == 0,
+                                 "Expected cannot-type sanitization to clear invalid shift-layer VK overrides.");
+                          Expect(rebind.shiftLayerOutputUnicode == 0,
+                                 "Expected cannot-type sanitization to clear invalid shift-layer Unicode overrides.");
+                          Expect(!rebind.shiftLayerOutputShifted,
+                                 "Expected cannot-type sanitization to clear invalid shift-layer shifted text state.");
+
+                          SaveAndReloadCurrentConfig();
+                          ExpectConfigLoadSucceeded("config-load-key-rebind-cannot-type-clears-typed-output reload");
+                          Expect(g_config.keyRebinds.rebinds.size() == 1,
+                                 "Expected the sanitized key rebind to survive the save-and-reload roundtrip.");
+
+                          const KeyRebind& reloadedRebind = g_config.keyRebinds.rebinds.front();
+                          Expect(reloadedRebind.useCustomOutput,
+                                 "Expected save sanitization to preserve trigger-side scan overrides after reload.");
+                          Expect(reloadedRebind.customOutputScanCode == 30,
+                                 "Expected save sanitization to preserve the trigger-side scan override after reload.");
+                          Expect(reloadedRebind.customOutputVK == 0 && reloadedRebind.customOutputUnicode == 0,
+                                 "Expected save sanitization to keep typed-output overrides cleared after reload.");
+                          Expect(!reloadedRebind.baseOutputDisabled && !reloadedRebind.baseOutputShifted,
+                                 "Expected save sanitization to keep base typed-output flags cleared after reload.");
+                          Expect(!reloadedRebind.shiftLayerEnabled && !reloadedRebind.shiftLayerUsesCapsLock &&
+                                     !reloadedRebind.shiftLayerOutputDisabled && !reloadedRebind.shiftLayerOutputShifted &&
+                                     reloadedRebind.shiftLayerOutputVK == 0 && reloadedRebind.shiftLayerOutputUnicode == 0,
+                                 "Expected save sanitization to keep shift-layer typed-output state cleared after reload.");
+
+                          const std::string savedToml = ReadTextFileUtf8(GetCurrentConfigPath());
+                          Expect(savedToml.find("customOutputVK = 0") != std::string::npos,
+                                 "Expected the saved config TOML to persist a cleared base typed-output VK.");
+                          Expect(savedToml.find("customOutputUnicode = 0") != std::string::npos,
+                                 "Expected the saved config TOML to persist a cleared base typed-output Unicode value.");
+                          Expect(savedToml.find("baseOutputDisabled = false") != std::string::npos,
+                                 "Expected the saved config TOML to persist a cleared base typed-output disabled flag.");
+                          Expect(savedToml.find("shiftLayerEnabled = false") != std::string::npos,
+                                 "Expected the saved config TOML to persist a cleared shift-layer typed-output flag.");
+                          Expect(savedToml.find("shiftLayerOutputUnicode = 0") != std::string::npos,
+                                 "Expected the saved config TOML to persist a cleared shift-layer Unicode value.");
+                      },
+                      runMode);
+}
+
+void RunConfigPublishKeyRebindCannotTypeClearsTypedOutputTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    const std::filesystem::path root = PrepareCaseDirectory("config_publish_key_rebind_cannot_type_clears_typed_output");
+    ResetGlobalTestState(root);
+
+    Config config;
+    config.keyRebinds.enabled = true;
+    config.keyRebinds.resolveRebindTargetsForHotkeys = false;
+
+    KeyRebind rebind;
+    rebind.fromKey = 'J';
+    rebind.toKey = VK_HOME;
+    rebind.enabled = true;
+    rebind.useCustomOutput = true;
+    rebind.baseOutputDisabled = true;
+    rebind.customOutputVK = 'K';
+    rebind.customOutputUnicode = 0x00F8;
+    rebind.customOutputScanCode = 30;
+    rebind.baseOutputShifted = true;
+    rebind.shiftLayerEnabled = true;
+    rebind.shiftLayerUsesCapsLock = true;
+    rebind.shiftLayerOutputDisabled = true;
+    rebind.shiftLayerOutputVK = 'L';
+    rebind.shiftLayerOutputUnicode = 0x00D8;
+    rebind.shiftLayerOutputShifted = true;
+    config.keyRebinds.rebinds.push_back(rebind);
+
+    PublishConfigSnapshot(config);
+
+    auto publishedConfig = GetConfigSnapshot();
+    Expect(publishedConfig != nullptr,
+           "Expected config publish sanitization test to publish a config snapshot.");
+    Expect(publishedConfig->keyRebinds.rebinds.size() == 1,
+           "Expected config publish sanitization test to publish exactly one key rebind.");
+
+    const KeyRebind& publishedRebind = publishedConfig->keyRebinds.rebinds.front();
+    Expect(publishedRebind.useCustomOutput,
+           "Expected config publish sanitization to preserve trigger-side scan overrides.");
+    Expect(publishedRebind.customOutputScanCode == 30,
+           "Expected config publish sanitization to keep the trigger-side scan override.");
+    Expect(!publishedRebind.baseOutputDisabled && !publishedRebind.baseOutputShifted,
+           "Expected config publish sanitization to clear base typed-output flags.");
+    Expect(publishedRebind.customOutputVK == 0 && publishedRebind.customOutputUnicode == 0,
+           "Expected config publish sanitization to clear base typed-output overrides.");
+    Expect(!publishedRebind.shiftLayerEnabled && !publishedRebind.shiftLayerUsesCapsLock &&
+               !publishedRebind.shiftLayerOutputDisabled && !publishedRebind.shiftLayerOutputShifted &&
+               publishedRebind.shiftLayerOutputVK == 0 && publishedRebind.shiftLayerOutputUnicode == 0,
+           "Expected config publish sanitization to clear shift-layer typed-output state.");
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "config-publish-key-rebind-cannot-type-clears-typed-output", &RenderInteractiveSettingsFrame);
+    }
+}
+
 void RunConfigLoadFullscreenStretchRepairedTest(TestRunMode runMode = TestRunMode::Automated) {
     RunConfigLoadCase("config_load_fullscreen_stretch_repaired",
                       []() {

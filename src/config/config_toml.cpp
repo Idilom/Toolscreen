@@ -2877,6 +2877,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
             wo.crop_right *= 2;
         }
     }
+
+    SanitizeConfigKeyRebindsForCannotTypeTriggers(config);
 }
 
 namespace {
@@ -3328,7 +3330,9 @@ bool ParseTomlTableFromString(const std::string& source, toml::table& tbl, std::
 
 bool WriteConfigTomlDocument(std::ostream& out, const Config& config) {
     toml::table tbl;
-    ConfigToToml(config, tbl);
+    Config sanitizedConfig = config;
+    SanitizeConfigKeyRebindsForCannotTypeTriggers(sanitizedConfig);
+    ConfigToToml(sanitizedConfig, tbl);
 
     const auto& orderedKeys = GetConfigTomlOrderedKeys();
     static const std::vector<std::string> emptyOrder;

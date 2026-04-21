@@ -1033,9 +1033,11 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-key-rebind-hex-unicode-string-parsed
     config-load-key-rebind-invalid-unicode-defaulted
     config-load-key-rebind-legacy-show-indicator-migrated
+    config-load-key-rebind-cannot-type-clears-typed-output
     config-load-key-rebind-shift-layer-caps-lock-parsed
     config-load-key-rebind-shift-layer-caps-lock-defaulted
     config-load-key-rebind-cursor-state-defaulted
+    config-publish-key-rebind-cannot-type-clears-typed-output
     key-rebind-runtime-full-forwarding
     key-rebind-runtime-split-vk-output
     key-rebind-runtime-split-unicode-output
@@ -1057,6 +1059,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     key-rebind-runtime-cursor-state-priority-and-fallback
     key-rebind-gui-keyboard-layout-full-bind-and-trigger
     key-rebind-gui-keyboard-layout-split-bind-and-trigger
+    key-rebind-gui-text-override-pick-rejects-non-typable-key
     key-rebind-gui-keyboard-layout-disabled-output
     key-rebind-gui-keyboard-layout-split-disabled-targets
     key-rebind-gui-keyboard-layout-mouse-source-bind-and-trigger

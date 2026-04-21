@@ -33,6 +33,8 @@ static Config BuildRuntimeResolvedConfig(const Config& source) {
         RecalculateModeDimensions(resolved, screenWidth, screenHeight);
     }
 
+    SanitizeConfigKeyRebindsForCannotTypeTriggers(resolved);
+
     return resolved;
 }
 

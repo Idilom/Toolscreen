@@ -1902,6 +1902,7 @@ bool s_guiTestOpenKeyboardLayoutRequested = false;
 DWORD s_guiTestOpenKeyboardLayoutContextVk = 0;
 bool s_guiTestConfigSearchQueryRequested = false;
 std::string s_guiTestConfigSearchQuery;
+int s_guiTestOpenRebindTextOverrideBindRequest = -1;
 bool s_guiTestKeyboardLayoutBeginAddCustomBindRequested = false;
 bool s_guiTestKeyboardLayoutBeginCustomInputCaptureRequested = false;
 DWORD s_guiTestKeyboardLayoutRemoveCustomKeyVk = 0;
@@ -1966,6 +1967,12 @@ bool ConsumeGuiTestConfigSearchQueryRequest(std::string& outQuery) {
     outQuery = std::move(s_guiTestConfigSearchQuery);
     s_guiTestConfigSearchQuery.clear();
     return true;
+}
+
+int ConsumeGuiTestOpenRebindTextOverrideBindRequest() {
+    const int request = s_guiTestOpenRebindTextOverrideBindRequest;
+    s_guiTestOpenRebindTextOverrideBindRequest = -1;
+    return request;
 }
 
 bool ConsumeGuiTestKeyboardLayoutBeginAddCustomBindRequest() {
@@ -2334,6 +2341,10 @@ void RequestGuiTestOpenKeyboardLayoutContext(DWORD vk) {
 void RequestGuiTestSetConfigSearchQuery(const std::string& query) {
     s_guiTestConfigSearchQuery = query;
     s_guiTestConfigSearchQueryRequested = true;
+}
+
+void RequestGuiTestOpenRebindTextOverrideBind(int rebindIndex) {
+    s_guiTestOpenRebindTextOverrideBindRequest = rebindIndex;
 }
 
 void RequestGuiTestKeyboardLayoutBeginAddCustomBind() {

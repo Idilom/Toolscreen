@@ -1238,6 +1238,44 @@ void RunKeyRebindGuiKeyboardLayoutSplitBindAndTriggerTest(TestRunMode runMode = 
     ExpectCapturedMessage(capture, 0, WM_CHAR, 'D', "GUI split rebind WM_CHAR");
 }
 
+    void RunKeyRebindGuiTextOverridePickRejectsNonTypableKeyTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+
+        KeyRebind rebind = MakeEnabledRebind('A', 'B');
+        PrepareRebindGuiCase("key_rebind_gui_text_override_pick_rejects_non_typable_key", { rebind });
+
+        RenderKeyboardInputsFrame(window);
+        RenderKeyboardInputsFrame(window);
+
+        RequestGuiTestOpenRebindTextOverrideBind(0);
+        RenderKeyboardInputsFrame(window);
+
+        SubmitKeyboardBindingEvent(VK_HOME);
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected the text-override Pick flow to keep the original rebind after rejecting Home.");
+        const KeyRebind& rejectedRebind = g_config.keyRebinds.rebinds.front();
+        Expect(rejectedRebind.fromKey == 'A', "Expected the rejected text-override Pick flow to keep the source key unchanged.");
+        Expect(rejectedRebind.toKey == 'B', "Expected the rejected text-override Pick flow to keep the trigger key unchanged.");
+        Expect(rejectedRebind.customOutputVK == 0,
+            "Expected the text-override Pick flow to reject Home instead of storing it as a typed-output VK.");
+        Expect(!rejectedRebind.useCustomOutput,
+            "Expected the text-override Pick flow to leave custom output disabled after rejecting Home.");
+
+        SubmitKeyboardBindingEvent('C');
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected the text-override Pick flow to keep a single rebind after accepting a valid typed-output key.");
+        const KeyRebind& acceptedRebind = g_config.keyRebinds.rebinds.front();
+        Expect(acceptedRebind.useCustomOutput,
+            "Expected the text-override Pick flow to remain active after rejecting Home and then accepting C.");
+        Expect(acceptedRebind.customOutputVK == 'C',
+            "Expected the text-override Pick flow to keep waiting and accept C after rejecting Home.");
+    }
+
     void RunKeyRebindGuiKeyboardLayoutDisabledOutputTest(TestRunMode runMode = TestRunMode::Automated) {
         DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
         if (SkipIfNoModernGuiTestGL(window)) { return; }

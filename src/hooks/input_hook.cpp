@@ -2221,39 +2221,7 @@ static bool IsNonCharKeyVk(DWORD vk) {
 }
 
 static bool RebindCannotType(const KeyRebind& rebind) {
-    if (IsTriggerOutputDisabled(rebind)) {
-        return false;
-    }
-
-    DWORD triggerVk = rebind.toKey;
-    if (triggerVk == 0) triggerVk = rebind.fromKey;
-    if (triggerVk == 0) return false;
-
-    UINT triggerScan = (rebind.useCustomOutput && rebind.customOutputScanCode != 0)
-        ? static_cast<UINT>(rebind.customOutputScanCode)
-        : GetScanCodeWithExtendedFlag(triggerVk);
-
-    if (triggerScan != 0 && (triggerScan & 0xFF00) == 0) {
-        UINT vkScan = GetScanCodeWithExtendedFlag(triggerVk);
-        if ((vkScan & 0xFF00) != 0 && ((vkScan & 0xFF) == (triggerScan & 0xFF))) { triggerScan = vkScan; }
-    }
-
-    if (IsModifierVk(triggerVk) || IsModifierScanCode(triggerScan)) return true;
-    if (IsMouseLikeVk(triggerVk)) return true;
-
-    switch (triggerVk) {
-    case VK_BACK:
-    case VK_CAPITAL:
-    case VK_DELETE:
-    case VK_HOME:
-    case VK_INSERT:
-    case VK_END:
-    case VK_PRIOR:
-    case VK_NEXT:
-        return true;
-    default:
-        return false;
-    }
+    return DoesKeyRebindTriggerCannotType(rebind);
 }
 
 static bool TryTranslateVkToChar(DWORD vkCode, bool shiftDown, WCHAR& outChar) {

@@ -848,6 +848,26 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     return vk == VK_TOOLSCREEN_SCROLL_UP || vk == VK_TOOLSCREEN_SCROLL_DOWN;
                 };
 
+                auto canAcceptTypesVkCaptureFor = [&](const KeyRebind* rb, DWORD originalVk, DWORD capturedVk) -> bool {
+                    if (capturedVk != 0) {
+                        KeyRebind capturedCandidate;
+                        capturedCandidate.enabled = true;
+                        capturedCandidate.fromKey = capturedVk;
+                        if (DoesKeyRebindTriggerCannotType(capturedCandidate)) return false;
+                    }
+
+                    KeyRebind candidate;
+                    if (rb != nullptr) {
+                        candidate = *rb;
+                    }
+                    if (candidate.fromKey == 0) {
+                        candidate.fromKey = originalVk;
+                        candidate.enabled = true;
+                    }
+
+                    return !DoesKeyRebindTriggerCannotType(candidate);
+                };
+
                 auto normalizeModifierVkForDisplay = [](DWORD vk, DWORD scanCodeWithFlags) -> DWORD {
                     const DWORD scanLow = (scanCodeWithFlags & 0xFF);
                     const bool isExtended = (scanCodeWithFlags & 0xFF00) != 0;
@@ -1737,20 +1757,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     };
 
                     auto isNonTypableTextVk = [&](DWORD vk) -> bool {
-                        if (isModifierVk(vk) || isMouseButtonVk(vk) || isScrollWheelVk(vk)) return true;
-                        switch (vk) {
-                        case VK_BACK:
-                        case VK_CAPITAL:
-                        case VK_DELETE:
-                        case VK_HOME:
-                        case VK_INSERT:
-                        case VK_END:
-                        case VK_PRIOR:
-                        case VK_NEXT:
-                            return true;
-                        default:
-                            return false;
-                        }
+                        if (vk == 0) return false;
+                        KeyRebind candidate;
+                        candidate.enabled = true;
+                        candidate.fromKey = vk;
+                        return DoesKeyRebindTriggerCannotType(candidate);
                     };
 
                     auto hasShiftLayerOverride = [&](const KeyRebind* rb, DWORD originalVk) -> bool {
@@ -1805,29 +1816,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         return displayScan;
                     };
 
-                    auto isModifierTriggerScan = [&](DWORD triggerScan, DWORD triggerVk) -> bool {
-                        if ((triggerScan & 0xFF) == 0) return false;
-
-                        DWORD scanVk = MapVirtualKey(triggerScan, MAPVK_VSC_TO_VK_EX);
-                        if (scanVk == 0 && (triggerScan & 0xFF00) != 0) {
-                            scanVk = MapVirtualKey((triggerScan & 0xFF), MAPVK_VSC_TO_VK_EX);
-                        }
-                        if (scanVk == 0) scanVk = triggerVk;
-
-                        return isModifierVk(scanVk);
-                    };
-
                     auto cannotTypeFor = [&](const KeyRebind* rb, DWORD originalVk) -> bool {
-                        if (isTriggerOutputDisabled(rb)) return false;
-                        const DWORD triggerVk = resolveTriggerVkFor(rb, originalVk);
-                        const DWORD triggerScan = resolveTriggerScanFor(rb, originalVk);
-                        if (isModifierTriggerScan(triggerScan, triggerVk)) return true;
-                        if (isScrollWheelVk(triggerVk)) return true;
-                        if (isMouseButtonVk(triggerVk)) return true;
-                        if (triggerVk == VK_BACK || triggerVk == VK_CAPITAL) return true;
-                        if (triggerVk == VK_DELETE || triggerVk == VK_HOME || triggerVk == VK_INSERT ||
-                            triggerVk == VK_END || triggerVk == VK_PRIOR || triggerVk == VK_NEXT) return true;
-                        return false;
+                        KeyRebind candidate;
+                        if (rb != nullptr) {
+                            candidate = *rb;
+                        }
+                        if (candidate.fromKey == 0) {
+                            candidate.fromKey = originalVk;
+                            candidate.enabled = true;
+                        }
+                        return DoesKeyRebindTriggerCannotType(candidate);
                     };
 
                     auto typesValueForDisplay = [&](const KeyRebind* rb, DWORD originalVk) -> std::string {
@@ -3224,7 +3222,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                         clearBaseTypesOverrideIfDefault(r, r.fromKey);
                                         g_configIsDirty = true;
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TypesVk) {
-                                        if (cannotTypeFor(&r, r.fromKey) || isNonTypableTextVk(capturedVk)) {
+                                        if (!canAcceptTypesVkCaptureFor(&r, r.fromKey, capturedVk)) {
                                             captureAccepted = false;
                                         } else {
                                             r.baseOutputDisabled = false;
@@ -3239,7 +3237,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                             g_configIsDirty = true;
                                         }
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TypesVkShift) {
-                                        if (cannotTypeFor(&r, r.fromKey) || isNonTypableTextVk(capturedVk)) {
+                                        if (!canAcceptTypesVkCaptureFor(&r, r.fromKey, capturedVk)) {
                                             captureAccepted = false;
                                         } else {
                                             r.shiftLayerEnabled = true;
@@ -4768,6 +4766,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     ImGui::EndPopup();
                 }
 
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                if (const int requestedTextOverrideBind = ConsumeGuiTestOpenRebindTextOverrideBindRequest();
+                    requestedTextOverrideBind >= 0 && requestedTextOverrideBind < (int)g_config.keyRebinds.rebinds.size()) {
+                    s_rebindTextOverrideVKToBind = requestedTextOverrideBind;
+                }
+#endif
+
                 bool is_text_vk_binding = (s_rebindTextOverrideVKToBind != -1);
                 if (is_text_vk_binding) { MarkRebindBindingActive(); }
                 if (is_text_vk_binding) { ImGui::OpenPopup(trc("inputs.bind_text_override_vk")); }
@@ -4789,17 +4794,24 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             s_rebindTextOverrideVKToBind = -1;
                             ImGui::CloseCurrentPopup();
                         } else {
+                            bool closePopup = true;
                             if (s_rebindTextOverrideVKToBind >= 0 &&
                                 s_rebindTextOverrideVKToBind < (int)g_config.keyRebinds.rebinds.size()) {
                                 auto& rebind = g_config.keyRebinds.rebinds[s_rebindTextOverrideVKToBind];
-                                rebind.useCustomOutput = true;
-                                rebind.customOutputVK = capturedVk;
-                                g_configIsDirty = true;
+                                if (canAcceptTypesVkCaptureFor(&rebind, rebind.fromKey, capturedVk)) {
+                                    rebind.useCustomOutput = true;
+                                    rebind.customOutputVK = capturedVk;
+                                    g_configIsDirty = true;
+                                } else {
+                                    closePopup = false;
+                                }
                                 (void)capturedLParam;
                                 (void)capturedIsMouse;
                             }
-                            s_rebindTextOverrideVKToBind = -1;
-                            ImGui::CloseCurrentPopup();
+                            if (closePopup) {
+                                s_rebindTextOverrideVKToBind = -1;
+                                ImGui::CloseCurrentPopup();
+                            }
                         }
                     }
 

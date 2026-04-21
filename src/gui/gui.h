@@ -123,6 +123,7 @@ bool GetGuiTestKeyboardLayoutKeyLabels(DWORD vk, GuiTestKeyboardLayoutKeyLabels&
 void RequestGuiTestOpenKeyboardLayout();
 void RequestGuiTestOpenKeyboardLayoutContext(DWORD vk);
 void RequestGuiTestSetConfigSearchQuery(const std::string& query);
+void RequestGuiTestOpenRebindTextOverrideBind(int rebindIndex);
 void RequestGuiTestKeyboardLayoutBeginAddCustomBind();
 void RequestGuiTestKeyboardLayoutBeginCustomInputCapture();
 void RequestGuiTestKeyboardLayoutRemoveCustomKey(DWORD vk);
@@ -632,6 +633,199 @@ struct KeyRebindsConfig {
     std::vector<KeyRebind> rebinds;
 };
 
+inline bool IsKeyRebindMouseButtonVk(DWORD vk) {
+    return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
+}
+
+inline bool IsKeyRebindMouseWheelPseudoVk(DWORD vk) {
+    return vk == VK_TOOLSCREEN_SCROLL_UP || vk == VK_TOOLSCREEN_SCROLL_DOWN;
+}
+
+inline bool IsKeyRebindMouseLikeVk(DWORD vk) {
+    return IsKeyRebindMouseButtonVk(vk) || IsKeyRebindMouseWheelPseudoVk(vk);
+}
+
+inline bool IsKeyRebindModifierVk(DWORD vk) {
+    return vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
+           vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN;
+}
+
+inline DWORD NormalizeKeyRebindModifierVkFromConfig(DWORD vk, UINT scanCodeWithFlags = 0) {
+    const UINT scanLow = scanCodeWithFlags & 0xFF;
+    const bool isExtended = (scanCodeWithFlags & 0xFF00) != 0;
+
+    switch (vk) {
+    case VK_SHIFT:
+        if (scanLow == 0x36) return VK_RSHIFT;
+        return VK_LSHIFT;
+    case VK_CONTROL:
+        return isExtended ? VK_RCONTROL : VK_LCONTROL;
+    case VK_MENU:
+        return isExtended ? VK_RMENU : VK_LMENU;
+    default:
+        return vk;
+    }
+}
+
+inline DWORD GetKeyRebindScanCodeWithExtendedFlag(DWORD vkCode) {
+    auto isExtendedVk = [](DWORD vk) {
+        switch (vk) {
+        case VK_LEFT:
+        case VK_RIGHT:
+        case VK_UP:
+        case VK_DOWN:
+        case VK_INSERT:
+        case VK_DELETE:
+        case VK_HOME:
+        case VK_END:
+        case VK_PRIOR:
+        case VK_NEXT:
+        case VK_RCONTROL:
+        case VK_RMENU:
+        case VK_DIVIDE:
+        case VK_NUMLOCK:
+        case VK_SNAPSHOT:
+            return true;
+        default:
+            return false;
+        }
+    };
+
+    UINT scanCodeWithFlags = MapVirtualKeyW(static_cast<UINT>(vkCode), MAPVK_VK_TO_VSC_EX);
+    if (scanCodeWithFlags == 0) {
+        scanCodeWithFlags = MapVirtualKeyW(static_cast<UINT>(vkCode), MAPVK_VK_TO_VSC);
+    }
+
+    if ((scanCodeWithFlags & 0xFF00) == 0 && isExtendedVk(vkCode) && (scanCodeWithFlags & 0xFF) != 0) {
+        scanCodeWithFlags |= 0xE000;
+    }
+
+    return static_cast<DWORD>(scanCodeWithFlags);
+}
+
+inline DWORD ResolveKeyRebindModifierVkFromScanCode(UINT scanCodeWithFlags) {
+    const UINT scanLow = scanCodeWithFlags & 0xFF;
+    if (scanLow == 0) return 0;
+
+    DWORD mappedVk = static_cast<DWORD>(MapVirtualKeyW(scanCodeWithFlags, MAPVK_VSC_TO_VK_EX));
+    if (mappedVk == 0 && (scanCodeWithFlags & 0xFF00) != 0) {
+        mappedVk = static_cast<DWORD>(MapVirtualKeyW(scanLow, MAPVK_VSC_TO_VK_EX));
+    }
+    if (mappedVk != 0) {
+        mappedVk = NormalizeKeyRebindModifierVkFromConfig(mappedVk, scanCodeWithFlags);
+    }
+    if (!IsKeyRebindModifierVk(mappedVk)) {
+        return 0;
+    }
+    return mappedVk;
+}
+
+inline bool IsKeyRebindModifierScanCode(UINT scanCodeWithFlags) {
+    return ResolveKeyRebindModifierVkFromScanCode(scanCodeWithFlags) != 0;
+}
+
+inline bool IsKeyRebindConsumeOnly(const KeyRebind& rebind) {
+    return rebind.enabled && rebind.fromKey != 0 && rebind.toKey == 0;
+}
+
+inline bool IsKeyRebindTriggerOutputDisabled(const KeyRebind& rebind) {
+    return !IsKeyRebindConsumeOnly(rebind) && rebind.triggerOutputDisabled;
+}
+
+inline bool DoesKeyRebindTriggerCannotType(const KeyRebind& rebind) {
+    if (IsKeyRebindTriggerOutputDisabled(rebind)) {
+        return false;
+    }
+
+    DWORD triggerVk = rebind.toKey;
+    if (triggerVk == 0) triggerVk = rebind.fromKey;
+    if (triggerVk == 0) return false;
+
+    UINT triggerScan = (rebind.useCustomOutput && rebind.customOutputScanCode != 0)
+        ? static_cast<UINT>(rebind.customOutputScanCode)
+        : static_cast<UINT>(GetKeyRebindScanCodeWithExtendedFlag(triggerVk));
+
+    if (triggerScan != 0 && (triggerScan & 0xFF00) == 0) {
+        const UINT vkScan = static_cast<UINT>(GetKeyRebindScanCodeWithExtendedFlag(triggerVk));
+        if ((vkScan & 0xFF00) != 0 && ((vkScan & 0xFF) == (triggerScan & 0xFF))) {
+            triggerScan = vkScan;
+        }
+    }
+
+    if (IsKeyRebindModifierVk(triggerVk) || IsKeyRebindModifierScanCode(triggerScan)) return true;
+    if (IsKeyRebindMouseLikeVk(triggerVk)) return true;
+
+    switch (triggerVk) {
+    case VK_BACK:
+    case VK_CAPITAL:
+    case VK_DELETE:
+    case VK_HOME:
+    case VK_INSERT:
+    case VK_END:
+    case VK_PRIOR:
+    case VK_NEXT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+inline bool SyncKeyRebindUseCustomOutput(KeyRebind& rebind) {
+    const bool desiredUseCustomOutput = rebind.customOutputVK != 0 || rebind.customOutputUnicode != 0 || rebind.customOutputScanCode != 0;
+    if (rebind.useCustomOutput == desiredUseCustomOutput) {
+        return false;
+    }
+    rebind.useCustomOutput = desiredUseCustomOutput;
+    return true;
+}
+
+inline bool SanitizeKeyRebindTypedOutputsForCannotTypeTrigger(KeyRebind& rebind) {
+    if (!DoesKeyRebindTriggerCannotType(rebind)) {
+        return false;
+    }
+
+    bool changed = false;
+    auto clearBool = [&](bool& value) {
+        if (value) {
+            value = false;
+            changed = true;
+        }
+    };
+    auto clearDword = [&](DWORD& value) {
+        if (value != 0) {
+            value = 0;
+            changed = true;
+        }
+    };
+
+    clearBool(rebind.baseOutputDisabled);
+    clearDword(rebind.customOutputVK);
+    clearDword(rebind.customOutputUnicode);
+    clearBool(rebind.baseOutputShifted);
+    clearBool(rebind.shiftLayerEnabled);
+    clearBool(rebind.shiftLayerUsesCapsLock);
+    clearBool(rebind.shiftLayerOutputDisabled);
+    clearDword(rebind.shiftLayerOutputVK);
+    clearDword(rebind.shiftLayerOutputUnicode);
+    clearBool(rebind.shiftLayerOutputShifted);
+
+    if (SyncKeyRebindUseCustomOutput(rebind)) {
+        changed = true;
+    }
+
+    return changed;
+}
+
+inline bool SanitizeKeyRebindsForCannotTypeTriggers(KeyRebindsConfig& config) {
+    bool changed = false;
+    for (KeyRebind& rebind : config.rebinds) {
+        if (SanitizeKeyRebindTypedOutputsForCannotTypeTrigger(rebind)) {
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 // NinjabrainBot overlay.
 struct NinjabrainColumn {
     std::string id;
@@ -814,6 +1008,10 @@ struct Config {
     bool disableConfigurePrompt = false;
     NinjabrainOverlayConfig ninjabrainOverlay;
 };
+
+inline bool SanitizeConfigKeyRebindsForCannotTypeTriggers(Config& config) {
+    return SanitizeKeyRebindsForCannotTypeTriggers(config.keyRebinds);
+}
 
 inline constexpr const char* kDefaultProfileName = "Default";
 inline constexpr float kDefaultProfileColor[3] = { 0.4f, 0.8f, 0.4f };

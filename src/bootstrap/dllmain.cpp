@@ -71,7 +71,9 @@ void PublishConfigSnapshot() {
 }
 
 void PublishConfigSnapshot(const Config& config) {
-    auto snapshot = std::make_shared<const Config>(config);
+    Config sanitizedConfig = config;
+    SanitizeConfigKeyRebindsForCannotTypeTriggers(sanitizedConfig);
+    auto snapshot = std::make_shared<const Config>(std::move(sanitizedConfig));
     // Lock-free publish: atomic store of shared_ptr.
     g_configSnapshot.store(std::move(snapshot), std::memory_order_release);
 
@@ -79,7 +81,9 @@ void PublishConfigSnapshot(const Config& config) {
 }
 
 bool PublishConfigSnapshotIfUnchanged(const std::shared_ptr<const Config>& expectedSnapshot, const Config& config) {
-    auto snapshot = std::make_shared<const Config>(config);
+    Config sanitizedConfig = config;
+    SanitizeConfigKeyRebindsForCannotTypeTriggers(sanitizedConfig);
+    auto snapshot = std::make_shared<const Config>(std::move(sanitizedConfig));
     auto expected = expectedSnapshot;
     if (!g_configSnapshot.compare_exchange_strong(expected, std::move(snapshot), std::memory_order_acq_rel, std::memory_order_acquire)) {
         return false;
