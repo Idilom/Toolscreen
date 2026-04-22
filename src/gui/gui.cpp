@@ -230,7 +230,31 @@ void ApplySettingsTopTabBounceAnimation(const char* label) {
     if (std::fabs(offsetY) > 0.01f) {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offsetY);
     }
+}
 
+
+ImVec2 GetSettingsGuiCenterPosition() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if (viewport != nullptr) {
+        return ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.5f);
+    }
+
+    const ImGuiIO& io = ImGui::GetIO();
+    return ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+}
+
+ImVec2 GetSettingsModalCenterPosition() {
+    const ImVec2 windowPos = ImGui::GetWindowPos();
+    const ImVec2 windowSize = ImGui::GetWindowSize();
+    if (windowSize.x > 0.0f && windowSize.y > 0.0f) {
+        return ImVec2(windowPos.x + windowSize.x * 0.5f, windowPos.y + windowSize.y * 0.5f);
+    }
+
+    return GetSettingsGuiCenterPosition();
+}
+
+void SetNextSettingsModalCentered(ImGuiCond condition = ImGuiCond_Always) {
+    ImGui::SetNextWindowPos(GetSettingsModalCenterPosition(), condition, ImVec2(0.5f, 0.5f));
 }
 
     std::string_view TrimSearchQuery(std::string_view value) {
@@ -2438,8 +2462,7 @@ void ClearGuiTabSelectionOverride() {
 }
 
 void RenderConfigErrorGUI() {
-    ImGuiIO& io = ImGui::GetIO();
-    ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+    ImVec2 center = GetSettingsGuiCenterPosition();
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(600, 0));
     if (ImGui::Begin(trc("error.configuration_error"), NULL,
@@ -2567,6 +2590,7 @@ void RenderSettingsGUI() {
         s_bindingInitialized = false;
     }
 
+    ImGui::SetNextWindowPos(GetSettingsGuiCenterPosition(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal(trc("hotkeys.bind_hotkey"), NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
         PROFILE_SCOPE_CAT("Settings Hotkey Binding Popup", "ImGui");
 
@@ -2854,7 +2878,7 @@ void RenderSettingsGUI() {
     }
 
     if (g_guiNeedsRecenter.exchange(false)) {
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowPos(GetSettingsGuiCenterPosition(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(850.0f * windowScaleFactor, 650.0f * windowScaleFactor), ImGuiCond_Always);
     } else if (windowScaleChanged) {
         ImGui::SetNextWindowSize(ImVec2(850.0f * windowScaleFactor, 650.0f * windowScaleFactor), ImGuiCond_Always);
