@@ -697,6 +697,7 @@ void SetNextSettingsModalCentered(ImGuiCond condition = ImGuiCond_Always) {
                 trc("settings.advanced_logging"),
                 trc("settings.hide_animations_in_game"),
                 trc("settings.enable_virtual_camera"),
+                trc("settings.capture_fake_cursor_overlay"),
                 trc("settings.auto_borderless"),
                 trc("settings.restore_windowed_mode_on_fullscreen_exit"),
                 trc("label.fps_limit"),

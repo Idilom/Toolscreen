@@ -1095,7 +1095,16 @@ std::vector<std::string> GetAvailableCursorNames() {
 static int s_fakeCursorLogCounter = 0;
 static const int FAKE_CURSOR_LOG_INTERVAL = 300;
 
-void RenderFakeCursor(HWND hwnd, int windowWidth, int windowHeight) {
+static void RenderFakeCursorInternal(HWND hwnd,
+                                     int fullWidth,
+                                     int fullHeight,
+                                     int targetX,
+                                     int targetY,
+                                     int targetWidth,
+                                     int targetHeight,
+                                     bool bindDefaultFramebuffer) {
+    if (!hwnd || fullWidth <= 0 || fullHeight <= 0 || targetWidth <= 0 || targetHeight <= 0) { return; }
+
     s_fakeCursorLogCounter++;
     bool shouldLog = (s_fakeCursorLogCounter % FAKE_CURSOR_LOG_INTERVAL == 0);
 
@@ -1111,24 +1120,17 @@ void RenderFakeCursor(HWND hwnd, int windowWidth, int windowHeight) {
     if (!cursorInfo.hCursor) { return; }
     if (!(cursorInfo.flags & CURSOR_SHOWING)) { return; }
 
-    const CursorTextures::CursorData* cursorData = CursorTextures::FindCursorByHandle(cursorInfo.hCursor);
+    const CursorTextures::CursorData* cursorData = CursorTextures::LoadOrFindCursorFromHandle(cursorInfo.hCursor);
 
     if (!cursorData) {
         if (shouldLog) {
             Log("[FakeCursor] Cursor handle 0x" + std::to_string(reinterpret_cast<uintptr_t>(cursorInfo.hCursor)) +
-                " not found in loaded cursors (may be a system cursor)");
+                " could not be resolved to a texture");
         }
         return;
     }
 
-    POINT cursorPos;
-    if (!GetCursorPos(&cursorPos)) {
-        if (shouldLog) {
-            DWORD err = GetLastError();
-            Log("[FakeCursor] GetCursorPos failed with error " + std::to_string(err));
-        }
-        return;
-    }
+    POINT cursorPos = cursorInfo.ptScreenPos;
 
     if (!ScreenToClient(hwnd, &cursorPos)) {
         if (shouldLog) {
@@ -1157,8 +1159,10 @@ void RenderFakeCursor(HWND hwnd, int windowWidth, int windowHeight) {
 
     int systemCursorWidth = cursorData->bitmapWidth;
     int systemCursorHeight = cursorData->bitmapHeight;
-    int scaledCursorWidth = (systemCursorWidth * windowWidth) / gameWidth;
-    int scaledCursorHeight = (systemCursorHeight * windowHeight) / gameHeight;
+    if (systemCursorWidth <= 0 || systemCursorHeight <= 0) { return; }
+
+    int scaledCursorWidth = (systemCursorWidth * targetWidth) / gameWidth;
+    int scaledCursorHeight = (systemCursorHeight * targetHeight) / gameHeight;
 
     int scaledHotspotX = static_cast<int>((cursorData->hotspotX * scaledCursorWidth * offset) / systemCursorWidth);
     int scaledHotspotY = static_cast<int>((cursorData->hotspotY * scaledCursorHeight * offset) / systemCursorHeight);
@@ -1166,8 +1170,8 @@ void RenderFakeCursor(HWND hwnd, int windowWidth, int windowHeight) {
     int renderWidth = static_cast<int>(scaledCursorWidth * offset);
     int renderHeight = static_cast<int>(scaledCursorHeight * offset);
 
-    int cursorX = cursorPos.x - scaledHotspotX;
-    int cursorY = cursorPos.y - scaledHotspotY;
+    int cursorX = targetX + ((cursorPos.x * targetWidth) / gameWidth) - scaledHotspotX;
+    int cursorY = targetY + ((cursorPos.y * targetHeight) / gameHeight) - scaledHotspotY;
 
     auto RenderCursorQuad = [&](int x, int y) {
         glBegin(GL_QUADS);
@@ -1188,19 +1192,25 @@ void RenderFakeCursor(HWND hwnd, int windowWidth, int windowHeight) {
         GLboolean oldTexture2D = glIsEnabled(GL_TEXTURE_2D);
         GLboolean oldScissor = glIsEnabled(GL_SCISSOR_TEST);
         GLboolean oldCullFace = glIsEnabled(GL_CULL_FACE);
+        GLboolean oldStencil = glIsEnabled(GL_STENCIL_TEST);
         GLint oldBlendSrc, oldBlendDst;
         glGetIntegerv(GL_BLEND_SRC, &oldBlendSrc);
         glGetIntegerv(GL_BLEND_DST, &oldBlendDst);
 
         GLint oldProgram;
         glGetIntegerv(GL_CURRENT_PROGRAM, &oldProgram);
+        GLint oldMatrixMode;
+        glGetIntegerv(GL_MATRIX_MODE, &oldMatrixMode);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (bindDefaultFramebuffer) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
 
         glDisable(GL_SCISSOR_TEST);
 
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
+        glDisable(GL_STENCIL_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glUseProgram(0);
@@ -1208,7 +1218,7 @@ void RenderFakeCursor(HWND hwnd, int windowWidth, int windowHeight) {
         glMatrixMode(GL_PROJECTION);
         glPushMatrix();
         glLoadIdentity();
-        glOrtho(0, windowWidth, windowHeight, 0, -1, 1);
+        glOrtho(0, fullWidth, fullHeight, 0, -1, 1);
 
         glMatrixMode(GL_MODELVIEW);
         glPushMatrix();
@@ -1232,18 +1242,31 @@ void RenderFakeCursor(HWND hwnd, int windowWidth, int windowHeight) {
         glPopMatrix();
         glMatrixMode(GL_PROJECTION);
         glPopMatrix();
-        glMatrixMode(GL_MODELVIEW);
+        glMatrixMode(oldMatrixMode);
 
         if (!oldTexture2D) glDisable(GL_TEXTURE_2D);
         if (!oldBlend) glDisable(GL_BLEND);
         if (oldDepth) glEnable(GL_DEPTH_TEST);
         if (oldScissor) glEnable(GL_SCISSOR_TEST);
         if (oldCullFace) glEnable(GL_CULL_FACE);
+        if (oldStencil) glEnable(GL_STENCIL_TEST);
         glBlendFunc(oldBlendSrc, oldBlendDst);
         glUseProgram(oldProgram);
-
-        glFlush();
     }
+}
+
+void RenderFakeCursor(HWND hwnd, int windowWidth, int windowHeight) {
+    RenderFakeCursorInternal(hwnd, windowWidth, windowHeight, 0, 0, windowWidth, windowHeight, true);
+}
+
+void RenderFakeCursorToCurrentTarget(HWND hwnd,
+                                     int fullWidth,
+                                     int fullHeight,
+                                     int targetX,
+                                     int targetY,
+                                     int targetWidth,
+                                     int targetHeight) {
+    RenderFakeCursorInternal(hwnd, fullWidth, fullHeight, targetX, targetY, targetWidth, targetHeight, false);
 }
 
 

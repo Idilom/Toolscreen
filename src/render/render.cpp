@@ -5594,6 +5594,14 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
 
         PROFILE_SCOPE_CAT("Render OBS Overlays", "OBS");
         RenderSameThreadOverlayPass(request, *cfgSnap, obsState);
+
+        if (cfgSnap->captureFakeCursor) {
+            HWND hwnd = g_minecraftHwnd.load(std::memory_order_acquire);
+            if (hwnd) {
+                PROFILE_SCOPE_CAT("Render OBS Fake Cursor", "OBS");
+                RenderFakeCursorToCurrentTarget(hwnd, fullW, fullH, finalX, finalY, finalW, finalH);
+            }
+        }
     }
 
     {

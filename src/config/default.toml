@@ -11,6 +11,7 @@ mirrorMatchColorspace = 'Auto'
 guiHotkey = [162, 73]
 borderlessHotkey = [ ]
 hideAnimationsInGame = true
+captureFakeCursor = false
 limitCaptureFramerate = false
 restoreWindowedModeOnFullscreenExit = true
 disableFullscreenPrompt = false

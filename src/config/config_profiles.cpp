@@ -563,6 +563,7 @@ void ApplyProfileFields(const Config& src, Config& dst, const ProfileSectionSele
     if (sections.captureWindow) {
         dst.autoBorderless = src.autoBorderless;
         dst.hideAnimationsInGame = src.hideAnimationsInGame;
+        dst.captureFakeCursor = src.captureFakeCursor;
         dst.limitCaptureFramerate = src.limitCaptureFramerate;
         dst.obsFramerate = src.obsFramerate;
         dst.restoreWindowedModeOnFullscreenExit = src.restoreWindowedModeOnFullscreenExit;
