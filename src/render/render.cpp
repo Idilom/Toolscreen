@@ -436,6 +436,7 @@ static struct {
     GLint screenTexture = -1;
     GLint sourceTexelSize = -1;
     GLint outputMode = -1;
+    GLint colorSpaceMode = -1;
 } g_virtualCameraNv12ShaderLocs;
 
 std::atomic<bool> g_shouldRenderGui{ false };
@@ -1428,18 +1429,31 @@ in vec2 TexCoord;
 uniform sampler2D screenTexture;
 uniform vec2 u_sourceTexelSize;
 uniform int u_outputMode;
+uniform int u_colorSpaceMode;
+
+const int COLOR_SPACE_BT601 = 0;
+const int COLOR_SPACE_BT709 = 1;
 
 vec3 sampleRgb(vec2 uv) {
     return texture(screenTexture, vec2(uv.x, 1.0 - uv.y)).rgb;
 }
 
 float encodeY(vec3 rgb) {
-    return clamp(dot(rgb, vec3(66.0 / 256.0, 129.0 / 256.0, 25.0 / 256.0)) + (16.0 / 255.0), 0.0, 1.0);
+    vec3 coeffs = (u_colorSpaceMode == COLOR_SPACE_BT709)
+        ? vec3(47.0 / 256.0, 157.0 / 256.0, 16.0 / 256.0)
+        : vec3(66.0 / 256.0, 129.0 / 256.0, 25.0 / 256.0);
+    return clamp(dot(rgb, coeffs) + (16.0 / 255.0), 0.0, 1.0);
 }
 
 vec2 encodeUV(vec3 rgb) {
-    float u = dot(rgb, vec3(-38.0 / 256.0, -74.0 / 256.0, 112.0 / 256.0)) + (128.0 / 255.0);
-    float v = dot(rgb, vec3(112.0 / 256.0, -94.0 / 256.0, -18.0 / 256.0)) + (128.0 / 255.0);
+    vec3 uCoeffs = (u_colorSpaceMode == COLOR_SPACE_BT709)
+        ? vec3(-26.0 / 256.0, -87.0 / 256.0, 112.0 / 256.0)
+        : vec3(-38.0 / 256.0, -74.0 / 256.0, 112.0 / 256.0);
+    vec3 vCoeffs = (u_colorSpaceMode == COLOR_SPACE_BT709)
+        ? vec3(112.0 / 256.0, -102.0 / 256.0, -10.0 / 256.0)
+        : vec3(112.0 / 256.0, -94.0 / 256.0, -18.0 / 256.0);
+    float u = dot(rgb, uCoeffs) + (128.0 / 255.0);
+    float v = dot(rgb, vCoeffs) + (128.0 / 255.0);
     return clamp(vec2(u, v), 0.0, 1.0);
 }
 
@@ -1688,6 +1702,7 @@ void InitializeShaders() {
     g_virtualCameraNv12ShaderLocs.screenTexture = glGetUniformLocation(g_virtualCameraNv12Program, "screenTexture");
     g_virtualCameraNv12ShaderLocs.sourceTexelSize = glGetUniformLocation(g_virtualCameraNv12Program, "u_sourceTexelSize");
     g_virtualCameraNv12ShaderLocs.outputMode = glGetUniformLocation(g_virtualCameraNv12Program, "u_outputMode");
+    g_virtualCameraNv12ShaderLocs.colorSpaceMode = glGetUniformLocation(g_virtualCameraNv12Program, "u_colorSpaceMode");
 
     glUseProgram(g_renderProgram);
     glUniform1i(g_renderShaderLocs.filterTexture, 0);
@@ -1713,6 +1728,9 @@ void InitializeShaders() {
 
     glUseProgram(g_virtualCameraNv12Program);
     glUniform1i(g_virtualCameraNv12ShaderLocs.screenTexture, 0);
+    if (g_virtualCameraNv12ShaderLocs.colorSpaceMode >= 0) {
+        glUniform1i(g_virtualCameraNv12ShaderLocs.colorSpaceMode, 0);
+    }
 
     glUseProgram(0);
 
@@ -5003,60 +5021,13 @@ static GLuint PrepareSameThreadVirtualCameraTexture(GLuint srcTexture, int srcW,
     return g_sameThreadVirtualCameraScaleTexture;
 }
 
-static GLuint PrepareSameThreadVirtualCameraBackbufferTexture(int srcW, int srcH, int outW, int outH) {
-    if (srcW <= 0 || srcH <= 0 || outW <= 0 || outH <= 0) { return 0; }
-
-    EnsureSameThreadVirtualCameraScaleTarget(outW, outH);
-    if (g_sameThreadVirtualCameraScaleFBO == 0 || g_sameThreadVirtualCameraScaleTexture == 0) { return 0; }
-
-    GLint previousReadFbo = 0;
-    GLint previousDrawFbo = 0;
-    GLint previousViewport[4] = {};
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFbo);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFbo);
-    glGetIntegerv(GL_VIEWPORT, previousViewport);
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_sameThreadVirtualCameraScaleFBO);
-
-    if (oglViewport) {
-        oglViewport(0, 0, outW, outH);
-    } else {
-        glViewport(0, 0, outW, outH);
-    }
-    glDisable(GL_SCISSOR_TEST);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    const float scaleX = static_cast<float>(outW) / static_cast<float>(srcW);
-    const float scaleY = static_cast<float>(outH) / static_cast<float>(srcH);
-    const float fitScale = (std::min)(scaleX, scaleY);
-
-    int fitW = static_cast<int>(static_cast<float>(srcW) * fitScale + 0.5f);
-    int fitH = static_cast<int>(static_cast<float>(srcH) * fitScale + 0.5f);
-    fitW = (std::max)(1, (std::min)(fitW, outW));
-    fitH = (std::max)(1, (std::min)(fitH, outH));
-
-    const int dstX = (outW - fitW) / 2;
-    const int dstY = (outH - fitH) / 2;
-    BlitFramebufferDirect(0, 0, srcW, srcH, dstX, dstY, dstX + fitW, dstY + fitH, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, previousDrawFbo);
-    if (oglViewport) {
-        oglViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
-    } else {
-        glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
-    }
-
-    return g_sameThreadVirtualCameraScaleTexture;
-}
-
 static bool ConvertSameThreadVirtualCameraTextureToNv12(GLuint srcTexture, int srcW, int srcH, const SameThreadVirtualCameraReadbackSlot& slot) {
     if (srcTexture == 0 || srcW <= 0 || srcH <= 0 || g_virtualCameraNv12Program == 0) { return false; }
     if (slot.yTexture == 0 || slot.uvTexture == 0 || slot.textureWidth != srcW || slot.textureHeight != srcH) { return false; }
     if (g_sameThreadVirtualCameraConvertFBO == 0) { glGenFramebuffers(1, &g_sameThreadVirtualCameraConvertFBO); }
     if (g_sameThreadVirtualCameraConvertFBO == 0) { return false; }
+
+    const int colorSpaceMode = (srcW >= 1280 || srcH > 576) ? 1 : 0;
 
     GLint previousProgram = 0;
     GLint previousActiveTexture = 0;
@@ -5078,6 +5049,9 @@ static bool ConvertSameThreadVirtualCameraTextureToNv12(GLuint srcTexture, int s
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_sameThreadVirtualCameraConvertFBO);
     glUseProgram(g_virtualCameraNv12Program);
     glUniform2f(g_virtualCameraNv12ShaderLocs.sourceTexelSize, 1.0f / static_cast<float>(srcW), 1.0f / static_cast<float>(srcH));
+    if (g_virtualCameraNv12ShaderLocs.colorSpaceMode >= 0) {
+        glUniform1i(g_virtualCameraNv12ShaderLocs.colorSpaceMode, colorSpaceMode);
+    }
     glBindVertexArray(g_fullscreenQuadVAO);
     glActiveTexture(GL_TEXTURE0);
     BindTextureDirect(GL_TEXTURE_2D, srcTexture);
@@ -5130,9 +5104,8 @@ static bool ConvertSameThreadVirtualCameraTextureToNv12(GLuint srcTexture, int s
     return true;
 }
 
-void CaptureSameThreadVirtualCameraBackbufferFrame(int sourceW, int sourceH, bool captureVirtualCameraFrame) {
-    if (!captureVirtualCameraFrame || !IsVirtualCameraActive()) { return; }
-    if (sourceW <= 0 || sourceH <= 0) { return; }
+void CaptureSameThreadVirtualCameraFrame() {
+    if (!IsVirtualCameraActive()) { return; }
 
     uint32_t vcWidth = 0;
     uint32_t vcHeight = 0;
@@ -5144,20 +5117,33 @@ void CaptureSameThreadVirtualCameraBackbufferFrame(int sourceW, int sourceH, boo
     if ((outH & 1) != 0) { --outH; }
     if (outW <= 0 || outH <= 0) { return; }
 
+    GLuint sourceTexture = 0;
+    int captureSourceW = 0;
+    int captureSourceH = 0;
+    const GLuint obsOverrideTexture = g_obsOverrideTexture.load(std::memory_order_acquire);
+    const int obsOverrideW = g_obsOverrideWidth.load(std::memory_order_acquire);
+    const int obsOverrideH = g_obsOverrideHeight.load(std::memory_order_acquire);
+    if (obsOverrideTexture != 0 && obsOverrideW > 0 && obsOverrideH > 0) {
+        sourceTexture = obsOverrideTexture;
+        captureSourceW = obsOverrideW;
+        captureSourceH = obsOverrideH;
+    }
+    if (sourceTexture == 0 || captureSourceW <= 0 || captureSourceH <= 0) { return; }
+
     const bool sourceSizeChanged = g_sameThreadVirtualCameraCaptureSourceW > 0 && g_sameThreadVirtualCameraCaptureSourceH > 0 &&
-                                   (g_sameThreadVirtualCameraCaptureSourceW != sourceW ||
-                                    g_sameThreadVirtualCameraCaptureSourceH != sourceH);
+                                   (g_sameThreadVirtualCameraCaptureSourceW != captureSourceW ||
+                                    g_sameThreadVirtualCameraCaptureSourceH != captureSourceH);
     if (sourceSizeChanged) {
         // Pending async readbacks captured against the old backbuffer size can surface as mixed stale frames.
         // Drop the queue but keep the GPU ring allocated so resize recovery does not stall on reallocation.
         DiscardSameThreadVirtualCameraReadbacks();
     }
-    g_sameThreadVirtualCameraCaptureSourceW = sourceW;
-    g_sameThreadVirtualCameraCaptureSourceH = sourceH;
+    g_sameThreadVirtualCameraCaptureSourceW = captureSourceW;
+    g_sameThreadVirtualCameraCaptureSourceH = captureSourceH;
 
     HarvestSameThreadVirtualCameraReadback();
 
-    GLuint readTexture = PrepareSameThreadVirtualCameraBackbufferTexture(sourceW, sourceH, outW, outH);
+    const GLuint readTexture = PrepareSameThreadVirtualCameraTexture(sourceTexture, captureSourceW, captureSourceH, outW, outH);
     if (readTexture == 0) { return; }
 
     LARGE_INTEGER counter;

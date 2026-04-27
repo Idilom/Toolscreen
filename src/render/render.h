@@ -279,7 +279,7 @@ void RenderMode(const ModeConfig* modeToRender, const GLState& s, int current_ga
                 bool excludeOnlyOnMyScreen = false);
 bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH,
                               bool skipAnimation = false);
-void CaptureSameThreadVirtualCameraBackbufferFrame(int sourceW, int sourceH, bool captureVirtualCameraFrame);
+void CaptureSameThreadVirtualCameraFrame();
 void ResetSameThreadVirtualCameraCaptureState();
 void RenderModeWithOpacity(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH, float opacity,
                            bool skipBackgroundClear = false);

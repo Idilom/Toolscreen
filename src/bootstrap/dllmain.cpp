@@ -3107,15 +3107,14 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         const bool shouldRenderObsHookFrame =
             g_graphicsHookDetected.load(std::memory_order_acquire) && ShouldUpdateObsTextureNow();
         const bool shouldRenderVirtualCameraFrame = IsVirtualCameraActive() && ShouldCaptureVirtualCameraFrame();
-        if (shouldRenderObsHookFrame) {
-            PROFILE_SCOPE_CAT("Capture Same-Thread OBS Frame", "OBS");
+        const bool shouldRenderSharedObsFrame = shouldRenderObsHookFrame || shouldRenderVirtualCameraFrame;
+        if (shouldRenderSharedObsFrame) {
+            PROFILE_SCOPE_CAT("Capture Shared OBS/Virtual Camera Frame", "OBS");
             RenderSameThreadObsFrame(&modeToRenderCopy, s, current_gameW, current_gameH, false);
         }
         if (shouldRenderVirtualCameraFrame) {
             PROFILE_SCOPE_CAT("Capture Virtual Camera Frame", "VirtualCamera");
-            const int virtualCameraSourceW = hasWindowClientSize ? windowWidth : fullW;
-            const int virtualCameraSourceH = hasWindowClientSize ? windowHeight : fullH;
-            CaptureSameThreadVirtualCameraBackbufferFrame(virtualCameraSourceW, virtualCameraSourceH, true);
+            CaptureSameThreadVirtualCameraFrame();
         }
 
         {
