@@ -85,6 +85,15 @@ static inline uint8_t clampToByte(int32_t val) {
     return static_cast<uint8_t>(val);
 }
 
+enum class VirtualCameraColorSpaceMode {
+    Bt601,
+    Bt709,
+};
+
+static VirtualCameraColorSpaceMode GetVirtualCameraColorSpaceMode(uint32_t width, uint32_t height) {
+    return (width >= 1280 || height > 576) ? VirtualCameraColorSpaceMode::Bt709 : VirtualCameraColorSpaceMode::Bt601;
+}
+
 static int GetVirtualCameraTargetFps() {
     auto cfgSnapshot = GetConfigSnapshot();
     if (cfgSnapshot && cfgSnapshot->limitCaptureFramerate) {
@@ -295,6 +304,17 @@ static void ConvertRGBAtoNV12(const uint8_t* __restrict rgba, uint8_t* __restric
     uint8_t* __restrict yPlane = nv12;
     uint8_t* __restrict uvPlane = nv12 + yPlaneSize;
     const uint32_t stride = width * 4;
+    const VirtualCameraColorSpaceMode colorSpaceMode = GetVirtualCameraColorSpaceMode(width, height);
+
+    const int32_t yR = colorSpaceMode == VirtualCameraColorSpaceMode::Bt709 ? 47 : 66;
+    const int32_t yG = colorSpaceMode == VirtualCameraColorSpaceMode::Bt709 ? 157 : 129;
+    const int32_t yB = colorSpaceMode == VirtualCameraColorSpaceMode::Bt709 ? 16 : 25;
+    const int32_t uR = colorSpaceMode == VirtualCameraColorSpaceMode::Bt709 ? -26 : -38;
+    const int32_t uG = colorSpaceMode == VirtualCameraColorSpaceMode::Bt709 ? -87 : -74;
+    const int32_t uB = 112;
+    const int32_t vR = 112;
+    const int32_t vG = colorSpaceMode == VirtualCameraColorSpaceMode::Bt709 ? -102 : -94;
+    const int32_t vB = colorSpaceMode == VirtualCameraColorSpaceMode::Bt709 ? -10 : -18;
 
     for (uint32_t y = 0; y < height; y += 2) {
         const uint8_t* __restrict srcRow0 = rgba + (height - 1 - y) * stride;
@@ -310,10 +330,10 @@ static void ConvertRGBAtoNV12(const uint8_t* __restrict rgba, uint8_t* __restric
             const uint8_t* p01 = srcRow1 + x * 4;
             const uint8_t* p11 = srcRow1 + (x + 1) * 4;
 
-            int32_t y00 = ((66 * p00[0] + 129 * p00[1] + 25 * p00[2] + 128) >> 8) + 16;
-            int32_t y10 = ((66 * p10[0] + 129 * p10[1] + 25 * p10[2] + 128) >> 8) + 16;
-            int32_t y01 = ((66 * p01[0] + 129 * p01[1] + 25 * p01[2] + 128) >> 8) + 16;
-            int32_t y11 = ((66 * p11[0] + 129 * p11[1] + 25 * p11[2] + 128) >> 8) + 16;
+            int32_t y00 = ((yR * p00[0] + yG * p00[1] + yB * p00[2] + 128) >> 8) + 16;
+            int32_t y10 = ((yR * p10[0] + yG * p10[1] + yB * p10[2] + 128) >> 8) + 16;
+            int32_t y01 = ((yR * p01[0] + yG * p01[1] + yB * p01[2] + 128) >> 8) + 16;
+            int32_t y11 = ((yR * p11[0] + yG * p11[1] + yB * p11[2] + 128) >> 8) + 16;
 
             yRow0[x] = clampToByte(y00);
             yRow0[x + 1] = clampToByte(y10);
@@ -325,8 +345,8 @@ static void ConvertRGBAtoNV12(const uint8_t* __restrict rgba, uint8_t* __restric
             int32_t avgG = (p00[1] + p10[1] + p01[1] + p11[1] + 2) >> 2;
             int32_t avgB = (p00[2] + p10[2] + p01[2] + p11[2] + 2) >> 2;
 
-            int32_t u = ((-38 * avgR - 74 * avgG + 112 * avgB + 128) >> 8) + 128;
-            int32_t v = ((112 * avgR - 94 * avgG - 18 * avgB + 128) >> 8) + 128;
+            int32_t u = ((uR * avgR + uG * avgG + uB * avgB + 128) >> 8) + 128;
+            int32_t v = ((vR * avgR + vG * avgG + vB * avgB + 128) >> 8) + 128;
 
             uvRow[x] = clampToByte(u);
             uvRow[x + 1] = clampToByte(v);

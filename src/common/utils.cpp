@@ -1863,6 +1863,36 @@ const ModeConfig* GetModeFromSnapshot(const Config& config, const std::string& i
     return nullptr;
 }
 
+const ModeConfig* GetModeFromSnapshotOrFallback(const Config& config, const std::string& id, std::string* resolvedId) {
+    if (const ModeConfig* mode = GetModeFromSnapshot(config, id)) {
+        if (resolvedId) {
+            *resolvedId = mode->id;
+        }
+        return mode;
+    }
+
+    if (!config.defaultMode.empty()) {
+        if (const ModeConfig* defaultMode = GetModeFromSnapshot(config, config.defaultMode)) {
+            if (resolvedId) {
+                *resolvedId = defaultMode->id;
+            }
+            return defaultMode;
+        }
+    }
+
+    if (!config.modes.empty()) {
+        if (resolvedId) {
+            *resolvedId = config.modes.front().id;
+        }
+        return &config.modes.front();
+    }
+
+    if (resolvedId) {
+        resolvedId->clear();
+    }
+    return nullptr;
+}
+
 const MirrorConfig* GetMirrorFromSnapshot(const Config& config, const std::string& name) {
     for (const auto& mirror : config.mirrors) {
         if (mirror.name == name) return &mirror;
@@ -1882,7 +1912,7 @@ ModeViewportInfo GetCurrentModeViewport_Internal() {
 
     // Use snapshot for thread-safe mode config lookup (called from multiple threads)
     auto vpSnap = GetConfigSnapshot();
-    const ModeConfig* mode = vpSnap ? GetModeFromSnapshot(*vpSnap, modeId) : nullptr;
+    const ModeConfig* mode = vpSnap ? GetModeFromSnapshotOrFallback(*vpSnap, modeId) : nullptr;
     if (!mode) {
         return info;
     }
@@ -2388,7 +2418,8 @@ DWORD WINAPI ImageMonitorThread(LPVOID lpParam) {
     }
 }
 
-bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::vector<DWORD>& exclusionKeys, bool triggerOnRelease, size_t minKeyCount) {
+bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::vector<DWORD>& exclusionKeys, bool skipLiveKeyStateChecks,
+                      size_t minKeyCount, WPARAM rawWParam, bool hasIncomingKeyState, bool incomingIsKeyDown) {
     PROFILE_SCOPE_CAT("Hotkey Match Check", "Game Logic");
     if (keys.empty()) return false;
     if (keys.size() < minKeyCount) return false;
@@ -2408,8 +2439,71 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     const bool shift_down_now = lshift_down || rshift_down;
     const bool alt_down_now = lalt_down || ralt_down;
 
-    // For trigger on release, skip exclusion key checks since user may have released modifiers
-    if (!triggerOnRelease) {
+    auto matchesModifierFamilyEvent = [&](DWORD key) {
+        switch (key) {
+        case VK_CONTROL:
+        case VK_LCONTROL:
+        case VK_RCONTROL:
+            return wParam == VK_CONTROL || wParam == VK_LCONTROL || wParam == VK_RCONTROL || rawWParam == VK_CONTROL;
+        case VK_SHIFT:
+        case VK_LSHIFT:
+        case VK_RSHIFT:
+            return wParam == VK_SHIFT || wParam == VK_LSHIFT || wParam == VK_RSHIFT || rawWParam == VK_SHIFT;
+        case VK_MENU:
+        case VK_LMENU:
+        case VK_RMENU:
+            return wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU || rawWParam == VK_MENU;
+        default:
+            return false;
+        }
+    };
+
+    auto getGenericModifierKey = [](DWORD key) {
+        switch (key) {
+        case VK_CONTROL:
+        case VK_LCONTROL:
+        case VK_RCONTROL:
+            return static_cast<DWORD>(VK_CONTROL);
+        case VK_SHIFT:
+        case VK_LSHIFT:
+        case VK_RSHIFT:
+            return static_cast<DWORD>(VK_SHIFT);
+        case VK_MENU:
+        case VK_LMENU:
+        case VK_RMENU:
+            return static_cast<DWORD>(VK_MENU);
+        default:
+            return key;
+        }
+    };
+
+    auto isModifierDownNow = [&](DWORD key) {
+        switch (key) {
+        case VK_CONTROL:
+            return ctrl_down_now;
+        case VK_LCONTROL:
+            return lctrl_down;
+        case VK_RCONTROL:
+            return rctrl_down;
+        case VK_SHIFT:
+            return shift_down_now;
+        case VK_LSHIFT:
+            return lshift_down;
+        case VK_RSHIFT:
+            return rshift_down;
+        case VK_MENU:
+            return alt_down_now;
+        case VK_LMENU:
+            return lalt_down;
+        case VK_RMENU:
+            return ralt_down;
+        default:
+            return (GetAsyncKeyState(key) & 0x8000) != 0;
+        }
+    };
+
+    // Release-style checks may run after the input transition already changed live key state.
+    if (!skipLiveKeyStateChecks) {
         for (DWORD excluded_key : exclusionKeys) {
             bool excludedPressed = false;
             if (excluded_key == VK_CONTROL) {
@@ -2447,8 +2541,7 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     bool requires_lshift = false, requires_rshift = false, requires_shift = false;
     bool requires_lalt = false, requires_ralt = false, requires_alt = false;
 
-    // For trigger on release, we don't need to track modifier requirements since we skip the check
-    if (!triggerOnRelease) {
+    if (!skipLiveKeyStateChecks) {
         for (size_t i = 0; i < keys.size() - 1; ++i) {
             DWORD key = keys[i];
             if (key == VK_LCONTROL)
@@ -2480,37 +2573,56 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
         Log("[Hotkey] Check: " + keyCombo + " vs keypress " + std::to_string(wParam));
     }
 
-    // Handle modifier keys specially - Windows sends VK_CONTROL/VK_SHIFT/VK_MENU in wParam,
-    bool main_key_pressed = (main_key == wParam);
+    // Handle modifier keys specially - Windows may report generic modifiers in wParam,
+    // and release-style paths need to reason about post-event modifier state.
+    const bool isModifierReleaseEvent = skipLiveKeyStateChecks && hasIncomingKeyState && !incomingIsKeyDown && isModifierKey(main_key) &&
+                                        matchesModifierFamilyEvent(main_key);
 
-    if (!main_key_pressed) {
+    bool main_key_pressed = false;
+
+    if (isModifierReleaseEvent) {
+        const DWORD genericModifierKey = getGenericModifierKey(main_key);
+        const bool isSpecificModifierKey = main_key != genericModifierKey;
+
+        if (isSpecificModifierKey && wParam == main_key) {
+            main_key_pressed = true;
+        } else if (isSpecificModifierKey && wParam != genericModifierKey) {
+            main_key_pressed = false;
+        } else {
+            main_key_pressed = !isModifierDownNow(main_key);
+        }
+    } else {
+        main_key_pressed = (main_key == wParam);
+    }
+
+    if (!main_key_pressed && !isModifierReleaseEvent) {
         switch (main_key) {
         case VK_CONTROL:
             main_key_pressed = (wParam == VK_CONTROL || wParam == VK_LCONTROL || wParam == VK_RCONTROL);
             break;
         case VK_LCONTROL:
-            main_key_pressed = (wParam == VK_LCONTROL) || (wParam == VK_CONTROL && (triggerOnRelease ? true : lctrl_down));
+            main_key_pressed = (wParam == VK_LCONTROL) || (wParam == VK_CONTROL && (skipLiveKeyStateChecks ? true : lctrl_down));
             break;
         case VK_RCONTROL:
-            main_key_pressed = (wParam == VK_RCONTROL) || (wParam == VK_CONTROL && (triggerOnRelease ? true : rctrl_down));
+            main_key_pressed = (wParam == VK_RCONTROL) || (wParam == VK_CONTROL && (skipLiveKeyStateChecks ? true : rctrl_down));
             break;
         case VK_SHIFT:
             main_key_pressed = (wParam == VK_SHIFT || wParam == VK_LSHIFT || wParam == VK_RSHIFT);
             break;
         case VK_LSHIFT:
-            main_key_pressed = (wParam == VK_LSHIFT) || (wParam == VK_SHIFT && (triggerOnRelease ? true : lshift_down));
+            main_key_pressed = (wParam == VK_LSHIFT) || (wParam == VK_SHIFT && (skipLiveKeyStateChecks ? true : lshift_down));
             break;
         case VK_RSHIFT:
-            main_key_pressed = (wParam == VK_RSHIFT) || (wParam == VK_SHIFT && (triggerOnRelease ? true : rshift_down));
+            main_key_pressed = (wParam == VK_RSHIFT) || (wParam == VK_SHIFT && (skipLiveKeyStateChecks ? true : rshift_down));
             break;
         case VK_MENU:
             main_key_pressed = (wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU);
             break;
         case VK_LMENU:
-            main_key_pressed = (wParam == VK_LMENU) || (wParam == VK_MENU && (triggerOnRelease ? true : lalt_down));
+            main_key_pressed = (wParam == VK_LMENU) || (wParam == VK_MENU && (skipLiveKeyStateChecks ? true : lalt_down));
             break;
         case VK_RMENU:
-            main_key_pressed = (wParam == VK_RMENU) || (wParam == VK_MENU && (triggerOnRelease ? true : ralt_down));
+            main_key_pressed = (wParam == VK_RMENU) || (wParam == VK_MENU && (skipLiveKeyStateChecks ? true : ralt_down));
             break;
         default:
             break;
@@ -2522,9 +2634,7 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
         return false;
     }
 
-    // For trigger on release, skip modifier state checks since modifiers may have been
-    // released before or at the same time as the main key
-    if (!triggerOnRelease) {
+    if (!skipLiveKeyStateChecks) {
         if (s_enableHotkeyDebug) {
             Log("[Hotkey] Modifiers - Need: LCtrl=" + std::to_string(requires_lctrl) + " RCtrl=" + std::to_string(requires_rctrl) +
                 " Ctrl=" + std::to_string(requires_ctrl) + " LShift=" + std::to_string(requires_lshift) + " RShift=" +
@@ -2585,7 +2695,7 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
             }
         }
     } else {
-        if (s_enableHotkeyDebug) { Log("[Hotkey] Skipping modifier checks for trigger-on-release hotkey"); }
+        if (s_enableHotkeyDebug) { Log("[Hotkey] Skipping live key-state checks for release-style hotkey evaluation"); }
     }
 
     if (s_enableHotkeyDebug) {
@@ -2955,6 +3065,23 @@ static std::atomic<int> s_lastRequestedClientH{ 0 };
 static std::atomic<int> s_prevRequestedClientW{ 0 };
 static std::atomic<int> s_prevRequestedClientH{ 0 };
 
+static void RememberRequestedWindowClientResize_Internal(int width, int height) {
+    if (width <= 0 || height <= 0) { return; }
+
+    const int lastRequestedW = s_lastRequestedClientW.load(std::memory_order_relaxed);
+    const int lastRequestedH = s_lastRequestedClientH.load(std::memory_order_relaxed);
+    if (lastRequestedW != width || lastRequestedH != height) {
+        s_prevRequestedClientW.store(lastRequestedW, std::memory_order_relaxed);
+        s_prevRequestedClientH.store(lastRequestedH, std::memory_order_relaxed);
+        s_lastRequestedClientW.store(width, std::memory_order_relaxed);
+        s_lastRequestedClientH.store(height, std::memory_order_relaxed);
+    }
+}
+
+void RememberRequestedWindowClientResize(int width, int height) {
+    RememberRequestedWindowClientResize_Internal(width, height);
+}
+
 bool GetRecentRequestedWindowClientResizes(int& outCurrentW, int& outCurrentH, int& outPreviousW, int& outPreviousH) {
     outCurrentW = s_lastRequestedClientW.load(std::memory_order_relaxed);
     outCurrentH = s_lastRequestedClientH.load(std::memory_order_relaxed);
@@ -3030,14 +3157,7 @@ bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* sou
 
     std::lock_guard<std::mutex> lock(s_resizeRequestMutex);
 
-    const int lastRequestedW = s_lastRequestedClientW.load(std::memory_order_relaxed);
-    const int lastRequestedH = s_lastRequestedClientH.load(std::memory_order_relaxed);
-    if (lastRequestedW != width || lastRequestedH != height) {
-        s_prevRequestedClientW.store(lastRequestedW, std::memory_order_relaxed);
-        s_prevRequestedClientH.store(lastRequestedH, std::memory_order_relaxed);
-        s_lastRequestedClientW.store(width, std::memory_order_relaxed);
-        s_lastRequestedClientH.store(height, std::memory_order_relaxed);
-    }
+    RememberRequestedWindowClientResize_Internal(width, height);
 
     if (s_lastHwnd == hwnd && s_lastWidth == width && s_lastHeight == height && (nowMs - s_lastPostedMs) <= 50) { return true; }
 
@@ -3054,7 +3174,7 @@ bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* sou
     s_lastHeight = height;
     s_lastPostedMs = nowMs;
 
-    InvalidateTrackedGameTextureId(false);
+    InvalidateTrackedGameTextureId(false, false);
     return true;
 }
 
@@ -3065,7 +3185,7 @@ static void RequestCurrentModeClientResizeSync(HWND hwnd, const char* source) {
     if (!cfgSnap) { return; }
 
     const std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
-    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    const ModeConfig* mode = GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId);
     if (!mode || mode->width <= 0 || mode->height <= 0) { return; }
 
     if (EqualsIgnoreCase(mode->id, "Fullscreen") && mode->useRelativeSize) {
@@ -3177,7 +3297,7 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
             return;
         }
 
-        InvalidateTrackedGameTextureId(false);
+        InvalidateTrackedGameTextureId(false, false);
         state.active = true;
         RequestCurrentModeClientResizeSync(hwnd, "window:borderless_on");
         Log("[WINDOW] Toggled borderless ON (" + std::to_string(targetW) + "x" + std::to_string(targetH) + ")");
@@ -3212,7 +3332,7 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
             return;
         }
 
-        InvalidateTrackedGameTextureId(false);
+        InvalidateTrackedGameTextureId(false, false);
         state.active = false;
         RequestCurrentModeClientResizeSync(hwnd, "window:borderless_off");
         const int centeredW = centeredRect.right - centeredRect.left;

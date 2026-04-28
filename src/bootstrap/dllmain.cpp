@@ -1,4 +1,5 @@
 #include "features/fake_cursor.h"
+#include "features/cursor_trail.h"
 #include "gui/gui.h"
 #include "gui/imgui_cache.h"
 #include "hooks/input_hook.h"
@@ -70,11 +71,26 @@ void PublishConfigSnapshot() {
 }
 
 void PublishConfigSnapshot(const Config& config) {
-    auto snapshot = std::make_shared<const Config>(config);
+    Config sanitizedConfig = config;
+    SanitizeConfigKeyRebindsForCannotTypeTriggers(sanitizedConfig);
+    auto snapshot = std::make_shared<const Config>(std::move(sanitizedConfig));
     // Lock-free publish: atomic store of shared_ptr.
     g_configSnapshot.store(std::move(snapshot), std::memory_order_release);
 
     g_configSnapshotVersion.fetch_add(1, std::memory_order_release);
+}
+
+bool PublishConfigSnapshotIfUnchanged(const std::shared_ptr<const Config>& expectedSnapshot, const Config& config) {
+    Config sanitizedConfig = config;
+    SanitizeConfigKeyRebindsForCannotTypeTriggers(sanitizedConfig);
+    auto snapshot = std::make_shared<const Config>(std::move(sanitizedConfig));
+    auto expected = expectedSnapshot;
+    if (!g_configSnapshot.compare_exchange_strong(expected, std::move(snapshot), std::memory_order_acq_rel, std::memory_order_acquire)) {
+        return false;
+    }
+
+    g_configSnapshotVersion.fetch_add(1, std::memory_order_release);
+    return true;
 }
 
 std::shared_ptr<const Config> GetConfigSnapshot() {
@@ -155,6 +171,10 @@ std::atomic<bool> g_configLoaded{ false };
 std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_hotkeyTimestamps;
 std::atomic<bool> g_guiNeedsRecenter{ true };
 std::atomic<bool> g_wasCursorVisible{ true };
+std::atomic<bool> g_forceVisibleCursorWhileGuiOpen{ false };
+constexpr int kDeferredGuiGlfwCursorModeNone = 0;
+std::atomic<int> g_deferredGuiGlfwCursorMode{ kDeferredGuiGlfwCursorModeNone };
+std::atomic<void*> g_lastGlfwCursorWindow{ nullptr };
 // Lock-free GUI toggle debounce timestamp
 std::atomic<int64_t> g_lastGuiToggleTimeMs{ 0 };
 
@@ -270,8 +290,10 @@ void AttemptAggressiveGlViewportHook();
 void ApplyWindowsMouseSpeed();
 void ApplyKeyRepeatSettings();
 
-void InvalidateTrackedGameTextureId(bool clearSwapThread) {
-    g_cachedGameTextureId.store(UINT_MAX, std::memory_order_release);
+void InvalidateTrackedGameTextureId(bool clearSwapThread, bool clearCachedTexture) {
+    if (clearCachedTexture) {
+        g_cachedGameTextureId.store(UINT_MAX, std::memory_order_release);
+    }
     g_lastTrackedGameFramebufferTextureId.store(UINT_MAX, std::memory_order_release);
     g_lastTrackedGameTextureBindId.store(UINT_MAX, std::memory_order_release);
     if (clearSwapThread) {
@@ -387,7 +409,7 @@ void CaptureBackbufferForObs(int width, int height) {
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_sameThreadObsCaptureFBOs[captureIndex]);
-    ObsBlitFramebufferDirect(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    BlitFramebufferDirect(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, prevReadFBO);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDrawFBO);
 
@@ -816,7 +838,6 @@ struct TextureBindingCacheEntry {
     bool valid = false;
 };
 
-thread_local TextureBindingCacheEntry g_textureBindingCache;
 
 std::atomic<int> g_glViewportHookCount{ 0 };
 std::atomic<bool> g_glViewportHookedViaGLEW{ false };
@@ -833,6 +854,9 @@ GLNAMEDFRAMEBUFFERTEXTUREPROC oglNamedFramebufferTexture = NULL;
 typedef void(APIENTRY* PFNGLBLITFRAMEBUFFERPROC_HOOK)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
                                                       GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
 PFNGLBLITFRAMEBUFFERPROC_HOOK oglBlitFramebuffer = NULL;
+PFNGLBLITFRAMEBUFFERPROC_HOOK g_oglBlitFramebufferDriver = NULL;
+PFNGLBLITFRAMEBUFFERPROC_HOOK g_oglBlitFramebufferThirdParty = NULL;
+std::atomic<void*> g_glBlitFramebufferThirdPartyHookTarget{ nullptr };
 std::atomic<bool> g_glBlitFramebufferHooked{ false };
 
 typedef void (APIENTRY* GLBINDTEXTUREPROC)(GLenum target, GLuint texture);
@@ -991,6 +1015,119 @@ static __forceinline bool IsDisallowedThirdPartySwapCaller(void* caller_address)
            !HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(caller_address);
 }
 
+    void APIENTRY hkglBlitFramebuffer(GLint srcX0,
+                          GLint srcY0,
+                          GLint srcX1,
+                          GLint srcY1,
+                          GLint dstX0,
+                          GLint dstY0,
+                          GLint dstX1,
+                          GLint dstY1,
+                          GLbitfield mask,
+                          GLenum filter);
+    void APIENTRY hkglBlitFramebuffer_Driver(GLint srcX0,
+                              GLint srcY0,
+                              GLint srcX1,
+                              GLint srcY1,
+                              GLint dstX0,
+                              GLint dstY0,
+                              GLint dstX1,
+                              GLint dstY1,
+                              GLbitfield mask,
+                              GLenum filter);
+    void APIENTRY hkglBlitFramebuffer_ThirdParty(GLint srcX0,
+                               GLint srcY0,
+                               GLint srcX1,
+                               GLint srcY1,
+                               GLint dstX0,
+                               GLint dstY0,
+                               GLint dstX1,
+                               GLint dstY1,
+                               GLbitfield mask,
+                               GLenum filter);
+
+static bool IsReadableExecutablePointer(const void* address) {
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (VirtualQuery(address, &mbi, sizeof(mbi)) != sizeof(mbi)) {
+        return false;
+    }
+
+    if (mbi.State != MEM_COMMIT) {
+        return false;
+    }
+
+    const DWORD protect = mbi.Protect & 0xFF;
+    return protect == PAGE_EXECUTE || protect == PAGE_EXECUTE_READ || protect == PAGE_EXECUTE_READWRITE ||
+           protect == PAGE_EXECUTE_WRITECOPY || protect == PAGE_READONLY || protect == PAGE_READWRITE ||
+           protect == PAGE_WRITECOPY;
+}
+
+static bool IsAbsoluteJumpStub(const uint8_t* bytes) {
+    if (!bytes) {
+        return false;
+    }
+
+    return (bytes[0] == 0xEB) || (bytes[0] == 0xE9) || (bytes[0] == 0xFF && bytes[1] == 0x25) ||
+           (bytes[0] == 0x48 && bytes[1] == 0xB8 && bytes[10] == 0xFF && bytes[11] == 0xE0) ||
+           (bytes[0] == 0x49 && bytes[1] == 0xBB && bytes[10] == 0x41 && bytes[11] == 0xFF && bytes[12] == 0xE3);
+}
+
+static bool TryResolveJumpTarget(void* current, void*& next) {
+    next = nullptr;
+    if (!current || !IsReadableExecutablePointer(current)) {
+        return false;
+    }
+
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(current);
+    if (bytes[0] == 0xEB) {
+        const int8_t rel = *reinterpret_cast<const int8_t*>(bytes + 1);
+        next = const_cast<uint8_t*>(bytes + 2 + rel);
+    } else if (bytes[0] == 0xE9) {
+        const int32_t rel = *reinterpret_cast<const int32_t*>(bytes + 1);
+        next = const_cast<uint8_t*>(bytes + 5 + rel);
+    } else if (bytes[0] == 0xFF && bytes[1] == 0x25) {
+        const int32_t disp = *reinterpret_cast<const int32_t*>(bytes + 2);
+        const uint8_t* ripNext = bytes + 6;
+        const uint8_t* slot = ripNext + disp;
+        if (!IsReadableExecutablePointer(slot)) {
+            return false;
+        }
+        next = *reinterpret_cast<void* const*>(slot);
+    } else if (bytes[0] == 0x48 && bytes[1] == 0xB8 && bytes[10] == 0xFF && bytes[11] == 0xE0) {
+        next = *reinterpret_cast<void* const*>(bytes + 2);
+    } else if (bytes[0] == 0x49 && bytes[1] == 0xBB && bytes[10] == 0x41 && bytes[11] == 0xFF && bytes[12] == 0xE3) {
+        next = *reinterpret_cast<void* const*>(bytes + 2);
+    }
+
+    return next != nullptr;
+}
+
+static void* ResolveBlitFramebufferThirdPartyTarget(void* startAddress) {
+    void* current = startAddress;
+    for (int depth = 0; depth < 8; ++depth) {
+        if (!current || !IsReadableExecutablePointer(current) || !IsAbsoluteJumpStub(reinterpret_cast<const uint8_t*>(current))) {
+            return nullptr;
+        }
+
+        void* next = nullptr;
+        if (!TryResolveJumpTarget(current, next) || !next) {
+            return nullptr;
+        }
+
+        if (next != reinterpret_cast<void*>(&hkglBlitFramebuffer) &&
+            next != reinterpret_cast<void*>(&hkglBlitFramebuffer_Driver) &&
+            next != reinterpret_cast<void*>(&hkglBlitFramebuffer_ThirdParty) &&
+            next != reinterpret_cast<void*>(oglBlitFramebuffer) &&
+            next != reinterpret_cast<void*>(g_oglBlitFramebufferDriver)) {
+            return next;
+        }
+
+        current = next;
+    }
+
+    return nullptr;
+}
+
 void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     GLBINDTEXTUREPROC next = oglBindTexture ? oglBindTexture : g_oglBindTextureDriver;
     if (next) {
@@ -1000,45 +1137,93 @@ void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     glBindTexture(target, texture);
 }
 
-static inline void UpdateTrackedTextureBinding(GLenum target, GLuint texture) {
-    if (target != GL_TEXTURE_2D) {
+static bool GetTexture2DLevel0Size(GLuint texture, int& outWidth, int& outHeight) {
+    outWidth = 0;
+    outHeight = 0;
+    if (texture == 0 || texture == UINT_MAX || glIsTexture(texture) != GL_TRUE) {
+        return false;
+    }
+
+    GLint previousActiveTexture = 0;
+    GLint previousTexture = 0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+    BindTextureDirect(GL_TEXTURE_2D, texture);
+    GLint textureWidth = 0;
+    GLint textureHeight = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &textureWidth);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &textureHeight);
+
+    BindTextureDirect(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glActiveTexture(previousActiveTexture);
+
+    if (textureWidth <= 0 || textureHeight <= 0) {
+        return false;
+    }
+
+    outWidth = textureWidth;
+    outHeight = textureHeight;
+    return true;
+}
+
+void BlitFramebufferDirect(GLint srcX0,
+                           GLint srcY0,
+                           GLint srcX1,
+                           GLint srcY1,
+                           GLint dstX0,
+                           GLint dstY0,
+                           GLint dstX1,
+                           GLint dstY1,
+                           GLbitfield mask,
+                           GLenum filter) {
+    PFNGLBLITFRAMEBUFFERPROC_HOOK next = g_oglBlitFramebufferDriver ? g_oglBlitFramebufferDriver : oglBlitFramebuffer;
+    if (next) {
+        next(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
         return;
     }
 
-    const HGLRC currentContext = wglGetCurrentContext();
-    g_textureBindingCache.context = currentContext;
-    g_textureBindingCache.texture2D = texture;
-    g_textureBindingCache.valid = (currentContext != nullptr);
+    glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
 }
 
-static inline GLuint GetTrackedTextureBindingForViewportHook() {
-    const HGLRC currentContext = wglGetCurrentContext();
-    if (currentContext != nullptr && g_textureBindingCache.valid && g_textureBindingCache.context == currentContext) {
-        return g_textureBindingCache.texture2D;
+static bool GetLatestViewportForHook(int& outModeW, int& outModeH, bool& outStretchEnabled, int& outStretchX, int& outStretchY,
+                                     int& outStretchW, int& outStretchH);
+
+static bool BoundTextureMatchesPreviousFrameModeSize() {
+    int modeW = 0;
+    int modeH = 0;
+    bool stretchEnabled = false;
+    int stretchX = 0;
+    int stretchY = 0;
+    int stretchW = 0;
+    int stretchH = 0;
+    if (!GetLatestViewportForHook(modeW, modeH, stretchEnabled, stretchX, stretchY, stretchW, stretchH)) {
+        return false;
     }
 
-    GLint currentTexture = 0;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTexture);
+    if (stretchW <= 0 || stretchH <= 0) {
+        return false;
+    }
 
-    g_textureBindingCache.context = currentContext;
-    g_textureBindingCache.texture2D = static_cast<GLuint>(currentTexture);
-    g_textureBindingCache.valid = (currentContext != nullptr);
-    return static_cast<GLuint>(currentTexture);
+    GLint textureWidth = 0;
+    GLint textureHeight = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &textureWidth);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &textureHeight);
+    return textureWidth == stretchW && textureHeight == stretchH;
 }
 
-static inline void BindTextureHook_Impl(GLBINDTEXTUREPROC next, GLenum target, GLuint texture) {
-    UpdateTrackedTextureBinding(target, texture);
 
-    // only track valid 2D binds from the swapbuffers thread
+static inline void BindTextureHook_Impl(GLBINDTEXTUREPROC next, GLenum target, GLuint texture) {
+    if (next) next(target, texture);
     if (target == GL_TEXTURE_2D && texture != 0) {
         static thread_local const DWORD s_currentThreadId = GetCurrentThreadId();
         const DWORD lastSwapThreadId = g_lastSwapBuffersThreadId.load(std::memory_order_acquire);
-        if (lastSwapThreadId != 0 && s_currentThreadId == lastSwapThreadId) {
+        if (lastSwapThreadId != 0 && s_currentThreadId == lastSwapThreadId && BoundTextureMatchesPreviousFrameModeSize()) {
             g_lastTrackedGameTextureBindId.store(texture, std::memory_order_release);
         }
     }
 
-    if (next) next(target, texture);
 }
 
 void APIENTRY hkglBindTexture(GLenum target, GLuint texture) {
@@ -1242,7 +1427,7 @@ HCURSOR WINAPI hkSetCursor_ThirdParty(HCURSOR hCursor) {
     SETCURSORPROC next = g_oSetCursorThirdParty ? g_oSetCursorThirdParty : oSetCursor;
     return SetCursorHook_Impl(next, hCursor);
 }
-// Note: OBS capture is now handled by obs_thread.cpp via glBlitFramebuffer hook
+// OBS redirect now plugs into the main glBlitFramebuffer hook below.
 
 static std::atomic<int> lastViewportW{ 0 };
 static std::atomic<int> lastViewportH{ 0 };
@@ -1341,7 +1526,7 @@ static bool GetLatestViewportForHook(int& outModeW, int& outModeH, bool& outStre
     auto cfgSnap = GetConfigSnapshot();
     if (!cfgSnap) { return false; }
 
-    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    const ModeConfig* mode = GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId);
     if (!mode) { return false; }
 
     if (s_cache.valid && s_cache.modeId != currentModeId) {
@@ -1492,24 +1677,27 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     }
 
     GLint drawFBO = 0;
+    GLint currentTextureBinding = 0;
 
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFBO);
-    const GLuint currentTexture = GetTrackedTextureBindingForViewportHook();
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTextureBinding);
+    const GLuint currentTexture = static_cast<GLuint>(currentTextureBinding);
 
-    if (g_gameVersion >= GameVersion(1, 17, 0) && g_gameVersion < GameVersion(1, 20, 0)) {
-        if (currentTexture != 0 || drawFBO != 0) {
-            return next(x, y, width, height);
-        }
-    } else {
-        if (currentTexture == 0 || drawFBO != 0) {
-            return next(x, y, width, height);
-        }
+    const bool isLegacyVersion = g_gameVersion < GameVersion(1, 17, 0);
+    const bool shouldBypassViewportHook = isLegacyVersion ?
+        (currentTexture == 0 || drawFBO != 0) :
+        (currentTexture != 0 || drawFBO != 0);
+    if (shouldBypassViewportHook) {
+        return next(x, y, width, height);
     }
 
-    // Track the actual incoming viewport dimensions so tolerant matching remains in sync
-    // even when mode dimensions and driver calls update on slightly different frames.
-    lastViewportW.store(static_cast<int>(width), std::memory_order_relaxed);
-    lastViewportH.store(static_cast<int>(height), std::memory_order_relaxed);
+    if (!g_showGui.load(std::memory_order_acquire)) {
+        // Track the latest verified in-game viewport only while the settings GUI is closed.
+        // GUI rendering can issue its own viewport calls, and carrying those sizes into
+        // post-close mouse translation can desync cursor mapping from the game surface.
+        lastViewportW.store(static_cast<int>(width), std::memory_order_relaxed);
+        lastViewportH.store(static_cast<int>(height), std::memory_order_relaxed);
+    }
 
     const int screenW = GetCachedWindowWidth();
     const int screenH = GetCachedWindowHeight();
@@ -1631,6 +1819,36 @@ void WINAPI hkglViewport_ThirdParty(GLint x, GLint y, GLsizei width, GLsizei hei
 
 void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
+void APIENTRY hkglBlitFramebuffer(GLint srcX0,
+                                  GLint srcY0,
+                                  GLint srcX1,
+                                  GLint srcY1,
+                                  GLint dstX0,
+                                  GLint dstY0,
+                                  GLint dstX1,
+                                  GLint dstY1,
+                                  GLbitfield mask,
+                                  GLenum filter);
+void APIENTRY hkglBlitFramebuffer_Driver(GLint srcX0,
+                                         GLint srcY0,
+                                         GLint srcX1,
+                                         GLint srcY1,
+                                         GLint dstX0,
+                                         GLint dstY0,
+                                         GLint dstX1,
+                                         GLint dstY1,
+                                         GLbitfield mask,
+                                         GLenum filter);
+void APIENTRY hkglBlitFramebuffer_ThirdParty(GLint srcX0,
+                                             GLint srcY0,
+                                             GLint srcX1,
+                                             GLint srcY1,
+                                             GLint dstX0,
+                                             GLint dstY0,
+                                             GLint dstX1,
+                                             GLint dstY1,
+                                             GLbitfield mask,
+                                             GLenum filter);
 void APIENTRY hkglNamedFramebufferTexture(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level);
 
 static inline void TrackNamedFramebufferTextureAttachment(GLenum attachment, GLuint texture) {
@@ -1644,6 +1862,31 @@ static inline void TrackNamedFramebufferTextureAttachment(GLenum attachment, GLu
     }
 
     g_lastTrackedGameFramebufferTextureId.store(texture != 0 ? texture : UINT_MAX, std::memory_order_release);
+}
+
+static inline void TrackCurrentReadFramebufferColorAttachmentTexture() {
+    const DWORD lastSwapThreadId = g_lastSwapBuffersThreadId.load(std::memory_order_acquire);
+    if (lastSwapThreadId != 0 && GetCurrentThreadId() != lastSwapThreadId) {
+        return;
+    }
+
+    GLint attachmentType = GL_NONE;
+    glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER,
+                                          GL_COLOR_ATTACHMENT0,
+                                          GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
+                                          &attachmentType);
+    if (attachmentType != GL_TEXTURE) {
+        g_lastTrackedGameFramebufferTextureId.store(UINT_MAX, std::memory_order_release);
+        return;
+    }
+
+    GLint attachmentName = 0;
+    glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER,
+                                          GL_COLOR_ATTACHMENT0,
+                                          GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
+                                          &attachmentName);
+    g_lastTrackedGameFramebufferTextureId.store(attachmentName > 0 ? static_cast<GLuint>(attachmentName) : UINT_MAX,
+                                                std::memory_order_release);
 }
 
 static void AttemptHookGlBlitNamedFramebufferViaGlew() {
@@ -1669,6 +1912,149 @@ static void AttemptHookGlBlitNamedFramebufferViaGlew() {
 
     s_hooked.store(true, std::memory_order_release);
     LogCategory("init", "Successfully hooked glBlitNamedFramebuffer via GLEW");
+}
+
+static bool ShouldRetargetMinecraftBlitFramebuffer(GLint readFBO, GLint drawFBO) {
+    return drawFBO == 0 && readFBO != 0 && IsVersionInRange(g_gameVersion, GameVersion(1, 21, 2), GameVersion(1, 21, 4));
+}
+
+static inline void BlitFramebufferHook_Impl(PFNGLBLITFRAMEBUFFERPROC_HOOK next,
+                                            GLint srcX0,
+                                            GLint srcY0,
+                                            GLint srcX1,
+                                            GLint srcY1,
+                                            GLint dstX0,
+                                            GLint dstY0,
+                                            GLint dstX1,
+                                            GLint dstY1,
+                                            GLbitfield mask,
+                                            GLenum filter) {
+    if (!next) {
+        return;
+    }
+
+    GLint readFBO = 0;
+    GLint drawFBO = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFBO);
+
+    if (ShouldRetargetMinecraftBlitFramebuffer(readFBO, drawFBO)) {
+        if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
+            TrackCurrentReadFramebufferColorAttachmentTexture();
+        }
+
+        int resolvedDstX0 = 0;
+        int resolvedDstY0 = 0;
+        int resolvedDstX1 = 0;
+        int resolvedDstY1 = 0;
+        if (ResolvePresentedGameBlitRect(resolvedDstX0, resolvedDstY0, resolvedDstX1, resolvedDstY1)) {
+            next(srcX0, srcY0, srcX1, srcY1, resolvedDstX0, resolvedDstY0, resolvedDstX1, resolvedDstY1, mask, filter);
+            return;
+        }
+    }
+
+    if (TryObsBlitFramebufferRedirect(readFBO, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter)) {
+        return;
+    }
+
+    next(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+}
+
+static void AttemptHookGlBlitFramebufferViaWgl() {
+    static std::atomic<bool> s_hooked{ false };
+    if (s_hooked.load(std::memory_order_acquire)) return;
+
+    HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
+    if (!hOpenGL32) return;
+
+    void* pBlitFramebufferExport = reinterpret_cast<void*>(GetProcAddress(hOpenGL32, "glBlitFramebuffer"));
+
+    typedef PROC(WINAPI* PFN_wglGetProcAddress)(LPCSTR);
+    PFN_wglGetProcAddress pwglGetProcAddress =
+        reinterpret_cast<PFN_wglGetProcAddress>(GetProcAddress(hOpenGL32, "wglGetProcAddress"));
+    if (!pwglGetProcAddress) return;
+
+    PROC pBlitFramebufferWGL = pwglGetProcAddress("glBlitFramebuffer");
+    if (pBlitFramebufferWGL != NULL &&
+        reinterpret_cast<void*>(pBlitFramebufferWGL) != reinterpret_cast<void*>(&hkglBlitFramebuffer) &&
+        reinterpret_cast<void*>(pBlitFramebufferWGL) != reinterpret_cast<void*>(&hkglBlitFramebuffer_Driver) &&
+        reinterpret_cast<void*>(pBlitFramebufferWGL) != pBlitFramebufferExport) {
+        LogCategory("init", "Attempting glBlitFramebuffer hook via wglGetProcAddress: " +
+                   std::to_string(reinterpret_cast<uintptr_t>(pBlitFramebufferWGL)));
+
+        MH_STATUS st = MH_CreateHook(reinterpret_cast<void*>(pBlitFramebufferWGL), reinterpret_cast<void*>(&hkglBlitFramebuffer_Driver),
+                                     reinterpret_cast<void**>(&g_oglBlitFramebufferDriver));
+        if (st == MH_OK || st == MH_ERROR_ALREADY_CREATED) {
+            st = MH_EnableHook(reinterpret_cast<void*>(pBlitFramebufferWGL));
+            if (st == MH_OK || st == MH_ERROR_ENABLED) {
+                s_hooked.store(true, std::memory_order_release);
+                g_glBlitFramebufferHooked.store(true, std::memory_order_release);
+                LogCategory("init", "SUCCESS: glBlitFramebuffer hooked via wglGetProcAddress");
+                return;
+            }
+        }
+    }
+
+    PFNGLBLITFRAMEBUFFERPROC_HOOK pBlitFramebufferGLEW = glBlitFramebuffer;
+    if (pBlitFramebufferGLEW != NULL &&
+        reinterpret_cast<void*>(pBlitFramebufferGLEW) != reinterpret_cast<void*>(&hkglBlitFramebuffer) &&
+        reinterpret_cast<void*>(pBlitFramebufferGLEW) != reinterpret_cast<void*>(&hkglBlitFramebuffer_Driver) &&
+        reinterpret_cast<void*>(pBlitFramebufferGLEW) != pBlitFramebufferExport) {
+        LogCategory("init", "Attempting glBlitFramebuffer hook via GLEW pointer: " +
+                   std::to_string(reinterpret_cast<uintptr_t>(pBlitFramebufferGLEW)));
+
+        MH_STATUS st = MH_CreateHook(reinterpret_cast<void*>(pBlitFramebufferGLEW), reinterpret_cast<void*>(&hkglBlitFramebuffer_Driver),
+                                     reinterpret_cast<void**>(&g_oglBlitFramebufferDriver));
+        if (st == MH_OK || st == MH_ERROR_ALREADY_CREATED) {
+            st = MH_EnableHook(reinterpret_cast<void*>(pBlitFramebufferGLEW));
+            if (st == MH_OK || st == MH_ERROR_ENABLED) {
+                s_hooked.store(true, std::memory_order_release);
+                g_glBlitFramebufferHooked.store(true, std::memory_order_release);
+                LogCategory("init", "SUCCESS: glBlitFramebuffer hooked via GLEW pointer");
+            }
+        }
+    }
+}
+
+static void AttemptHookGlBlitFramebufferThirdParty() {
+    if (!g_graphicsHookDetected.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (g_glBlitFramebufferThirdPartyHookTarget.load(std::memory_order_acquire) != nullptr) {
+        return;
+    }
+
+    HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
+    if (!hOpenGL32) {
+        return;
+    }
+
+    typedef PROC(WINAPI* PFN_wglGetProcAddress)(LPCSTR);
+    PFN_wglGetProcAddress pwglGetProcAddress =
+        reinterpret_cast<PFN_wglGetProcAddress>(GetProcAddress(hOpenGL32, "wglGetProcAddress"));
+    if (!pwglGetProcAddress) {
+        return;
+    }
+
+    void* startAddress = reinterpret_cast<void*>(pwglGetProcAddress("glBlitFramebuffer"));
+    if (!startAddress) {
+        return;
+    }
+
+    void* hookTarget = ResolveBlitFramebufferThirdPartyTarget(startAddress);
+    if (!hookTarget) {
+        return;
+    }
+
+    if (HookChain::TryCreateAndEnableHook(hookTarget, reinterpret_cast<void*>(&hkglBlitFramebuffer_ThirdParty),
+                                          reinterpret_cast<void**>(&g_oglBlitFramebufferThirdParty),
+                                          "glBlitFramebuffer (third-party chain)")) {
+        g_glBlitFramebufferThirdPartyHookTarget.store(hookTarget, std::memory_order_release);
+        LogCategory("hookchain",
+                    std::string("[glBlitFramebuffer] installed third-party hook target ") +
+                        HookChain::DescribeAddressWithOwner(hookTarget));
+    }
 }
 
 static void AttemptHookGlNamedFramebufferTextureViaGlew() {
@@ -1699,14 +2085,25 @@ static void AttemptHookGlNamedFramebufferTextureViaGlew() {
 static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
     if (!next) return FALSE;
 
-    if (g_showGui.load() || g_isShuttingDown.load()) { return next(X, Y); }
+    const bool guiOpen = g_showGui.load(std::memory_order_acquire);
+    const CapturingState capturingState = g_capturingMousePos.load(std::memory_order_acquire);
+    HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    if (hwnd != NULL && !IsWindowInForegroundTree(hwnd)) {
+        if (guiOpen || capturingState != CapturingState::NONE) {
+            g_capturingMousePos.store(CapturingState::NONE, std::memory_order_release);
+            g_nextMouseXY.store(std::make_pair(-1, -1), std::memory_order_release);
+            return TRUE;
+        }
+        return next(X, Y);
+    }
+
+    if (guiOpen) { return TRUE; }
+    if (g_isShuttingDown.load()) { return next(X, Y); }
 
     ModeViewportInfo viewport = GetCurrentModeViewport();
     if (!viewport.valid) { return next(X, Y); }
 
-    CapturingState currentState = g_capturingMousePos.load();
-
-    if (currentState == CapturingState::DISABLED) {
+    if (capturingState == CapturingState::DISABLED) {
         // Convert viewport center (client-space) into absolute screen coordinates only when needed.
         int centerX = viewport.stretchX + viewport.stretchWidth / 2;
         int centerY = viewport.stretchY + viewport.stretchHeight / 2;
@@ -1729,7 +2126,7 @@ static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
         return next(X, Y);
     }
 
-    if (currentState == CapturingState::NORMAL) {
+    if (capturingState == CapturingState::NORMAL) {
         auto [expectedX, expectedY] = g_nextMouseXY.load();
         if (expectedX == -1 && expectedY == -1) { return next(X, Y); }
         return next(expectedX, expectedY);
@@ -1825,25 +2222,73 @@ static void SyncLegacyLwjglRequestedResizeOnSwapThread(HWND hwnd) {
 #define GLFW_CURSOR_HIDDEN 0x00034002
 #define GLFW_CURSOR_DISABLED 0x00034003
 
+static void UpdateGuiCursorRestoreState(bool cursorVisibleAfterClose) {
+    if (!g_showGui.load(std::memory_order_acquire)) { return; }
+
+    g_wasCursorVisible.store(cursorVisibleAfterClose, std::memory_order_release);
+    g_forceVisibleCursorWhileGuiOpen.store(!cursorVisibleAfterClose, std::memory_order_release);
+}
+
+static void ApplyGlfwCursorMode_Impl(GLFWSETINPUTMODE next, void* window, int value) {
+    if (!next) return;
+
+    if (value == GLFW_CURSOR_DISABLED) {
+        g_capturingMousePos.store(CapturingState::DISABLED, std::memory_order_release);
+        next(window, GLFW_CURSOR, value);
+    } else if (value == GLFW_CURSOR_NORMAL) {
+        g_capturingMousePos.store(CapturingState::NORMAL, std::memory_order_release);
+        next(window, GLFW_CURSOR, value);
+    } else {
+        next(window, GLFW_CURSOR, value);
+    }
+
+    g_capturingMousePos.store(CapturingState::NONE, std::memory_order_release);
+}
+
+void ApplyDeferredGuiCursorModeAfterClose() {
+    const int deferredMode = g_deferredGuiGlfwCursorMode.exchange(kDeferredGuiGlfwCursorModeNone, std::memory_order_acq_rel);
+    if (deferredMode == kDeferredGuiGlfwCursorModeNone) { return; }
+
+    void* window = g_lastGlfwCursorWindow.load(std::memory_order_acquire);
+    GLFWSETINPUTMODE directProc = oglfwSetInputMode ? oglfwSetInputMode : g_oglfwSetInputModeThirdParty;
+    if (!window || !directProc) { return; }
+
+    ApplyGlfwCursorMode_Impl(directProc, window, deferredMode);
+}
+
+void FinalizeGuiCursorStateAfterClose() {
+    if (g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire)) {
+        if (g_gameVersion >= GameVersion(1, 13, 0) && IsCursorVisible()) {
+            ShowCursor(FALSE);
+        }
+        g_forceVisibleCursorWhileGuiOpen.store(false, std::memory_order_release);
+    }
+
+    if (!g_wasCursorVisible.load(std::memory_order_acquire) && g_gameVersion < GameVersion(1, 13, 0)) {
+        HCURSOR airCursor = g_specialCursorHandle.load(std::memory_order_acquire);
+        if (airCursor != NULL) {
+            SetCursor(airCursor);
+        }
+    }
+}
+
 static void GlfwSetInputModeHook_Impl(GLFWSETINPUTMODE next, void* window, int mode, int value) {
     if (!next) return;
     if (mode != GLFW_CURSOR) { return next(window, mode, value); }
 
-    if (value == GLFW_CURSOR_DISABLED) {
-        g_capturingMousePos.store(CapturingState::DISABLED);
-        // When GUI is open, don't actually disable/lock the cursor - let it move freely
-        if (g_showGui.load()) {
-            return; // Skip the call to keep cursor unlocked
-        }
-        next(window, mode, value);
-    } else if (value == GLFW_CURSOR_NORMAL) {
-        g_capturingMousePos.store(CapturingState::NORMAL);
-        next(window, mode, value);
-    } else {
-        next(window, mode, value);
+    const bool guiOpen = g_showGui.load(std::memory_order_acquire);
+
+    g_lastGlfwCursorWindow.store(window, std::memory_order_release);
+
+    if (guiOpen) {
+        g_deferredGuiGlfwCursorMode.store(value, std::memory_order_release);
+        UpdateGuiCursorRestoreState(value == GLFW_CURSOR_NORMAL);
+        g_nextMouseXY.store(std::make_pair(-1, -1), std::memory_order_release);
+        g_capturingMousePos.store(CapturingState::NONE, std::memory_order_release);
+        return;
     }
 
-    g_capturingMousePos.store(CapturingState::NONE);
+    ApplyGlfwCursorMode_Impl(next, window, value);
 }
 
 void hkglfwSetInputMode(void* window, int mode, int value) { GlfwSetInputModeHook_Impl(oglfwSetInputMode, window, mode, value); }
@@ -1893,7 +2338,7 @@ static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInp
             }
 
             auto inputCfgSnap = GetConfigSnapshot();
-            const ModeConfig* mode = inputCfgSnap ? GetModeFromSnapshot(*inputCfgSnap, modeId) : nullptr;
+            const ModeConfig* mode = inputCfgSnap ? GetModeFromSnapshotOrFallback(*inputCfgSnap, modeId) : nullptr;
             if (mode && mode->sensitivityOverrideEnabled) {
                 if (mode->separateXYSensitivity) {
                     sensitivityX = mode->modeSensitivityX;
@@ -1986,13 +2431,13 @@ void APIENTRY hkglNamedFramebufferTexture(GLuint framebuffer, GLenum attachment,
     }
 }
 
-void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                                     GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
-    if (drawFramebuffer != 0) {
-        return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask,
-                                       filter);
-    }
-
+static bool ResolvePresentedGameViewportGeometry(int& outModeWidth,
+                                                 int& outModeHeight,
+                                                 bool& outStretchEnabled,
+                                                 int& outStretchX,
+                                                 int& outStretchY,
+                                                 int& outStretchWidth,
+                                                 int& outStretchHeight) {
     const ViewportTransitionSnapshot& transitionSnap =
         g_viewportTransitionSnapshots[g_viewportTransitionSnapshotIndex.load(std::memory_order_acquire)];
     auto hookConfigSnap = GetConfigSnapshot();
@@ -2027,38 +2472,191 @@ void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuf
         stretchWidth = cachedMode.stretchWidth;
         stretchHeight = cachedMode.stretchHeight;
     } else {
-        return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask,
-                                       filter);
+        return false;
     }
 
     const int screenW = GetCachedWindowWidth();
     const int screenH = GetCachedWindowHeight();
-    if (screenW > 0 && screenH > 0) {
-        if (transitionSnap.active && !cutGameViewportTransition) {
-            if (hideAnimationsInGame) {
-                stretchX = transitionSnap.toX;
-                stretchY = transitionSnap.toY;
-                stretchWidth = transitionSnap.toWidth;
-                stretchHeight = transitionSnap.toHeight;
-            } else {
-                stretchX = transitionSnap.currentX;
-                stretchY = transitionSnap.currentY;
-                stretchWidth = transitionSnap.currentWidth;
-                stretchHeight = transitionSnap.currentHeight;
-            }
-        } else if (!stretchEnabled) {
-            stretchX = GetCenteredAxisOffset(screenW, modeWidth);
-            stretchY = GetCenteredAxisOffset(screenH, modeHeight);
-            stretchWidth = modeWidth;
-            stretchHeight = modeHeight;
+    if (screenW <= 0 || screenH <= 0) { return false; }
+
+    if (transitionSnap.active && !cutGameViewportTransition) {
+        if (hideAnimationsInGame) {
+            stretchX = transitionSnap.toX;
+            stretchY = transitionSnap.toY;
+            stretchWidth = transitionSnap.toWidth;
+            stretchHeight = transitionSnap.toHeight;
+        } else {
+            stretchX = transitionSnap.currentX;
+            stretchY = transitionSnap.currentY;
+            stretchWidth = transitionSnap.currentWidth;
+            stretchHeight = transitionSnap.currentHeight;
         }
+    } else if (!stretchEnabled) {
+        stretchX = GetCenteredAxisOffset(screenW, modeWidth);
+        stretchY = GetCenteredAxisOffset(screenH, modeHeight);
+        stretchWidth = modeWidth;
+        stretchHeight = modeHeight;
+    }
 
-        int screenH = GetCachedWindowHeight();
-        int destY0_screen = screenH - stretchY - stretchHeight;
-        int destY1_screen = screenH - stretchY;
+    outModeWidth = modeWidth;
+    outModeHeight = modeHeight;
+    outStretchEnabled = stretchEnabled;
+    outStretchX = stretchX;
+    outStretchY = stretchY;
+    outStretchWidth = stretchWidth;
+    outStretchHeight = stretchHeight;
 
-        return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, stretchX, destY0_screen,
-                                       stretchX + stretchWidth, destY1_screen, mask, filter);
+    return true;
+}
+
+bool ResolvePresentedGameViewport(ModeViewportInfo& outViewport) {
+    int modeWidth = 0;
+    int modeHeight = 0;
+    bool stretchEnabled = false;
+    int stretchX = 0;
+    int stretchY = 0;
+    int stretchWidth = 0;
+    int stretchHeight = 0;
+
+    if (!ResolvePresentedGameViewportGeometry(modeWidth, modeHeight, stretchEnabled, stretchX, stretchY, stretchWidth, stretchHeight)) {
+        return false;
+    }
+
+    outViewport.valid = true;
+    outViewport.x = 0;
+    outViewport.y = 0;
+    outViewport.width = modeWidth;
+    outViewport.height = modeHeight;
+    outViewport.stretchEnabled = stretchEnabled;
+    outViewport.stretchX = stretchX;
+    outViewport.stretchY = stretchY;
+    outViewport.stretchWidth = stretchWidth;
+    outViewport.stretchHeight = stretchHeight;
+    return true;
+}
+
+bool GetLatestGameViewportSize(int& outWidth, int& outHeight) {
+    if (g_showGui.load(std::memory_order_acquire)) {
+        outWidth = 0;
+        outHeight = 0;
+        return false;
+    }
+
+    const int width = lastViewportW.load(std::memory_order_relaxed);
+    const int height = lastViewportH.load(std::memory_order_relaxed);
+    if (width <= 0 || height <= 0) {
+        outWidth = 0;
+        outHeight = 0;
+        return false;
+    }
+
+    outWidth = width;
+    outHeight = height;
+    return true;
+}
+
+void InvalidateLatestGameViewportSize() {
+    lastViewportW.store(0, std::memory_order_relaxed);
+    lastViewportH.store(0, std::memory_order_relaxed);
+}
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+void SetLatestGameViewportSizeForTests(int width, int height) {
+    lastViewportW.store((std::max)(0, width), std::memory_order_relaxed);
+    lastViewportH.store((std::max)(0, height), std::memory_order_relaxed);
+}
+#endif
+
+bool ResolvePresentedGameBlitRect(int& outDstX0, int& outDstY0, int& outDstX1, int& outDstY1) {
+    int modeWidth = 0;
+    int modeHeight = 0;
+    bool stretchEnabled = false;
+    int stretchX = 0;
+    int stretchY = 0;
+    int stretchWidth = 0;
+    int stretchHeight = 0;
+
+    if (!ResolvePresentedGameViewportGeometry(modeWidth, modeHeight, stretchEnabled, stretchX, stretchY, stretchWidth, stretchHeight)) {
+        return false;
+    }
+
+    const int screenH = GetCachedWindowHeight();
+    if (screenH <= 0) { return false; }
+
+    outDstX0 = stretchX;
+    outDstY0 = screenH - stretchY - stretchHeight;
+    outDstX1 = stretchX + stretchWidth;
+    outDstY1 = screenH - stretchY;
+    return true;
+}
+
+void APIENTRY hkglBlitFramebuffer(GLint srcX0,
+                                  GLint srcY0,
+                                  GLint srcX1,
+                                  GLint srcY1,
+                                  GLint dstX0,
+                                  GLint dstY0,
+                                  GLint dstX1,
+                                  GLint dstY1,
+                                  GLbitfield mask,
+                                  GLenum filter) {
+    if (!oglBlitFramebuffer) {
+        return;
+    }
+
+    BlitFramebufferHook_Impl(oglBlitFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+}
+
+void APIENTRY hkglBlitFramebuffer_Driver(GLint srcX0,
+                                         GLint srcY0,
+                                         GLint srcX1,
+                                         GLint srcY1,
+                                         GLint dstX0,
+                                         GLint dstY0,
+                                         GLint dstX1,
+                                         GLint dstY1,
+                                         GLbitfield mask,
+                                         GLenum filter) {
+    if (!g_oglBlitFramebufferDriver) {
+        return;
+    }
+
+    BlitFramebufferHook_Impl(g_oglBlitFramebufferDriver, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+}
+
+void APIENTRY hkglBlitFramebuffer_ThirdParty(GLint srcX0,
+                                             GLint srcY0,
+                                             GLint srcX1,
+                                             GLint srcY1,
+                                             GLint dstX0,
+                                             GLint dstY0,
+                                             GLint dstX1,
+                                             GLint dstY1,
+                                             GLbitfield mask,
+                                             GLenum filter) {
+    PFNGLBLITFRAMEBUFFERPROC_HOOK next = g_oglBlitFramebufferThirdParty ? g_oglBlitFramebufferThirdParty :
+                                         (g_oglBlitFramebufferDriver ? g_oglBlitFramebufferDriver : oglBlitFramebuffer);
+    if (!next) {
+        return;
+    }
+
+    BlitFramebufferHook_Impl(next, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+}
+
+void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                                     GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
+    if (drawFramebuffer != 0) {
+        return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask,
+                                       filter);
+    }
+
+    int resolvedDstX0 = 0;
+    int resolvedDstY0 = 0;
+    int resolvedDstX1 = 0;
+    int resolvedDstY1 = 0;
+    if (ResolvePresentedGameBlitRect(resolvedDstX0, resolvedDstY0, resolvedDstX1, resolvedDstY1)) {
+        return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, resolvedDstX0, resolvedDstY0,
+                                       resolvedDstX1, resolvedDstY1, mask, filter);
     }
 
     return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
@@ -2240,7 +2838,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
                 CursorTextures::LoadCursorTextures();
 
-                if (wglGetCurrentContext()) { StartObsHookThread(); }
+                if (wglGetCurrentContext()) {
+                    AttemptHookGlBlitFramebufferViaWgl();
+                    StartObsHookThread();
+                }
 
                 AttemptAggressiveGlViewportHook();
 
@@ -2252,7 +2853,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
                 AttemptHookGlBlitNamedFramebufferViaGlew();
 
-                // Note: glBlitFramebuffer hook for OBS is now handled by obs_thread.cpp
             } else {
                 Log("[RENDER] ERROR: Failed to initialize GLEW.");
                 return next(hDc);
@@ -2287,27 +2887,9 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                                                g_isTransitioningFromEyeZoom.load(std::memory_order_relaxed);
             const bool needCaptureForObsOrVc = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
 
-            const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
-            const bool needAsyncCaptureCopy = needCaptureForEyeZoom || needCaptureForObsOrVc;
+            const bool needCapture = needCaptureForMirrors || needCaptureForObsOrVc;
+            const bool needAsyncCaptureCopy = needCaptureForObsOrVc;
             if (needAsyncCaptureCopy) {
-                auto logEyeZoomCaptureStateThrottled = [&](const char* stage, const std::string& message) {
-                    struct EyeZoomCaptureLogState {
-                        ULONGLONG lastLogMs = 0;
-                        std::string lastMessage;
-                    };
-
-                    static std::unordered_map<std::string, EyeZoomCaptureLogState> s_logStateByStage;
-                    constexpr ULONGLONG kLogIntervalMs = 2000;
-
-                    const ULONGLONG now = GetTickCount64();
-                    EyeZoomCaptureLogState& state = s_logStateByStage[stage];
-                    if (state.lastMessage == message && (now - state.lastLogMs) < kLogIntervalMs) { return; }
-
-                    state.lastLogMs = now;
-                    state.lastMessage = message;
-                    LogCategory("texture_ops", std::string("EyeZoom Capture: ") + stage + " " + message);
-                };
-
                 static auto s_lastMirrorOnlyCaptureSubmit = std::chrono::steady_clock::time_point{};
                 static int s_lastMirrorOnlyW = 0;
                 static int s_lastMirrorOnlyH = 0;
@@ -2316,15 +2898,13 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 GLuint gameTexture = g_cachedGameTextureId.load(std::memory_order_acquire);
                 if (gameTexture != UINT_MAX) {
                     ModeViewportInfo viewport = GetCurrentModeViewport();
-                    if (viewport.valid) {
-                        if (needCaptureForEyeZoom) {
-                            logEyeZoomCaptureStateThrottled(
-                                "request",
-                                "trackedTex=" + std::to_string(gameTexture) + " viewport=" +
-                                    std::to_string(viewport.width) + "x" + std::to_string(viewport.height) +
-                                    " mirrors=" + std::to_string(needCaptureForMirrors ? 1 : 0) + " obsOrVc=" +
-                                    std::to_string(needCaptureForObsOrVc ? 1 : 0));
-                        }
+                    int textureWidth = 0;
+                    int textureHeight = 0;
+                    const bool hasTextureSize = GetTexture2DLevel0Size(gameTexture, textureWidth, textureHeight);
+                    const int captureWidth = hasTextureSize ? textureWidth : (viewport.valid ? viewport.width : 0);
+                    const int captureHeight = hasTextureSize ? textureHeight : (viewport.valid ? viewport.height : 0);
+
+                    if (captureWidth > 0 && captureHeight > 0) {
 
                         if (needCaptureForMirrors && !needCaptureForEyeZoom && !needCaptureForObsOrVc) {
                             const int maxMirrorFps = g_activeMirrorCaptureMaxFps.load(std::memory_order_acquire);
@@ -2334,7 +2914,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                                 const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                     std::chrono::duration<double, std::milli>(intervalMsD));
 
-                                const bool dimsChanged = (viewport.width != s_lastMirrorOnlyW) || (viewport.height != s_lastMirrorOnlyH);
+                                const bool dimsChanged = (captureWidth != s_lastMirrorOnlyW) || (captureHeight != s_lastMirrorOnlyH);
 
                                 if (!dimsChanged && s_lastMirrorOnlyCaptureSubmit.time_since_epoch().count() != 0) {
                                     if ((now - s_lastMirrorOnlyCaptureSubmit) < interval) {
@@ -2344,8 +2924,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
                                 if (allowCaptureThisFrame) {
                                     s_lastMirrorOnlyCaptureSubmit = now;
-                                    s_lastMirrorOnlyW = viewport.width;
-                                    s_lastMirrorOnlyH = viewport.height;
+                                    s_lastMirrorOnlyW = captureWidth;
+                                    s_lastMirrorOnlyH = captureHeight;
                                 }
                             }
                         }
@@ -2353,22 +2933,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                         // SubmitFrameCapture already inserts its own fences and flushes after them;
                         // avoid an extra glFlush here (it can reduce FPS by forcing more driver work per frame).
                         if (allowCaptureThisFrame) {
-                            EnsureCaptureTextureInitialized(viewport.width, viewport.height);
-                            if (needCaptureForEyeZoom) {
-                                logEyeZoomCaptureStateThrottled("submit",
-                                                                "submitting trackedTex=" + std::to_string(gameTexture) +
-                                                                    " viewport=" + std::to_string(viewport.width) + "x" +
-                                                                    std::to_string(viewport.height));
-                            }
-                            SubmitFrameCapture(gameTexture, viewport.width, viewport.height);
+                            EnsureCaptureTextureInitialized(captureWidth, captureHeight);
+                            SubmitFrameCapture(gameTexture, captureWidth, captureHeight);
                         }
-                    } else if (needCaptureForEyeZoom) {
-                        logEyeZoomCaptureStateThrottled("viewport_invalid",
-                                                        "trackedTex=" + std::to_string(gameTexture) + " viewport invalid while EyeZoom requested");
                     }
-                } else if (needCaptureForEyeZoom) {
-                    logEyeZoomCaptureStateThrottled("missing_tracked_texture",
-                                                    "tracked game texture unavailable while EyeZoom requested");
                 }
             }
         }
@@ -2442,6 +3010,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
         const bool shouldUseObsOverride = g_graphicsHookDetected.load(std::memory_order_acquire);
         if (shouldUseObsOverride) {
+            AttemptHookGlBlitFramebufferThirdParty();
+            StartObsHookThread();
             EnableObsOverride();
         } else {
             ClearObsOverride();
@@ -2470,7 +3040,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             int modeWidth = 0, modeHeight = 0;
             bool modeValid = false;
             {
-                const ModeConfig* newMode = GetModeFromSnapshot(frameCfg, desiredModeId);
+                const ModeConfig* newMode = GetModeFromSnapshotOrFallback(frameCfg, desiredModeId);
                 if (newMode) {
                     modeWidth = newMode->width;
                     modeHeight = newMode->height;
@@ -2493,9 +3063,9 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         ModeConfig modeToRenderCopy;
         bool modeFound = false;
         {
-            const ModeConfig* tempMode = GetModeFromSnapshot(frameCfg, desiredModeId);
+            const ModeConfig* tempMode = GetModeFromSnapshotOrFallback(frameCfg, desiredModeId);
             if (!tempMode && g_isTransitioningMode) {
-                tempMode = GetModeFromSnapshot(frameCfg, lastFrameModeIdCopy);
+                tempMode = GetModeFromSnapshotOrFallback(frameCfg, lastFrameModeIdCopy);
             }
             if (tempMode) {
                 modeToRenderCopy = *tempMode;
@@ -2618,15 +3188,14 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         const bool shouldRenderObsHookFrame =
             g_graphicsHookDetected.load(std::memory_order_acquire) && ShouldUpdateObsTextureNow();
         const bool shouldRenderVirtualCameraFrame = IsVirtualCameraActive() && ShouldCaptureVirtualCameraFrame();
-        if (shouldRenderObsHookFrame) {
-            PROFILE_SCOPE_CAT("Capture Same-Thread OBS Frame", "OBS");
+        const bool shouldRenderSharedObsFrame = shouldRenderObsHookFrame || shouldRenderVirtualCameraFrame;
+        if (shouldRenderSharedObsFrame) {
+            PROFILE_SCOPE_CAT("Capture Shared OBS/Virtual Camera Frame", "OBS");
             RenderSameThreadObsFrame(&modeToRenderCopy, s, current_gameW, current_gameH, false);
         }
         if (shouldRenderVirtualCameraFrame) {
             PROFILE_SCOPE_CAT("Capture Virtual Camera Frame", "VirtualCamera");
-            const int virtualCameraSourceW = hasWindowClientSize ? windowWidth : fullW;
-            const int virtualCameraSourceH = hasWindowClientSize ? windowHeight : fullH;
-            CaptureSameThreadVirtualCameraBackbufferFrame(virtualCameraSourceW, virtualCameraSourceH, true);
+            CaptureSameThreadVirtualCameraFrame();
         }
 
         {
@@ -2967,6 +3536,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         } else {
             LogCategory("init",
                         "WARNING: glBlitNamedFramebuffer not found in opengl32.dll - will attempt to hook via GLEW after context init");
+        }
+
+        LPVOID pGlBlitFramebuffer = GetProcAddress(hOpenGL32, "glBlitFramebuffer");
+        if (pGlBlitFramebuffer != NULL) {
+            if (CreateHookOrDie(pGlBlitFramebuffer, &hkglBlitFramebuffer, &oglBlitFramebuffer, "glBlitFramebuffer")) {
+                g_glBlitFramebufferHooked.store(true, std::memory_order_release);
+            }
+        } else {
+            LogCategory("init",
+                        "WARNING: glBlitFramebuffer not found in opengl32.dll - will attempt to hook via WGL/GLEW after context init");
         }
 
         if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {

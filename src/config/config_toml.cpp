@@ -333,7 +333,7 @@ void ModeConfigFromTomlInternal(const toml::table& tbl, ModeConfig& cfg, const s
     const toml::table* transitionTbl = GetTable(tbl, "transition");
     const toml::table& transitionSrc = transitionTbl ? *transitionTbl : tbl;
 
-    cfg.gameTransition = StringToGameTransitionType(GetStringOr(transitionSrc, "gameTransition", ConfigDefaults::GAME_TRANSITION_BOUNCE));
+    cfg.gameTransition = StringToGameTransitionType(GetStringOr(transitionSrc, "gameTransition", ConfigDefaults::GAME_TRANSITION_CUT));
     cfg.overlayTransition =
         StringToOverlayTransitionType(GetStringOr(transitionSrc, "overlayTransition", ConfigDefaults::OVERLAY_TRANSITION_CUT));
     cfg.backgroundTransition =
@@ -1680,6 +1680,48 @@ void CursorsConfigFromToml(const toml::table& tbl, CursorsConfig& cfg) {
     if (auto t = GetTable(tbl, "ingame")) { CursorConfigFromToml(*t, cfg.ingame); }
 }
 
+void CursorTrailConfigToToml(const CursorTrailConfig& cfg, toml::table& out) {
+    out.insert("enabled", cfg.enabled);
+    out.insert("onlyOnMyScreen", cfg.onlyOnMyScreen);
+    out.insert("onlyOnObs", cfg.onlyOnObs);
+    out.insert("lifetimeMs", cfg.lifetimeMs);
+    out.insert("stampSpacingPx", cfg.stampSpacingPx);
+    out.insert("spriteSizePx", cfg.spriteSizePx);
+    out.insert("tailSizeScale", cfg.tailSizeScale);
+    out.insert("useVelocitySize", cfg.useVelocitySize);
+    out.insert("velocitySizeIntensity", cfg.velocitySizeIntensity);
+    out.insert("color", ColorToTomlArray(cfg.color));
+    out.insert("useGradient", cfg.useGradient);
+    out.insert("tailColor", ColorToTomlArray(cfg.tailColor));
+    out.insert("opacity", cfg.opacity);
+    out.insert("blendMode", cfg.blendMode);
+    out.insert("spritePath", cfg.spritePath);
+}
+
+void CursorTrailConfigFromToml(const toml::table& tbl, CursorTrailConfig& cfg) {
+    cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::CURSOR_TRAIL_ENABLED);
+    cfg.onlyOnMyScreen = GetOr(tbl, "onlyOnMyScreen", ConfigDefaults::CURSOR_TRAIL_ONLY_ON_MY_SCREEN);
+    cfg.onlyOnObs = GetOr(tbl, "onlyOnObs", ConfigDefaults::CURSOR_TRAIL_ONLY_ON_OBS);
+    cfg.lifetimeMs = std::clamp(GetOr(tbl, "lifetimeMs", ConfigDefaults::CURSOR_TRAIL_LIFETIME_MS), 50, 500);
+    cfg.stampSpacingPx = std::clamp(GetOr(tbl, "stampSpacingPx", ConfigDefaults::CURSOR_TRAIL_STAMP_SPACING_PX), 1, 64);
+    cfg.spriteSizePx = std::clamp(GetOr(tbl, "spriteSizePx", ConfigDefaults::CURSOR_TRAIL_SPRITE_SIZE_PX), 4, 256);
+    cfg.tailSizeScale = std::clamp(GetOr(tbl, "tailSizeScale", ConfigDefaults::CURSOR_TRAIL_TAIL_SIZE_SCALE), 0.0f, 2.0f);
+    cfg.useVelocitySize = GetOr(tbl, "useVelocitySize", ConfigDefaults::CURSOR_TRAIL_USE_VELOCITY_SIZE);
+    cfg.velocitySizeIntensity = std::clamp(GetOr(tbl, "velocitySizeIntensity", ConfigDefaults::CURSOR_TRAIL_VELOCITY_SIZE_INTENSITY), 0.0f, 1.0f);
+    cfg.color = ColorFromTomlArray(GetArray(tbl, "color"),
+                                   Color{ ConfigDefaults::CURSOR_TRAIL_COLOR_R,
+                                          ConfigDefaults::CURSOR_TRAIL_COLOR_G,
+                                          ConfigDefaults::CURSOR_TRAIL_COLOR_B });
+    cfg.useGradient = GetOr(tbl, "useGradient", ConfigDefaults::CURSOR_TRAIL_USE_GRADIENT);
+    cfg.tailColor = ColorFromTomlArray(GetArray(tbl, "tailColor"),
+                                       Color{ ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_R,
+                                              ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_G,
+                                              ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_B });
+    cfg.opacity = std::clamp(GetOr(tbl, "opacity", ConfigDefaults::CURSOR_TRAIL_OPACITY), 0.0f, 1.0f);
+    cfg.blendMode = GetStringOr(tbl, "blendMode", ConfigDefaults::CURSOR_TRAIL_BLEND_MODE);
+    cfg.spritePath = GetStringOr(tbl, "spritePath", ConfigDefaults::CURSOR_TRAIL_SPRITE_PATH);
+}
+
 void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
     out.insert("cloneWidth", cfg.cloneWidth);
     out.insert("overlayWidth", cfg.overlayWidth);
@@ -2145,6 +2187,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("mouseSensitivity", config.mouseSensitivity);
     out.insert("windowsMouseSpeed", config.windowsMouseSpeed);
     out.insert("hideAnimationsInGame", config.hideAnimationsInGame);
+    out.insert("captureFakeCursor", config.captureFakeCursor);
     out.insert("limitCaptureFramerate", config.limitCaptureFramerate);
     out.insert("obsFramerate", config.obsFramerate);
     out.insert("useSystemKeyRepeat", config.useSystemKeyRepeat);
@@ -2306,6 +2349,8 @@ void ConfigToToml(const Config& config, toml::table& out) {
         nb.insert("overlayScale",         o.overlayScale);
         nb.insert("onlyOnMyScreen",       o.onlyOnMyScreen);
         nb.insert("onlyOnObs",            o.onlyOnObs);
+        nb.insert("hideIfStale",          o.hideIfStale);
+        nb.insert("hideIfStaleDelaySeconds", o.hideIfStaleDelaySeconds);
         { toml::array arr; for (auto& m : o.allowedModes) arr.push_back(m); nb.insert("allowedModes", arr); }
         toml::array colArr;
         for (auto& col : o.columns) {
@@ -2323,6 +2368,10 @@ void ConfigToToml(const Config& config, toml::table& out) {
     toml::table cursorsTbl;
     CursorsConfigToToml(config.cursors, cursorsTbl);
     out.insert("cursors", cursorsTbl);
+
+    toml::table cursorTrailTbl;
+    CursorTrailConfigToToml(config.cursorTrail, cursorTrailTbl);
+    out.insert("cursorTrail", cursorTrailTbl);
 
     toml::table keyRebindsTbl;
     KeyRebindsConfigToToml(config.keyRebinds, keyRebindsTbl);
@@ -2414,6 +2463,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.mouseSensitivity = GetOr(tbl, "mouseSensitivity", ConfigDefaults::CONFIG_MOUSE_SENSITIVITY);
     config.windowsMouseSpeed = GetOr(tbl, "windowsMouseSpeed", ConfigDefaults::CONFIG_WINDOWS_MOUSE_SPEED);
     config.hideAnimationsInGame = GetOr(tbl, "hideAnimationsInGame", ConfigDefaults::CONFIG_HIDE_ANIMATIONS_IN_GAME);
+    config.captureFakeCursor = GetOr(tbl, "captureFakeCursor", ConfigDefaults::CONFIG_CAPTURE_FAKE_CURSOR);
     config.limitCaptureFramerate = GetOr(tbl, "limitCaptureFramerate", ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE);
     config.obsFramerate = ClampObsFramerateConfigValue(GetOr(tbl, "obsFramerate", ConfigDefaults::CONFIG_OBS_FRAMERATE));
     config.useSystemKeyRepeat = GetOr(tbl, "useSystemKeyRepeat", ConfigDefaults::CONFIG_USE_SYSTEM_KEY_REPEAT);
@@ -2485,7 +2535,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     // NinjabrainBot overlay config
     if (auto nb = tbl.get_as<toml::table>("ninjabrainOverlay")) {
         auto& c = config.ninjabrainOverlay;
-        c.enabled              = GetOr(*nb, "enabled",              true);
+        c.enabled              = GetOr(*nb, "enabled",              false);
         c.x                    = GetOr(*nb, "x",                    5);
         c.y                    = GetOr(*nb, "y",                    -5);
         c.relativeTo           = GetStringOr(*nb, "relativeTo",     "bottomLeftScreen");
@@ -2631,6 +2681,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.overlayScale         = GetOr(*nb, "overlayScale",         c.overlayScale);
         c.onlyOnMyScreen       = GetOr(*nb, "onlyOnMyScreen",       false);
         c.onlyOnObs            = GetOr(*nb, "onlyOnObs",            false);
+        c.hideIfStale          = GetOr(*nb, "hideIfStale",          false);
+        c.hideIfStaleDelaySeconds = GetOr(*nb, "hideIfStaleDelaySeconds", 10);
         if (c.layoutStyle != "compact" && c.layoutStyle != "classicWindow") { c.layoutStyle = "compact"; }
         if (c.apiBaseUrl.empty()) { c.apiBaseUrl = ConfigDefaults::CONFIG_NINJABRAIN_API_BASE_URL; }
         if (c.titleText.empty()) { c.titleText = "Ninjabrain Bot"; }
@@ -2712,6 +2764,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.blindOffsetX = std::clamp(c.blindOffsetX, 0.0f, 1000.0f);
         c.blindOffsetY = std::clamp(c.blindOffsetY, 0.0f, 1000.0f);
         c.blindDrawOrder = std::clamp(c.blindDrawOrder, 0, 32);
+        c.hideIfStaleDelaySeconds = std::clamp(c.hideIfStaleDelaySeconds, 1, 3600);
         if (auto* arr = nb->get_as<toml::array>("allowedModes")) {
             c.allowedModes.clear();
             for (auto& el : *arr) { if (auto* s = el.as_string()) c.allowedModes.push_back(s->get()); }
@@ -2749,6 +2802,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     }
 
     if (auto t = GetTable(tbl, "cursors")) { CursorsConfigFromToml(*t, config.cursors); }
+
+    if (auto t = GetTable(tbl, "cursorTrail")) { CursorTrailConfigFromToml(*t, config.cursorTrail); }
 
     if (auto t = GetTable(tbl, "keyRebinds")) { KeyRebindsConfigFromToml(*t, config.keyRebinds); }
 
@@ -2855,6 +2910,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
             wo.crop_right *= 2;
         }
     }
+
+    SanitizeConfigKeyRebindsForCannotTypeTriggers(config);
 }
 
 namespace {
@@ -2874,6 +2931,7 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "mouseSensitivity",
         "windowsMouseSpeed",
         "hideAnimationsInGame",
+        "captureFakeCursor",
         "limitCaptureFramerate",
         "obsFramerate",
         "useSystemKeyRepeat",
@@ -2894,6 +2952,7 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "eyezoom",
         "ninjabrainOverlay",
         "cursors",
+        "cursorTrail",
         "keyRebinds",
         "appearance",
         "mode",
@@ -3307,7 +3366,9 @@ bool ParseTomlTableFromString(const std::string& source, toml::table& tbl, std::
 
 bool WriteConfigTomlDocument(std::ostream& out, const Config& config) {
     toml::table tbl;
-    ConfigToToml(config, tbl);
+    Config sanitizedConfig = config;
+    SanitizeConfigKeyRebindsForCannotTypeTriggers(sanitizedConfig);
+    ConfigToToml(sanitizedConfig, tbl);
 
     const auto& orderedKeys = GetConfigTomlOrderedKeys();
     static const std::vector<std::string> emptyOrder;

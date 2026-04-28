@@ -61,21 +61,48 @@ bool SyncPreemptiveModeFromEyeZoom(Config& config) {
     return changed;
 }
 
+int ResolveModeDisplayWidth(const ModeConfig& mode, int screenW, int screenH) {
+    if (screenW < 1) screenW = 1;
+    if (screenH < 1) screenH = 1;
+
+    int width = mode.width;
+    const bool relativeAllowed = mode.id != "Preemptive";
+    const bool widthIsRelative = relativeAllowed && mode.useRelativeSize && mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f;
+    if (widthIsRelative) {
+        width = static_cast<int>(std::lround(mode.relativeWidth * static_cast<float>(screenW)));
+        if (width < 1) width = 1;
+    }
+
+    if (mode.id == "Thin" && width < 330) {
+        width = 330;
+    }
+
+    return width;
+}
+
+int ResolveModeDisplayHeight(const ModeConfig& mode, int screenW, int screenH) {
+    if (screenW < 1) screenW = 1;
+    if (screenH < 1) screenH = 1;
+
+    int height = mode.height;
+    const bool relativeAllowed = mode.id != "Preemptive";
+    const bool heightIsRelative = relativeAllowed && mode.useRelativeSize && mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
+    if (heightIsRelative) {
+        height = static_cast<int>(std::lround(mode.relativeHeight * static_cast<float>(screenH)));
+        if (height < 1) height = 1;
+    }
+
+    return height;
+}
+
 void RecalculateModeDimensions(Config& config, int screenW, int screenH) {
     if (screenW < 1) screenW = 1;
     if (screenH < 1) screenH = 1;
 
     for (auto& mode : config.modes) {
         if (mode.id == "Fullscreen") {
-            // Fullscreen is always defined by the live game-window client size.
-            // Keep width/height in sync so all consumers see the latest dimensions,
-            // not just the stretch rect.
-            mode.width = screenW;
-            mode.height = screenH;
-
-            mode.useRelativeSize = true;
-            mode.relativeWidth = 1.0f;
-            mode.relativeHeight = 1.0f;
+            // Fullscreen keeps a user-configured internal render size while the
+            // live client area controls only the stretch rect.
 
             mode.stretch.enabled = true;
             mode.stretch.x = 0;
@@ -92,9 +119,10 @@ void RecalculateModeDimensions(Config& config, int screenW, int screenH) {
             mode.heightExpr.clear();
         }
 
+        const bool relativeAllowed = mode.id != "Preemptive";
         const bool expressionAllowed = mode.id != "Fullscreen" && mode.id != "Preemptive";
-        const bool widthIsRelative = expressionAllowed && mode.useRelativeSize && mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f;
-        const bool heightIsRelative = expressionAllowed && mode.useRelativeSize && mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
+        const bool widthIsRelative = relativeAllowed && mode.useRelativeSize && mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f;
+        const bool heightIsRelative = relativeAllowed && mode.useRelativeSize && mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
         const bool widthUsesExpression = expressionAllowed && !widthIsRelative && !mode.widthExpr.empty();
         const bool heightUsesExpression = expressionAllowed && !heightIsRelative && !mode.heightExpr.empty();
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -105,6 +106,8 @@ struct NinjabrainData {
     std::string boatState = "NONE";
     double boatAngle = 0.0;
     bool hasBoatAngle = false;
+
+    std::chrono::steady_clock::time_point lastUpdateTime{};
 };
 
 inline double GetNinjabrainPredictionDisplayDistance(

@@ -59,5 +59,14 @@ std::vector<std::string> GetAvailableCursorNames();
 }
 
 void RenderFakeCursor(HWND hwnd, int windowWidth, int windowHeight);
+void RenderFakeCursorToCurrentTarget(HWND hwnd,
+                                     int fullWidth,
+                                     int fullHeight,
+                                     int targetX,
+                                     int targetY,
+                                     int targetWidth,
+                                     int targetHeight,
+                                     int sourceWidth,
+                                     int sourceHeight);
 
 

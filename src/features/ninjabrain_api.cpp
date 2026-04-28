@@ -17,8 +17,8 @@ using json = nlohmann::json;
 using namespace std::chrono_literals;
 using SteadyClock = std::chrono::steady_clock;
 
-constexpr auto kNinjabrainReconnectIntervalMs = 3000;
-constexpr auto kNinjabrainConnectionTimeout = 3s;
+constexpr auto kNinjabrainReconnectIntervalMs = 200;
+constexpr auto kNinjabrainConnectionTimeout = 200ms;
 constexpr char kStrongholdEventsPath[] = "/api/v1/stronghold/events";
 constexpr char kInformationMessagesEventsPath[] = "/api/v1/information-messages/events";
 constexpr char kBoatEventsPath[] = "/api/v1/boat/events";
@@ -48,6 +48,12 @@ void LogNinjabrainApiMessage(const std::string& message) {
 
 long long DurationToMilliseconds(SteadyClock::duration duration) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+}
+
+std::pair<time_t, time_t> SplitDurationForHttplibTimeout(std::chrono::milliseconds duration) {
+    const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(duration);
+    const auto remainder = std::chrono::duration_cast<std::chrono::microseconds>(duration - seconds);
+    return { static_cast<time_t>(seconds.count()), static_cast<time_t>(remainder.count()) };
 }
 
 template <typename Callback, typename... Args>
@@ -471,9 +477,9 @@ void NinjabrainApiSession::RunStream(
     const std::function<void(const std::string&)>& onDisconnect) const {
     httplib::Client client(apiBaseUrl_);
     client.set_keep_alive(true);
-    client.set_connection_timeout(
-        static_cast<time_t>(std::chrono::duration_cast<std::chrono::seconds>(kNinjabrainConnectionTimeout).count()),
-        0);
+    const auto [connectionTimeoutSeconds, connectionTimeoutMicros] =
+        SplitDurationForHttplibTimeout(std::chrono::duration_cast<std::chrono::milliseconds>(kNinjabrainConnectionTimeout));
+    client.set_connection_timeout(connectionTimeoutSeconds, connectionTimeoutMicros);
 
     const httplib::Headers headers = {
         { "Accept", "text/event-stream" },

@@ -369,6 +369,27 @@ void ResetProfileTestState(std::string_view caseName) {
     ExpectConfigLoadSucceeded(std::string(caseName) + " initial load");
 }
 
+class ScopedLatestGameViewportSizeOverride {
+  public:
+    ScopedLatestGameViewportSizeOverride(int width, int height) {
+        m_hadOriginal = GetLatestGameViewportSize(m_originalWidth, m_originalHeight);
+        SetLatestGameViewportSizeForTests(width, height);
+    }
+
+    ~ScopedLatestGameViewportSizeOverride() {
+        if (m_hadOriginal) {
+            SetLatestGameViewportSizeForTests(m_originalWidth, m_originalHeight);
+        } else {
+            SetLatestGameViewportSizeForTests(0, 0);
+        }
+    }
+
+  private:
+    int m_originalWidth = 0;
+    int m_originalHeight = 0;
+    bool m_hadOriginal = false;
+};
+
 std::filesystem::path GetProfilesDirectoryForTests() {
     return std::filesystem::path(g_toolscreenPath) / "profiles";
 }
@@ -440,6 +461,121 @@ void ExpectProfilesMetadataMatchesDisk(const std::vector<std::string>& expectedP
 
     Expect(foundActiveProfile, context + " should keep the active profile present in tracked metadata.");
 }
+
+Config MakeSingleModeProfileSnapshot(const std::string& modeId, int width, int height, const std::string& defaultMode = std::string()) {
+    Config snapshot;
+    Expect(LoadEmbeddedDefaultConfig(snapshot), "LoadEmbeddedDefaultConfig should succeed for single-mode profile fixtures.");
+
+    snapshot.configVersion = GetConfigVersion();
+    snapshot.modes.clear();
+
+    ModeConfig mode;
+    mode.id = modeId;
+    mode.width = width;
+    mode.height = height;
+    mode.manualWidth = width;
+    mode.manualHeight = height;
+    snapshot.modes.push_back(mode);
+
+    snapshot.defaultMode = defaultMode.empty() ? modeId : defaultMode;
+    return snapshot;
+}
+
+void PublishCurrentModeForTests(const std::string& modeId) {
+    std::lock_guard<std::mutex> lock(g_modeIdMutex);
+    g_currentModeId = modeId;
+    const int nextIndex = 1 - g_currentModeIdIndex.load(std::memory_order_relaxed);
+    g_modeIdBuffers[nextIndex] = modeId;
+    g_currentModeIdIndex.store(nextIndex, std::memory_order_release);
+}
+
+void ExpectPublishedViewportMatchesMode(const std::string& expectedModeId, const std::string& context) {
+    auto cfgSnap = GetConfigSnapshot();
+    Expect(cfgSnap != nullptr, context + " should have a published config snapshot.");
+
+    const ModeConfig* expectedMode = GetModeFromSnapshot(*cfgSnap, expectedModeId);
+    Expect(expectedMode != nullptr, context + " should resolve the expected mode in the published snapshot.");
+
+    const ModeViewportInfo viewport = GetCurrentModeViewport_Internal();
+    Expect(viewport.valid, context + " should expose a valid current viewport.");
+    Expect(viewport.width == expectedMode->width, context + " should expose the expected viewport width.");
+    Expect(viewport.height == expectedMode->height, context + " should expose the expected viewport height.");
+
+    UpdateCachedViewportMode();
+    const CachedModeViewport& cachedViewport = g_viewportModeCache[g_viewportModeCacheIndex.load(std::memory_order_acquire)];
+    Expect(cachedViewport.valid, context + " should keep the cached viewport valid.");
+    Expect(cachedViewport.width == expectedMode->width, context + " should cache the expected viewport width.");
+    Expect(cachedViewport.height == expectedMode->height, context + " should cache the expected viewport height.");
+}
+
+    void RunSettingsMouseTranslationPrefersLiveViewportTest(TestRunMode runMode = TestRunMode::Automated) {
+        (void)runMode;
+
+        DummyWindow window(kWindowWidth, kWindowHeight, false);
+        const std::filesystem::path root = PrepareCaseDirectory("settings_mouse_translation_prefers_live_viewport");
+        ResetGlobalTestState(root);
+
+        RECT clientRect{};
+        Expect(GetClientRect(window.hwnd(), &clientRect) != FALSE,
+            "Expected mouse translation regression test window to expose a client rect.");
+        const int clientWidth = clientRect.right - clientRect.left;
+        const int clientHeight = clientRect.bottom - clientRect.top;
+        Expect(clientWidth > 0 && clientHeight > 0,
+            "Expected mouse translation regression test window to expose a positive client size.");
+
+        g_config = MakeSingleModeProfileSnapshot("MouseTranslate", 800, 600);
+        g_configLoaded.store(true, std::memory_order_release);
+        PublishConfigSnapshot();
+        PublishCurrentModeForTests("MouseTranslate");
+
+        UpdateCachedWindowMetricsFromSize(clientWidth + 240, clientHeight + 180);
+        Expect(GetCachedWindowWidth() == clientWidth + 240,
+            "Expected the mouse translation regression test to stage a stale cached client width.");
+        Expect(GetCachedWindowHeight() == clientHeight + 180,
+            "Expected the mouse translation regression test to stage a stale cached client height.");
+
+        {
+            ScopedCursorVisibilityOverride cursorVisible(true);
+            ScopedLatestGameViewportSizeOverride liveViewport(640, 480);
+
+            g_showGui.store(false, std::memory_order_release);
+
+            LPARAM translatedLParam = MAKELPARAM(clientWidth / 2, clientHeight / 2);
+            const InputHandlerResult result = HandleMouseCoordinateTranslationPhase(window.hwnd(), WM_MOUSEMOVE, 0, translatedLParam);
+            const int translatedX = static_cast<int>(static_cast<short>(LOWORD(translatedLParam)));
+            const int translatedY = static_cast<int>(static_cast<short>(HIWORD(translatedLParam)));
+
+            Expect(!result.consumed,
+                "Expected mouse coordinate translation to adjust WM_MOUSEMOVE in-place without consuming the message.");
+            Expect(translatedX == 320,
+                "Expected mouse coordinate translation to use the live game viewport width instead of a stale cached mode width.");
+            Expect(translatedY == 240,
+                "Expected mouse coordinate translation to use the live game viewport height instead of a stale cached mode height.");
+
+            ScopedLatestGameViewportSizeOverride staleGuiViewport(1024, 768);
+
+            g_showGui.store(true, std::memory_order_release);
+            CloseSettingsGuiWindow();
+
+            int viewportAfterCloseW = 0;
+            int viewportAfterCloseH = 0;
+            Expect(!GetLatestGameViewportSize(viewportAfterCloseW, viewportAfterCloseH),
+                "Expected closing the settings GUI to invalidate any GUI-era latest game viewport size.");
+
+            LPARAM translatedAfterClose = MAKELPARAM(clientWidth / 2, clientHeight / 2);
+            const InputHandlerResult resultAfterClose =
+                HandleMouseCoordinateTranslationPhase(window.hwnd(), WM_MOUSEMOVE, 0, translatedAfterClose);
+            const int translatedAfterCloseX = static_cast<int>(static_cast<short>(LOWORD(translatedAfterClose)));
+            const int translatedAfterCloseY = static_cast<int>(static_cast<short>(HIWORD(translatedAfterClose)));
+
+            Expect(!resultAfterClose.consumed,
+                "Expected post-close mouse translation to keep adjusting WM_MOUSEMOVE in-place without consuming the message.");
+            Expect(translatedAfterCloseX == 400,
+                "Expected post-close mouse translation to fall back to the mode width instead of a stale GUI-era viewport width.");
+            Expect(translatedAfterCloseY == 300,
+                "Expected post-close mouse translation to fall back to the mode height instead of a stale GUI-era viewport height.");
+        }
+    }
 
 void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Automated) {
     (void)runMode;
@@ -950,6 +1086,166 @@ void RunProfileAsyncSaveSkipDeletedProfileTest(TestRunMode runMode = TestRunMode
     Expect(LoadProfilesConfig(), "Profiles metadata should remain loadable after async save/delete interplay.");
     Expect(g_profilesConfig.profiles.size() == 1, "Only the surviving profile should remain in metadata after delete.");
     Expect(g_profilesConfig.profiles[0].name == "Other", "The remaining profile should be the fallback profile.");
+}
+
+void RunProfileSwitchNinjabrainAsyncStopTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+    ResetProfileTestState("profile_switch_ninjabrain_async_stop");
+
+    Expect(CreateNewProfile("EnabledAsyncStop"), "CreateNewProfile should create the async-stop profile.");
+    Expect(CreateNewProfile("DisabledAsyncStop"), "CreateNewProfile should create the disabled async-stop profile.");
+
+    Config disabledSnapshot = g_config;
+    disabledSnapshot.ninjabrainOverlay.enabled = false;
+    disabledSnapshot.ninjabrainOverlay.apiBaseUrl = "http://127.0.0.1:52533";
+
+    Config enabledSnapshot = disabledSnapshot;
+    enabledSnapshot.ninjabrainOverlay.enabled = true;
+    enabledSnapshot.ninjabrainOverlay.apiBaseUrl = "http://127.0.0.1:60000";
+
+    Expect(SaveProfileSnapshot("EnabledAsyncStop", enabledSnapshot),
+           "Saving the enabled Ninjabrain profile snapshot should succeed.");
+    Expect(SaveProfileSnapshot("DisabledAsyncStop", disabledSnapshot),
+           "Saving the disabled Ninjabrain profile snapshot should succeed.");
+
+    g_config = enabledSnapshot;
+    g_profilesConfig.activeProfile = "EnabledAsyncStop";
+    PublishGuiConfigSnapshot();
+    PublishCurrentModeForTests(g_config.defaultMode);
+
+    StartNinjabrainClient();
+    const NinjabrainApiStatus beforeStatus = GetNinjabrainClientStatus();
+    Expect(beforeStatus.connectionState != NinjabrainApiConnectionState::Stopped,
+           "The enabled profile should start the Ninjabrain client before switching away.");
+    Expect(beforeStatus.apiBaseUrl == "http://127.0.0.1:60000",
+           "The enabled profile should configure the expected Ninjabrain API URL before switching away.");
+
+    SwitchProfile("DisabledAsyncStop");
+
+    const NinjabrainApiStatus afterStatus = GetNinjabrainClientStatus();
+    Expect(!g_config.ninjabrainOverlay.enabled,
+           "Switching to the disabled profile should disable the Ninjabrain overlay.");
+    Expect(afterStatus.connectionState == NinjabrainApiConnectionState::Stopped,
+           "Switching to the disabled profile should stop the Ninjabrain client immediately.");
+}
+
+void RunProfileSwitchNinjabrainAsyncRestartTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+    ResetProfileTestState("profile_switch_ninjabrain_async_restart");
+
+    Expect(CreateNewProfile("AsyncUrlA"), "CreateNewProfile should create the first Ninjabrain URL profile.");
+    Expect(CreateNewProfile("AsyncUrlB"), "CreateNewProfile should create the second Ninjabrain URL profile.");
+
+    Config baseSnapshot = g_config;
+    baseSnapshot.ninjabrainOverlay.enabled = true;
+
+    Config firstUrlSnapshot = baseSnapshot;
+    firstUrlSnapshot.ninjabrainOverlay.apiBaseUrl = "http://127.0.0.1:60000";
+
+    Config secondUrlSnapshot = baseSnapshot;
+    secondUrlSnapshot.ninjabrainOverlay.apiBaseUrl = "http://127.0.0.1:60001";
+
+    Expect(SaveProfileSnapshot("AsyncUrlA", firstUrlSnapshot),
+           "Saving the first enabled Ninjabrain URL profile snapshot should succeed.");
+    Expect(SaveProfileSnapshot("AsyncUrlB", secondUrlSnapshot),
+           "Saving the second enabled Ninjabrain URL profile snapshot should succeed.");
+
+    g_config = firstUrlSnapshot;
+    g_profilesConfig.activeProfile = "AsyncUrlA";
+    PublishGuiConfigSnapshot();
+    PublishCurrentModeForTests(g_config.defaultMode);
+
+    StartNinjabrainClient();
+    const NinjabrainApiStatus beforeStatus = GetNinjabrainClientStatus();
+    Expect(beforeStatus.connectionState != NinjabrainApiConnectionState::Stopped,
+           "The first enabled profile should start the Ninjabrain client before the restart switch.");
+    Expect(beforeStatus.apiBaseUrl == "http://127.0.0.1:60000",
+           "The first enabled profile should configure the initial Ninjabrain API URL.");
+
+    SwitchProfile("AsyncUrlB");
+
+    const NinjabrainApiStatus afterStatus = GetNinjabrainClientStatus();
+    Expect(g_config.ninjabrainOverlay.enabled,
+           "Switching between enabled profiles should keep the Ninjabrain overlay enabled.");
+    Expect(g_config.ninjabrainOverlay.apiBaseUrl == "http://127.0.0.1:60001",
+           "Switching between enabled profiles should apply the destination Ninjabrain API URL.");
+    Expect(afterStatus.connectionState != NinjabrainApiConnectionState::Stopped,
+           "Switching between enabled profiles should leave the Ninjabrain client running.");
+    Expect(afterStatus.apiBaseUrl == "http://127.0.0.1:60001",
+           "Switching between enabled profiles should restart the client with the destination API URL.");
+
+    g_config.ninjabrainOverlay.enabled = false;
+    PublishGuiConfigSnapshot();
+    StopNinjabrainClientAsync();
+    std::this_thread::sleep_for(std::chrono::milliseconds(6500));
+    StopNinjabrainClient();
+}
+
+void RunProfileSwitchInvalidDefaultModeFallbackTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+    ResetProfileTestState("profile_switch_invalid_default_mode_fallback");
+
+    Expect(CreateNewProfile("ProfileA"), "CreateNewProfile should create the custom profile.");
+
+    const Config defaultSnapshot = MakeSingleModeProfileSnapshot("Fullscreen", 1600, 900);
+    Config invalidProfileSnapshot = MakeSingleModeProfileSnapshot("ProfileAOnly", 1111, 777, "MissingMode");
+
+    Expect(SaveProfileSnapshot(kDefaultProfileName, defaultSnapshot), "Saving the default single-mode profile snapshot should succeed.");
+    Expect(SaveProfileSnapshot("ProfileA", invalidProfileSnapshot), "Saving the invalid-default profile snapshot should succeed.");
+
+    SwitchProfile("ProfileA");
+    Expect(g_config.defaultMode == "MissingMode",
+           "SwitchProfile should preserve the profile snapshot even when its stored default mode is missing.");
+    Expect(GetPublishedCurrentModeId() == "MissingMode",
+           "SwitchProfile should keep publishing the profile's stored mode ID even when readers need a fallback.");
+    ExpectPublishedViewportMatchesMode("ProfileAOnly", "profile-switch-invalid-default-mode-fallback initial switch");
+
+    SwitchProfile(kDefaultProfileName);
+    Expect(g_config.defaultMode == "Fullscreen", "Switching back to Default should restore the Default profile mode.");
+    ExpectPublishedViewportMatchesMode("Fullscreen", "profile-switch-invalid-default-mode-fallback default switch");
+
+    SwitchProfile("ProfileA");
+    Expect(g_config.defaultMode == "MissingMode",
+           "Switching back to the invalid-default profile should still preserve its stored default mode.");
+    Expect(GetPublishedCurrentModeId() == "MissingMode",
+           "Switching back to the invalid-default profile should keep publishing the stored stale mode ID.");
+    ExpectPublishedViewportMatchesMode("ProfileAOnly", "profile-switch-invalid-default-mode-fallback repeat switch");
+}
+
+void RunProfileSwitchReaderModeFallbackTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+    ResetProfileTestState("profile_switch_reader_mode_fallback");
+
+    Expect(CreateNewProfile("ProfileA"), "CreateNewProfile should create the custom profile.");
+
+    const Config defaultSnapshot = MakeSingleModeProfileSnapshot("Fullscreen", 1600, 900);
+    const Config profileASnapshot = MakeSingleModeProfileSnapshot("ProfileAOnly", 1111, 777);
+
+    Expect(SaveProfileSnapshot(kDefaultProfileName, defaultSnapshot), "Saving the default single-mode profile snapshot should succeed.");
+    Expect(SaveProfileSnapshot("ProfileA", profileASnapshot), "Saving the custom single-mode profile snapshot should succeed.");
+
+    SwitchProfile("ProfileA");
+    SwitchProfile(kDefaultProfileName);
+    SwitchProfile("ProfileA");
+
+    Expect(g_config.defaultMode == "ProfileAOnly", "Switching back to ProfileA should restore its default mode.");
+    Expect(GetPublishedCurrentModeId() == "ProfileAOnly", "Switching back to ProfileA should publish its default mode.");
+    ExpectPublishedViewportMatchesMode("ProfileAOnly", "profile-switch-reader-mode-fallback steady state");
+
+    PublishCurrentModeForTests("Fullscreen");
+
+    auto cfgSnap = GetConfigSnapshot();
+    Expect(cfgSnap != nullptr, "profile-switch-reader-mode-fallback should have a published config snapshot after switching.");
+    std::string resolvedModeId;
+    const ModeConfig* resolvedMode = GetModeFromSnapshotOrFallback(*cfgSnap, "Fullscreen", &resolvedModeId);
+    Expect(resolvedMode != nullptr, "Reader mode fallback should resolve a mode from the active profile snapshot.");
+    Expect(resolvedModeId == "ProfileAOnly",
+           "Reader mode fallback should resolve the active profile's default mode when the published mode ID is stale.");
+
+    ExpectPublishedViewportMatchesMode("ProfileAOnly", "profile-switch-reader-mode-fallback stale mode publish");
+
+    PublishCurrentModeForTests("ProfileAOnly");
+    Expect(GetPublishedCurrentModeId() == "ProfileAOnly", "The test should restore the published mode ID after the fallback assertion.");
 }
 
 void RunProfileSwitchConcurrentReadersTest(TestRunMode runMode = TestRunMode::Automated) {

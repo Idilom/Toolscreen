@@ -24,6 +24,20 @@ struct ActiveProfileSaveState {
     ProfileSectionSelection sections;
 };
 
+static Config BuildRuntimeResolvedConfig(const Config& source) {
+    Config resolved = source;
+
+    const int screenWidth = GetCachedWindowWidth();
+    const int screenHeight = GetCachedWindowHeight();
+    if (screenWidth > 0 && screenHeight > 0) {
+        RecalculateModeDimensions(resolved, screenWidth, screenHeight);
+    }
+
+    SanitizeConfigKeyRebindsForCannotTypeTriggers(resolved);
+
+    return resolved;
+}
+
 static ActiveProfileSaveState GetActiveProfileSaveState() {
     ActiveProfileSaveState state;
     state.name = g_profilesConfig.activeProfile;
@@ -40,14 +54,14 @@ static ActiveProfileSaveState GetActiveProfileSaveState() {
     return state;
 }
 
-static void SyncSharedConfigFromMergedConfig(const ActiveProfileSaveState& state) {
+static void SyncSharedConfigFromMergedConfig(const ActiveProfileSaveState& state, const Config& mergedConfig) {
     if (!state.tracked) {
-        g_sharedConfig = g_config;
+        g_sharedConfig = mergedConfig;
         g_sharedConfig.configVersion = GetConfigVersion();
         return;
     }
 
-    Config updatedShared = g_config;
+    Config updatedShared = mergedConfig;
     ApplyProfileFields(g_sharedConfig, updatedShared, state.sections);
     updatedShared.configVersion = GetConfigVersion();
     g_sharedConfig = std::move(updatedShared);
@@ -55,8 +69,9 @@ static void SyncSharedConfigFromMergedConfig(const ActiveProfileSaveState& state
 
 static ActiveProfileSaveState PrepareConfigPersistence(Config& sharedSnapshot, Config& profileSnapshot) {
     const ActiveProfileSaveState state = GetActiveProfileSaveState();
+    const Config runtimeResolvedConfig = BuildRuntimeResolvedConfig(g_config);
 
-    SyncSharedConfigFromMergedConfig(state);
+    SyncSharedConfigFromMergedConfig(state, runtimeResolvedConfig);
     sharedSnapshot = g_sharedConfig;
 
     if (!state.tracked) {
@@ -65,15 +80,16 @@ static ActiveProfileSaveState PrepareConfigPersistence(Config& sharedSnapshot, C
     }
 
     profileSnapshot = Config{};
-    ApplyProfileFields(g_config, profileSnapshot, state.sections);
+    ApplyProfileFields(runtimeResolvedConfig, profileSnapshot, state.sections);
     profileSnapshot.configVersion = GetConfigVersion();
     return state;
 }
 
 void PublishGuiConfigSnapshot() {
     const ActiveProfileSaveState state = GetActiveProfileSaveState();
-    SyncSharedConfigFromMergedConfig(state);
-    PublishConfigSnapshot();
+    const Config runtimeResolvedConfig = BuildRuntimeResolvedConfig(g_config);
+    SyncSharedConfigFromMergedConfig(state, runtimeResolvedConfig);
+    PublishConfigSnapshot(runtimeResolvedConfig);
 }
 
 bool WaitForConfigSaveIdle(int timeoutMs) {
@@ -289,7 +305,7 @@ void SaveConfig() {
         const std::string activeProfileName = activeProfileState.name;
         const bool activeProfileTracked = activeProfileState.tracked;
 
-        PublishConfigSnapshot();
+        PublishGuiConfigSnapshot();
 
         g_configIsDirty = false;
         s_lastSaveTime = currentTime;
@@ -349,7 +365,7 @@ void SaveConfigImmediate() {
         Config profileSnapshot;
         const ActiveProfileSaveState activeProfileState = PrepareConfigPersistence(sharedSnapshot, profileSnapshot);
 
-        PublishConfigSnapshot();
+        PublishGuiConfigSnapshot();
 
         if (!SaveConfigToTomlFile(sharedSnapshot, configPath)) {
             Log("ERROR: Failed to write config file.");

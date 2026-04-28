@@ -5,7 +5,7 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 jobs:
   build-liblogger-windows:
@@ -333,13 +333,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p bundle/windows bundle/linux bundle/macos
+          mkdir -p release/windows release/linux release/macos release/bundle
 
-          find collected/windows -maxdepth 1 -type f \( -name '*.dll' -o -name '*.pdb' \) -exec cp {} bundle/windows/ \;
-          find collected/linux -maxdepth 1 -type f -name '*.so' -exec cp {} bundle/linux/ \;
-          find collected/macos -maxdepth 1 -type f -name '*.dylib' -exec cp {} bundle/macos/ \;
+          find collected/windows -maxdepth 1 -type f \( -name '*.dll' -o -name '*.pdb' \) -exec cp {} release/windows/ \;
+          find collected/linux -maxdepth 1 -type f -name '*.so' -exec cp {} release/linux/ \;
+          find collected/macos -maxdepth 1 -type f -name '*.dylib' -exec cp {} release/macos/ \;
 
-          zip -r liblogger-all-platforms.zip bundle
+          (
+            cd release
+            zip -r bundle/liblogger-all-platforms.zip windows linux macos
+          )
+
+      - name: Log liblogger artifact SHA-512 hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest='release/SHA512SUMS.txt'
+          : > "$manifest"
+
+          while IFS= read -r -d '' file; do
+            rel_path="${file#release/}"
+            hash="$(sha512sum "$file" | cut -d' ' -f1)"
+            printf 'SHA512 %s  %s\n' "$hash" "$rel_path"
+            printf '%s  %s\n' "$hash" "$rel_path" >> "$manifest"
+          done < <(find release -type f ! -name 'SHA512SUMS.txt' -print0 | sort -z)
 
       - name: Upload combined liblogger zip artifact
         uses: actions/upload-artifact@v4
@@ -347,112 +364,18 @@ jobs:
           name: liblogger-all-platforms
           if-no-files-found: error
           retention-days: 14
-          path: liblogger-all-platforms.zip
+          path: release/bundle/liblogger-all-platforms.zip
 
-  publish-liblogger-release:
-    runs-on: ubuntu-latest
-    needs:
-      - build-liblogger-windows
-      - build-liblogger-linux
-      - build-liblogger-macos
-      - package-liblogger-binaries
-
-    steps:
-      - name: Download signed Windows liblogger artifacts
-        uses: actions/download-artifact@v4
+      - name: Upload collected liblogger artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: liblogger-windows-x64
-          path: publish/windows
-
-      - name: Download x86 Windows liblogger artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: liblogger-windows-x86
-          path: publish/windows
-
-      - name: Download ARM64 Windows liblogger artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: liblogger-windows-arm64
-          path: publish/windows
-
-      - name: Download Linux liblogger artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: liblogger-linux-x64
-          path: publish/linux
-
-      - name: Download x86 Linux liblogger artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: liblogger-linux-x86
-          path: publish/linux
-
-      - name: Download ARM64 Linux liblogger artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: liblogger-linux-arm64
-          path: publish/linux
-
-      - name: Download ARM32 Linux liblogger artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: liblogger-linux-arm32
-          path: publish/linux
-
-      - name: Download macOS liblogger artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: liblogger-macos
-          path: publish/macos
-
-      - name: Download combined liblogger zip artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: liblogger-all-platforms
-          path: publish/bundle
-
-      - name: Publish liblogger release assets
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          repo="${GITHUB_REPOSITORY}"
-          tag="liblogger-signed-latest"
-          title="Latest signed liblogger"
-
-          cat > notes.md <<EOF
-          Latest reusable signed liblogger artifacts for Toolscreen builds.
-
-          Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          Commit: ${GITHUB_SHA}
-          EOF
-
-          if gh release view "$tag" -R "$repo" >/dev/null 2>&1; then
-            gh release edit "$tag" -R "$repo" --title "$title" --notes-file notes.md --prerelease
-          else
-            gh release create "$tag" -R "$repo" --title "$title" --notes-file notes.md --prerelease
-          fi
-
-          assets=(
-            publish/windows/liblogger_x64.dll
-            publish/windows/liblogger_x64.pdb
-            publish/windows/liblogger_x86.dll
-            publish/windows/liblogger_x86.pdb
-            publish/windows/liblogger_arm64.dll
-            publish/windows/liblogger_arm64.pdb
-            publish/bundle/liblogger-all-platforms.zip
-          )
-
-          for asset in publish/linux/*.so; do
-            assets+=("$asset")
-          done
-
-          for asset in publish/macos/*.dylib; do
-            assets+=("$asset")
-          done
-
-          gh release upload "$tag" -R "$repo" "${assets[@]}" --clobber
+          name: liblogger-release-artifacts
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            release/windows/*.dll
+            release/windows/*.pdb
+            release/linux/*.so
+            release/macos/*.dylib
+            release/bundle/liblogger-all-platforms.zip
+            release/SHA512SUMS.txt

@@ -16,6 +16,9 @@ class ScopedKeyboardStateOverride {
             memset(m_originalState, 0, sizeof(m_originalState));
         }
         memcpy(m_state, m_originalState, sizeof(m_state));
+        for (BYTE& keyState : m_state) {
+            keyState &= static_cast<BYTE>(~0x80);
+        }
     }
 
     ~ScopedKeyboardStateOverride() {
@@ -578,6 +581,43 @@ void RunKeyRebindRuntimeFullForwardingTest(TestRunMode runMode = TestRunMode::Au
     Expect(keyUpResult.result == kCapturedWndProcResult, "Expected full rebind WM_KEYUP to forward through the original WNDPROC.");
     Expect(capture.messages.size() == 1, "Expected full rebind WM_KEYUP to forward exactly one key message.");
     ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Full rebind WM_KEYUP");
+
+    capture.Clear();
+    const LPARAM systemKeyDownLParam = BuildTestKeyboardMessageLParam('A', true, true);
+    const InputHandlerResult systemKeyDownResult = HandleKeyRebinding(window.hwnd(), WM_SYSKEYDOWN, 'A', systemKeyDownLParam);
+    Expect(systemKeyDownResult.consumed, "Expected full rebind WM_SYSKEYDOWN to be consumed.");
+    Expect(systemKeyDownResult.result == kCapturedWndProcResult,
+           "Expected full rebind WM_SYSKEYDOWN to forward through the original WNDPROC.");
+    Expect(capture.messages.size() == 1, "Expected full rebind WM_SYSKEYDOWN to forward exactly one key message.");
+    ExpectCapturedMessage(capture, 0, WM_SYSKEYDOWN, 'B', "Full rebind WM_SYSKEYDOWN");
+
+    capture.Clear();
+    const InputHandlerResult systemCharResult = HandleCharRebinding(window.hwnd(), WM_SYSCHAR, static_cast<WPARAM>('a'), systemKeyDownLParam);
+    Expect(systemCharResult.consumed, "Expected full rebind WM_SYSCHAR to be consumed.");
+    Expect(systemCharResult.result == kCapturedWndProcResult,
+           "Expected full rebind WM_SYSCHAR to forward through the original WNDPROC.");
+    Expect(capture.messages.size() == 1, "Expected full rebind WM_SYSCHAR to forward exactly one character message.");
+    ExpectCapturedMessage(capture, 0, WM_SYSCHAR, 'b', "Full rebind WM_SYSCHAR");
+
+    capture.Clear();
+    const InputHandlerResult systemKeyUpResult = HandleKeyRebinding(window.hwnd(), WM_SYSKEYUP, 'A', BuildTestKeyboardMessageLParam('A', false, true));
+    Expect(systemKeyUpResult.consumed, "Expected full rebind WM_SYSKEYUP to be consumed.");
+    Expect(systemKeyUpResult.result == kCapturedWndProcResult,
+           "Expected full rebind WM_SYSKEYUP to forward through the original WNDPROC.");
+    Expect(capture.messages.size() == 1, "Expected full rebind WM_SYSKEYUP to forward exactly one key message.");
+    ExpectCapturedMessage(capture, 0, WM_SYSKEYUP, 'B', "Full rebind WM_SYSKEYUP");
+}
+
+void RunHotkeyRuntimeSpecificShiftReleaseMatchesExactKeyupTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+
+    const std::filesystem::path root = PrepareCaseDirectory("hotkey_runtime_specific_shift_release_matches_exact_keyup");
+    ResetGlobalTestState(root);
+
+    Expect(CheckHotkeyMatch({ VK_RSHIFT }, VK_RSHIFT, {}, true, 1, VK_SHIFT, true, false),
+           "Expected a right-Shift hold/release hotkey to match an exact right-Shift keyup.");
+    Expect(!CheckHotkeyMatch({ VK_RSHIFT }, VK_LSHIFT, {}, true, 1, VK_SHIFT, true, false),
+           "Expected a right-Shift hold/release hotkey not to match a left-Shift keyup.");
 }
 
 void RunKeyRebindRuntimeSplitVkOutputTest(TestRunMode runMode = TestRunMode::Automated) {
@@ -604,6 +644,19 @@ void RunKeyRebindRuntimeSplitVkOutputTest(TestRunMode runMode = TestRunMode::Aut
     Expect(charResult.consumed, "Expected split rebind WM_CHAR to be consumed.");
     Expect(capture.messages.size() == 1, "Expected split rebind WM_CHAR to forward exactly one character message.");
     ExpectCapturedMessage(capture, 0, WM_CHAR, 'c', "Split rebind typed WM_CHAR");
+
+    capture.Clear();
+    const LPARAM systemSourceLParam = BuildTestKeyboardMessageLParam('A', true, true);
+    const InputHandlerResult systemKeyDownResult = HandleKeyRebinding(window.hwnd(), WM_SYSKEYDOWN, 'A', systemSourceLParam);
+    Expect(systemKeyDownResult.consumed, "Expected split rebind WM_SYSKEYDOWN to be consumed.");
+    Expect(capture.messages.size() == 1, "Expected split rebind WM_SYSKEYDOWN to forward exactly one key message.");
+    ExpectCapturedMessage(capture, 0, WM_SYSKEYDOWN, 'B', "Split rebind trigger WM_SYSKEYDOWN");
+
+    capture.Clear();
+    const InputHandlerResult systemCharResult = HandleCharRebinding(window.hwnd(), WM_SYSCHAR, static_cast<WPARAM>('a'), systemSourceLParam);
+    Expect(systemCharResult.consumed, "Expected split rebind WM_SYSCHAR to be consumed.");
+    Expect(capture.messages.size() == 1, "Expected split rebind WM_SYSCHAR to forward exactly one character message.");
+    ExpectCapturedMessage(capture, 0, WM_SYSCHAR, 'c', "Split rebind typed WM_SYSCHAR");
 }
 
 void RunKeyRebindRuntimeSplitUnicodeOutputTest(TestRunMode runMode = TestRunMode::Automated) {
@@ -624,6 +677,102 @@ void RunKeyRebindRuntimeSplitUnicodeOutputTest(TestRunMode runMode = TestRunMode
     Expect(charResult.consumed, "Expected Unicode split rebind WM_CHAR to be consumed.");
     Expect(capture.messages.size() == 1, "Expected Unicode split rebind to forward exactly one character message.");
     ExpectCapturedMessage(capture, 0, WM_CHAR, 0x00F8, "Split rebind Unicode WM_CHAR");
+}
+
+void RunKeyRebindRuntimeUnicodeOutputIgnoresVkTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    KeyRebind rebind = MakeEnabledRebind('A', 'B');
+    rebind.useCustomOutput = true;
+    rebind.customOutputUnicode = '5';
+    rebind.customOutputVK = VK_LSHIFT;
+    PrepareRebindRuntimeCase("key_rebind_runtime_unicode_output_ignores_vk", { rebind });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ResetSyntheticRebindKeyEventsForTest();
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected the synthetic rebind key event log to start empty for the Unicode-over-VK test.");
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    const LPARAM sourceLParam = BuildTestKeyboardMessageLParam('A', true);
+    const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', sourceLParam);
+    Expect(keyDownResult.consumed, "Expected the Unicode-over-VK rebind to consume WM_KEYDOWN.");
+    Expect(keyDownResult.result == kCapturedWndProcResult,
+           "Expected the Unicode-over-VK rebind to forward the trigger WM_KEYDOWN through the original WNDPROC.");
+    Expect(capture.messages.size() == 1, "Expected the Unicode-over-VK rebind to forward exactly one trigger key-down message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Unicode-over-VK rebind trigger WM_KEYDOWN");
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected Unicode output to ignore the configured VK when handling WM_KEYDOWN.");
+
+    capture.Clear();
+    const InputHandlerResult charResult = HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('a'), sourceLParam);
+    Expect(charResult.consumed, "Expected the Unicode-over-VK rebind WM_CHAR to be consumed.");
+    Expect(capture.messages.size() == 1, "Expected the Unicode-over-VK rebind to forward exactly one character message.");
+    ExpectCapturedMessage(capture, 0, WM_CHAR, '5', "Unicode-over-VK rebind WM_CHAR");
+
+    capture.Clear();
+    const InputHandlerResult keyUpResult = HandleKeyRebinding(window.hwnd(), WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false));
+    Expect(keyUpResult.consumed, "Expected the Unicode-over-VK rebind to consume WM_KEYUP.");
+    Expect(keyUpResult.result == kCapturedWndProcResult,
+           "Expected the Unicode-over-VK rebind to forward the trigger WM_KEYUP through the original WNDPROC.");
+    Expect(capture.messages.size() == 1, "Expected the Unicode-over-VK rebind to forward exactly one trigger key-up message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Unicode-over-VK rebind trigger WM_KEYUP");
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected Unicode output to ignore the configured VK when handling WM_KEYUP.");
+}
+
+void RunKeyRebindRuntimeShiftLayerUnicodeOutputIgnoresVkTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    KeyRebind rebind = MakeEnabledRebind('A', 'B');
+    rebind.useCustomOutput = true;
+    rebind.customOutputUnicode = 'c';
+    rebind.shiftLayerEnabled = true;
+    rebind.shiftLayerOutputUnicode = '5';
+    rebind.shiftLayerOutputVK = VK_LSHIFT;
+    PrepareRebindRuntimeCase("key_rebind_runtime_shift_layer_unicode_output_ignores_vk", { rebind });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ResetSyntheticRebindKeyEventsForTest();
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected the synthetic rebind key event log to start empty for the Shift-layer Unicode-over-VK test.");
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, true);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    const LPARAM sourceLParam = BuildTestKeyboardMessageLParam('A', true);
+    const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', sourceLParam);
+    Expect(keyDownResult.consumed, "Expected the Shift-layer Unicode-over-VK rebind to consume WM_KEYDOWN.");
+    Expect(keyDownResult.result == kCapturedWndProcResult,
+           "Expected the Shift-layer Unicode-over-VK rebind to forward the trigger WM_KEYDOWN through the original WNDPROC.");
+    Expect(capture.messages.size() == 1,
+           "Expected the Shift-layer Unicode-over-VK rebind to forward exactly one trigger key-down message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Shift-layer Unicode-over-VK rebind trigger WM_KEYDOWN");
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected Shift-layer Unicode output to ignore the configured VK when handling WM_KEYDOWN.");
+
+    capture.Clear();
+    const InputHandlerResult charResult =
+        HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('A'), sourceLParam);
+    Expect(charResult.consumed, "Expected the Shift-layer Unicode-over-VK rebind WM_CHAR to be consumed.");
+    Expect(capture.messages.size() == 1,
+           "Expected the Shift-layer Unicode-over-VK rebind to forward exactly one character message.");
+    ExpectCapturedMessage(capture, 0, WM_CHAR, '5', "Shift-layer Unicode-over-VK rebind WM_CHAR");
+
+    capture.Clear();
+    const InputHandlerResult keyUpResult = HandleKeyRebinding(window.hwnd(), WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false));
+    Expect(keyUpResult.consumed, "Expected the Shift-layer Unicode-over-VK rebind to consume WM_KEYUP.");
+    Expect(keyUpResult.result == kCapturedWndProcResult,
+           "Expected the Shift-layer Unicode-over-VK rebind to forward the trigger WM_KEYUP through the original WNDPROC.");
+    Expect(capture.messages.size() == 1,
+           "Expected the Shift-layer Unicode-over-VK rebind to forward exactly one trigger key-up message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Shift-layer Unicode-over-VK rebind trigger WM_KEYUP");
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected Shift-layer Unicode output to ignore the configured VK when handling WM_KEYUP.");
 }
 
 void RunKeyRebindRuntimeShiftLayerShiftActivatedTest(TestRunMode runMode = TestRunMode::Automated) {
@@ -877,6 +1026,96 @@ void RunKeyRebindRuntimeMouseSourceEmitsKeyAndCharTest(TestRunMode runMode = Tes
         ExpectSyntheticRebindKeyEvent(1, expectedScanCodeWithFlags, false, "Modifier-output rebind focus-loss release");
         Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
             "Expected focus loss to clear all held synthetic rebind outputs.");
+    }
+
+    void RunKeyRebindRuntimeCustomModifierOutputUsesSyntheticKeyTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        KeyRebind rebind = MakeEnabledRebind('A', 'B');
+        rebind.useCustomOutput = true;
+        rebind.customOutputVK = VK_LSHIFT;
+        PrepareRebindRuntimeCase("key_rebind_runtime_custom_modifier_output_uses_synthetic_key", { rebind });
+        ScopedRebindMessageCapture capture(window.hwnd());
+
+        ResetSyntheticRebindKeyEventsForTest();
+        Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+            "Expected the synthetic rebind key event log to start empty for the custom modifier-output test.");
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+            "Expected no held synthetic outputs before the custom modifier-output test runs.");
+
+        ScopedKeyboardStateOverride keyboardState;
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.SetToggle(VK_CAPITAL, false);
+        keyboardState.Apply();
+
+        const UINT expectedScanCodeWithFlags = static_cast<UINT>(MapVirtualKeyW(VK_LSHIFT, MAPVK_VK_TO_VSC_EX));
+        const LPARAM sourceLParam = BuildTestKeyboardMessageLParam('A', true);
+
+        const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', sourceLParam);
+        Expect(keyDownResult.consumed, "Expected a custom modifier-output rebind to consume WM_KEYDOWN.");
+        Expect(capture.messages.empty(), "Expected a custom modifier-output rebind to avoid forwarding WM_KEYDOWN messages.");
+        Expect(GetSyntheticRebindKeyEventCountForTest() == 1,
+            "Expected a custom modifier-output rebind to synthesize one key-down event.");
+        ExpectSyntheticRebindKeyEvent(0, expectedScanCodeWithFlags, true, "Custom modifier-output rebind WM_KEYDOWN");
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 1,
+            "Expected a custom modifier-output rebind to track one held synthetic output after key down.");
+
+        capture.Clear();
+        const InputHandlerResult keyUpResult =
+            HandleKeyRebinding(window.hwnd(), WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false));
+        Expect(keyUpResult.consumed, "Expected a custom modifier-output rebind to consume WM_KEYUP.");
+        Expect(capture.messages.empty(), "Expected a custom modifier-output rebind to avoid forwarding WM_KEYUP messages.");
+        Expect(GetSyntheticRebindKeyEventCountForTest() == 2,
+            "Expected a custom modifier-output rebind to synthesize a matching key-up event.");
+        ExpectSyntheticRebindKeyEvent(1, expectedScanCodeWithFlags, false, "Custom modifier-output rebind WM_KEYUP");
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+            "Expected the custom modifier-output rebind to clear held synthetic output state on key up.");
+    }
+
+    void RunKeyRebindRuntimeWndProcKeepsSyntheticModifierHeldTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        KeyRebind rebind = MakeEnabledRebind('N', VK_LSHIFT);
+        PrepareRebindRuntimeCase("key_rebind_runtime_wndproc_keeps_synthetic_modifier_held", { rebind });
+        ScopedRebindMessageCapture capture(window.hwnd());
+
+        const HWND previousSubclassedHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+        g_subclassedHwnd.store(window.hwnd(), std::memory_order_release);
+
+        ResetSyntheticRebindKeyEventsForTest();
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+            "Expected no held synthetic outputs before the subclassed WndProc modifier-hold test runs.");
+
+        const UINT expectedScanCodeWithFlags = static_cast<UINT>(MapVirtualKeyW(VK_LSHIFT, MAPVK_VK_TO_VSC_EX));
+        const LPARAM sourceDownLParam = BuildTestKeyboardMessageLParam('N', true);
+        const LPARAM sourceUpLParam = BuildTestKeyboardMessageLParam('N', false);
+
+        try {
+            const LRESULT keyDownResult = SubclassedWndProc(window.hwnd(), WM_KEYDOWN, 'N', sourceDownLParam);
+            Expect(keyDownResult == 0 || keyDownResult == kCapturedWndProcResult,
+                "Expected the subclassed WndProc modifier-hold test to return a handled result for WM_KEYDOWN.");
+            Expect(GetSyntheticRebindKeyEventCountForTest() == 1,
+                "Expected the subclassed WndProc modifier-hold test to synthesize one key-down event.");
+            ExpectSyntheticRebindKeyEvent(0, expectedScanCodeWithFlags, true, "Subclassed WndProc modifier-hold WM_KEYDOWN");
+            Expect(GetActiveSyntheticRebindOutputCountForTest() == 1,
+                "Expected the subclassed WndProc modifier-hold test to keep the synthetic modifier held after WM_KEYDOWN.");
+
+            (void)SubclassedWndProc(window.hwnd(), WM_MOUSEMOVE, 0, MAKELPARAM(32, 48));
+            Expect(GetActiveSyntheticRebindOutputCountForTest() == 1,
+                "Expected unrelated WndProc traffic to preserve a held synthetic modifier output.");
+
+            const LRESULT keyUpResult = SubclassedWndProc(window.hwnd(), WM_KEYUP, 'N', sourceUpLParam);
+            Expect(keyUpResult == 0 || keyUpResult == kCapturedWndProcResult,
+                "Expected the subclassed WndProc modifier-hold test to return a handled result for WM_KEYUP.");
+            Expect(GetSyntheticRebindKeyEventCountForTest() == 2,
+                "Expected the subclassed WndProc modifier-hold test to synthesize a matching key-up event.");
+            ExpectSyntheticRebindKeyEvent(1, expectedScanCodeWithFlags, false, "Subclassed WndProc modifier-hold WM_KEYUP");
+            Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+                "Expected the subclassed WndProc modifier-hold test to release the synthetic modifier on WM_KEYUP.");
+        } catch (...) {
+            g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
+            throw;
+        }
+
+        g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
     }
 
 void RunKeyRebindRuntimeDisabledRebindIgnoredTest(TestRunMode runMode = TestRunMode::Automated) {
@@ -1458,6 +1697,44 @@ void RunKeyRebindGuiKeyboardLayoutSplitBindAndTriggerTest(TestRunMode runMode = 
     Expect(capture.messages.size() == 1, "Expected the GUI-created split rebind to forward exactly one WM_CHAR message.");
     ExpectCapturedMessage(capture, 0, WM_CHAR, 'D', "GUI split rebind WM_CHAR");
 }
+
+    void RunKeyRebindGuiTextOverridePickRejectsNonTypableKeyTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+
+        KeyRebind rebind = MakeEnabledRebind('A', 'B');
+        PrepareRebindGuiCase("key_rebind_gui_text_override_pick_rejects_non_typable_key", { rebind });
+
+        RenderKeyboardInputsFrame(window);
+        RenderKeyboardInputsFrame(window);
+
+        RequestGuiTestOpenRebindTextOverrideBind(0);
+        RenderKeyboardInputsFrame(window);
+
+        SubmitKeyboardBindingEvent(VK_HOME);
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected the text-override Pick flow to keep the original rebind after rejecting Home.");
+        const KeyRebind& rejectedRebind = g_config.keyRebinds.rebinds.front();
+        Expect(rejectedRebind.fromKey == 'A', "Expected the rejected text-override Pick flow to keep the source key unchanged.");
+        Expect(rejectedRebind.toKey == 'B', "Expected the rejected text-override Pick flow to keep the trigger key unchanged.");
+        Expect(rejectedRebind.customOutputVK == 0,
+            "Expected the text-override Pick flow to reject Home instead of storing it as a typed-output VK.");
+        Expect(!rejectedRebind.useCustomOutput,
+            "Expected the text-override Pick flow to leave custom output disabled after rejecting Home.");
+
+        SubmitKeyboardBindingEvent('C');
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected the text-override Pick flow to keep a single rebind after accepting a valid typed-output key.");
+        const KeyRebind& acceptedRebind = g_config.keyRebinds.rebinds.front();
+        Expect(acceptedRebind.useCustomOutput,
+            "Expected the text-override Pick flow to remain active after rejecting Home and then accepting C.");
+        Expect(acceptedRebind.customOutputVK == 'C',
+            "Expected the text-override Pick flow to keep waiting and accept C after rejecting Home.");
+    }
 
     void RunKeyRebindGuiKeyboardLayoutDisabledOutputTest(TestRunMode runMode = TestRunMode::Automated) {
         DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
@@ -2063,6 +2340,70 @@ void RunKeyRebindGuiKeyboardLayoutCursorStateOverrideTest(TestRunMode runMode = 
             "Expected the GUI-created full rebind scan picker flow to forward exactly one WM_KEYDOWN message.");
         ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_RETURN, "GUI full rebind scan picker WM_KEYDOWN");
         ExpectCapturedScanCode(capture, 0, kNumpadEnterScan, "GUI full rebind scan picker WM_KEYDOWN");
+    }
+
+    void RunKeyRebindGuiKeyboardLayoutFullBindScanPickerCannotTypeTest(TestRunMode runMode = TestRunMode::Automated) {
+        constexpr DWORD kHomeScan = 0xE047;
+
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+        PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_full_bind_scan_picker_cannot_type");
+
+        OpenKeyboardLayoutContext(window, 'A');
+        OpenKeyboardLayoutScanPicker(window);
+        SetKeyboardLayoutScanFilter(window, GuiTestKeyboardLayoutScanFilterGroup::Nav);
+        SelectKeyboardLayoutScan(window, kHomeScan);
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected the full rebind scan picker cannot-type flow to create exactly one key rebind.");
+        const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+        Expect(rebind.fromKey == 'A',
+            "Expected the full rebind scan picker cannot-type flow to bind from the clicked A key.");
+        Expect(rebind.toKey == VK_HOME,
+            "Expected the full rebind scan picker cannot-type flow to resolve Home as the trigger key.");
+        Expect(rebind.useCustomOutput,
+            "Expected the full rebind scan picker cannot-type flow to keep custom output state enabled.");
+        Expect(rebind.customOutputVK == VK_HOME,
+            "Expected the full rebind scan picker cannot-type flow to mirror Home as the editable full-output VK.");
+        Expect(rebind.customOutputScanCode == kHomeScan,
+            "Expected the full rebind scan picker cannot-type flow to store the Home scan code override.");
+
+        ResetGuiTestInteractionRects();
+        RenderKeyboardInputsFrame(window);
+
+        const GuiTestKeyboardLayoutKeyLabels labels = ExpectKeyboardLayoutKeyLabels(
+            'A', "Expected keyboard-layout labels after selecting Home from the full rebind scan picker.");
+        Expect(labels.primaryText == "CT",
+            "Expected selecting Home from the full rebind scan picker to render the compact cannot-type indicator.");
+        Expect(labels.secondaryText == "Home" || labels.secondaryText == "HOME",
+            "Expected selecting Home from the full rebind scan picker to render Home as the trigger label.");
+        Expect(labels.shiftLayerText.empty(),
+            "Expected selecting Home from the full rebind scan picker to avoid rendering a Shift-layer label.");
+
+        g_showGui.store(false, std::memory_order_release);
+        PublishConfigSnapshot();
+
+        ScopedRebindMessageCapture capture(window.hwnd());
+        ScopedKeyboardStateOverride keyboardState;
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.SetToggle(VK_CAPITAL, false);
+        keyboardState.Apply();
+
+        const LPARAM keyDownLParam = BuildTestKeyboardMessageLParam('A', true);
+        const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', keyDownLParam);
+        Expect(keyDownResult.consumed,
+            "Expected the full rebind scan picker cannot-type flow to consume WM_KEYDOWN.");
+        Expect(capture.messages.size() == 1,
+            "Expected the full rebind scan picker cannot-type flow to forward exactly one WM_KEYDOWN message.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_HOME, "GUI full rebind scan picker cannot-type WM_KEYDOWN");
+        ExpectCapturedScanCode(capture, 0, kHomeScan, "GUI full rebind scan picker cannot-type WM_KEYDOWN");
+
+        capture.Clear();
+        const InputHandlerResult charResult = HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('a'), keyDownLParam);
+        Expect(charResult.consumed,
+            "Expected the full rebind scan picker cannot-type flow to consume WM_CHAR.");
+        Expect(capture.messages.empty(),
+            "Expected the full rebind scan picker cannot-type flow to avoid forwarding WM_CHAR.");
     }
 
     void RunKeyRebindGuiKeyboardLayoutScanPickerFilterTest(TestRunMode runMode = TestRunMode::Automated) {

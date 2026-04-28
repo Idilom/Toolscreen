@@ -2,6 +2,7 @@
 
 #include "features/fake_cursor.h"
 #include "features/virtual_camera.h"
+#include "common/mode_dimensions.h"
 #include "gui/gui.h"
 #include "gui/imgui_cache.h"
 #include "runtime/logic_thread.h"
@@ -59,7 +60,6 @@ extern std::set<std::string> g_triggerOnReleaseInvalidated;
 extern std::mutex g_triggerOnReleaseMutex;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-static bool s_forcedShowCursor = false;
 static size_t s_bestMatchKeyCount = 0;
 static std::unordered_map<DWORD, size_t> s_bestMatchKeyCountByMainVk;
 static HHOOK s_lowLevelKeyboardHook = NULL;
@@ -114,6 +114,7 @@ static std::vector<SyntheticRebindKeyEventForTest> s_syntheticRebindKeyEventsFor
 
 static bool SendMenuMaskKeyTap();
 static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown);
+static bool SendSyntheticRebindOutput(UINT scanCodeWithFlags, bool keyDown);
 static bool HotkeyUsesWindowsKey(const std::vector<DWORD>& keys);
 static bool ShouldMaskWindowsKeyForHotkey(const std::vector<DWORD>& keys, bool isKeyDown, bool isAutoRepeatKeyDown);
 static uint64_t BuildSyntheticRebindOutputSourceId(DWORD vkCode, DWORD rawVkCode, bool isMouseButton);
@@ -130,6 +131,7 @@ static UINT ResolveLocalKeyRepeatOutputScanCode(DWORD rawVk, UINT incomingScanCo
 static bool TryResolveLocalKeyRepeatVkFromChar(WPARAM charCode, DWORD& outVk, UINT& outScanCodeWithFlags);
 static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, bool isLocalRepeatTagged);
 bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs);
+static void ReleaseSuppressedLowLevelRebindKeys(HWND hWnd);
 
 static bool MatchesConfiguredGameStateCondition(const std::vector<std::string>& configuredStates, const std::string& gameState) {
     if (configuredStates.empty()) {
@@ -369,6 +371,10 @@ static bool HasShiftLayerOutputUnicode(const KeyRebind& rebind) {
     return rebind.shiftLayerEnabled && !rebind.shiftLayerOutputDisabled && rebind.shiftLayerOutputUnicode != 0;
 }
 
+static bool HasBaseOutputUnicode(const KeyRebind& rebind) {
+    return rebind.useCustomOutput && rebind.customOutputUnicode != 0;
+}
+
 static bool HasShiftLayerOutputOverride(const KeyRebind& rebind) {
     return IsShiftLayerTypedOutputDisabled(rebind) || HasShiftLayerOutputVk(rebind) || HasShiftLayerOutputUnicode(rebind);
 }
@@ -412,6 +418,12 @@ static DWORD ResolveEffectiveCustomOutputVk(const KeyRebind& rebind, bool shiftL
     if (!shiftLayerActive && IsBaseTypedOutputDisabled(rebind)) {
         return 0;
     }
+    if (shiftLayerActive && HasShiftLayerOutputUnicode(rebind)) {
+        return 0;
+    }
+    if (!shiftLayerActive && HasBaseOutputUnicode(rebind)) {
+        return 0;
+    }
     if (shiftLayerActive && HasShiftLayerOutputVk(rebind)) {
         return rebind.shiftLayerOutputVK;
     }
@@ -421,9 +433,9 @@ static DWORD ResolveEffectiveCustomOutputVk(const KeyRebind& rebind, bool shiftL
     return 0;
 }
 
-static bool IsModifierScanCode(UINT scanCodeWithFlags) {
+static DWORD ResolveModifierVkFromScanCode(UINT scanCodeWithFlags) {
     const UINT scanLow = (scanCodeWithFlags & 0xFF);
-    if (scanLow == 0) return false;
+    if (scanLow == 0) return 0;
 
     static thread_local std::unordered_map<UINT, DWORD> s_scanCodeToModifierVk;
 
@@ -439,11 +451,17 @@ static bool IsModifierScanCode(UINT scanCodeWithFlags) {
         if (mappedVk != 0) {
             mappedVk = NormalizeModifierVkFromConfig(mappedVk, scanCodeWithFlags);
         }
+        if (!IsModifierVk(mappedVk)) {
+            mappedVk = 0;
+        }
         s_scanCodeToModifierVk.emplace(scanCodeWithFlags, mappedVk);
     }
-    if (mappedVk == 0) return false;
 
-    return IsModifierVk(mappedVk);
+    return mappedVk;
+}
+
+static bool IsModifierScanCode(UINT scanCodeWithFlags) {
+    return ResolveModifierVkFromScanCode(scanCodeWithFlags) != 0;
 }
 
 static bool TryGetClientSize(HWND hWnd, int& outW, int& outH) {
@@ -470,8 +488,15 @@ static void ResendCurrentModeWmSize(HWND hWnd, const char* source) {
     if (!cfgSnap) { return; }
 
     const std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
-    const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
+    const ModeConfig* mode = GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId);
     if (!mode || mode->width <= 0 || mode->height <= 0) { return; }
+
+    if (EqualsIgnoreCase(mode->id, "Fullscreen") && mode->useRelativeSize) {
+        // Real window-size changes will trigger a logic-thread recalculation that reposts
+        // WM_SIZE with the freshly recomputed internal size. Avoid sending the stale
+        // pre-recalc fullscreen-relative dimensions here.
+        return;
+    }
 
     RequestWindowClientResize(hWnd, mode->width, mode->height, source);
 }
@@ -593,7 +618,7 @@ static void SyncWindowMetricsFromMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LP
     if (shouldInvalidateScreenMetrics) { InvalidateCachedScreenMetrics(); }
     if (shouldRequestRecalc) { RequestScreenMetricsRecalculation(); }
     if (shouldInvalidateImGui) { InvalidateImGuiCache(); }
-    if (shouldResetGameTexture && clientSizeChanged) { InvalidateTrackedGameTextureId(false); }
+    if (shouldResetGameTexture && clientSizeChanged) { InvalidateTrackedGameTextureId(false, false); }
     if (clientSizeChanged) { shouldRecenterGui = true; }
 
     if (clientSizeChanged) {
@@ -739,7 +764,8 @@ InputHandlerResult HandleSetCursor(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (uMsg != WM_SETCURSOR) { return { false, 0 }; }
     PROFILE_SCOPE("HandleSetCursor");
 
-    if (g_showGui.load() && s_forcedShowCursor && g_gameVersion >= GameVersion(1, 13, 0)) {
+    if (g_showGui.load() && g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire) &&
+        g_gameVersion >= GameVersion(1, 13, 0)) {
         EnsureSystemCursorVisible();
         static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
         SetCursor(s_arrowCursor);
@@ -873,28 +899,18 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     if (is_closing) {
         CloseSettingsGuiWindow();
-
-        if (s_forcedShowCursor) {
-            EnsureSystemCursorHidden();
-            s_forcedShowCursor = false;
-        }
-        if (!g_wasCursorVisible.load()) {
-            if (g_gameVersion < GameVersion(1, 13, 0)) {
-                HCURSOR airCursor = g_specialCursorHandle.load();
-                if (airCursor) SetCursor(airCursor);
-            }
-        }
     } else if (!isEscape) {
         g_showGui = true;
         InvalidateImGuiCache();
         const bool wasCursorVisible = IsCursorVisible();
         g_wasCursorVisible = wasCursorVisible;
+        g_forceVisibleCursorWhileGuiOpen.store(false, std::memory_order_release);
         g_guiNeedsRecenter = true;
         if (!ApplyConfineCursorToGameWindow()) {
             ClipCursor(NULL);
         }
         if (!wasCursorVisible && g_gameVersion >= GameVersion(1, 13, 0)) {
-            s_forcedShowCursor = true;
+            g_forceVisibleCursorWhileGuiOpen.store(true, std::memory_order_release);
             EnsureSystemCursorVisible();
             static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
             SetCursor(s_arrowCursor);
@@ -1478,25 +1494,42 @@ InputHandlerResult HandleWmSizeModeDimensions(HWND hWnd, UINT uMsg, WPARAM wPara
     if (msgW <= 0 || msgH <= 0) { return { false, 0 }; }
 
     auto cfgSnap = GetConfigSnapshot();
-    const ModeConfig* mode = cfgSnap ? GetModeFromSnapshot(*cfgSnap, currentModeId) : nullptr;
+    const ModeConfig* mode = cfgSnap ? GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId) : nullptr;
     if (!mode || mode->width <= 0 || mode->height <= 0) { return { false, 0 }; }
 
-    if (EqualsIgnoreCase(mode->id, "Fullscreen")) {
-        // Fullscreen custom sizing is an internal render size with a live stretch
-        // rect over the current client area. Let WM_SIZE keep the real client size.
-        return { false, 0 };
-    }
+    int liveClientW = 0;
+    int liveClientH = 0;
+    const bool haveLiveClientSize = TryGetClientSize(hWnd, liveClientW, liveClientH);
+    const bool messageMatchesLiveClient = haveLiveClientSize && liveClientW == msgW && liveClientH == msgH;
 
-    // IMPORTANT: use already-recalculated mode dimensions as authoritative target.
-    // Re-applying relative/expression math against WM_SIZE repeatedly causes compounding
-    // shrink (e.g. 98.4% of 900 -> 885, then 98.4% of 885 -> 870).
     int targetW = mode->width;
     int targetH = mode->height;
 
+    if (EqualsIgnoreCase(mode->id, "Fullscreen")) {
+        if (!messageMatchesLiveClient) {
+            // Toolscreen-posted WM_SIZE already carries the computed internal render size.
+            // Recomputing from the live client here would compound relative sizing.
+            return { false, 0 };
+        }
+
+        // OS WM_SIZE reports the live client area after a real resize/maximize. Rewrite it
+        // to the computed internal render size immediately so the game never races ahead
+        // with the raw client dimensions.
+        targetW = ResolveModeDisplayWidth(*mode, liveClientW, liveClientH);
+        targetH = ResolveModeDisplayHeight(*mode, liveClientW, liveClientH);
+    } else {
+        // IMPORTANT: use already-recalculated mode dimensions as authoritative target.
+        // Re-applying relative/expression math against WM_SIZE repeatedly causes compounding
+        // shrink (e.g. 98.4% of 900 -> 885, then 98.4% of 885 -> 870).
+        targetW = mode->width;
+        targetH = mode->height;
+    }
+
     if (targetW <= 0 || targetH <= 0 || (msgW == targetW && msgH == targetH)) { return { false, 0 }; }
 
+    RememberRequestedWindowClientResize(targetW, targetH);
     const LPARAM adjustedSize = MAKELPARAM(targetW, targetH);
-    InvalidateTrackedGameTextureId(false);
+    InvalidateTrackedGameTextureId(false, false);
     LRESULT forwarded = CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, adjustedSize);
 
     return { true, forwarded };
@@ -1687,8 +1720,11 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
         for (const auto& alt : hotkey.altSecondaryModes) {
             bool skipExclusions = hotkey.triggerOnRelease || (hotkey.triggerOnHold && !isKeyDown);
-            bool matched = CheckHotkeyMatch(alt.keys, vkCode, hotkey.conditions.exclusions, skipExclusions, s_bestMatchKeyCount);
-            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(alt.keys, rebindTargetVk, hotkey.conditions.exclusions, skipExclusions, s_bestMatchKeyCount);
+            bool matched = CheckHotkeyMatch(alt.keys, vkCode, hotkey.conditions.exclusions, skipExclusions, s_bestMatchKeyCount, rawVkCode, true,
+                                            isKeyDown);
+            bool matchedViaRebind = !matched && rebindTargetVk &&
+                                    CheckHotkeyMatch(alt.keys, rebindTargetVk, hotkey.conditions.exclusions, skipExclusions,
+                                                     s_bestMatchKeyCount);
             if (matched || matchedViaRebind) {
                 bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
                 std::string hotkeyId = GetKeyComboString(alt.keys);
@@ -1764,8 +1800,11 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
         {
             bool skipExclusions = hotkey.triggerOnRelease || (hotkey.triggerOnHold && !isKeyDown);
-            bool matched = CheckHotkeyMatch(hotkey.keys, vkCode, hotkey.conditions.exclusions, skipExclusions, s_bestMatchKeyCount);
-            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(hotkey.keys, rebindTargetVk, hotkey.conditions.exclusions, skipExclusions, s_bestMatchKeyCount);
+            bool matched = CheckHotkeyMatch(hotkey.keys, vkCode, hotkey.conditions.exclusions, skipExclusions, s_bestMatchKeyCount,
+                                            rawVkCode, true, isKeyDown);
+            bool matchedViaRebind = !matched && rebindTargetVk &&
+                                    CheckHotkeyMatch(hotkey.keys, rebindTargetVk, hotkey.conditions.exclusions, skipExclusions,
+                                                     s_bestMatchKeyCount);
             if (matched || matchedViaRebind) {
                 bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
                 std::string hotkeyId = GetKeyComboString(hotkey.keys);
@@ -1990,29 +2029,76 @@ InputHandlerResult HandleMouseCoordinateTranslationPhase(HWND hWnd, UINT uMsg, W
 
     PROFILE_SCOPE("HandleMouseCoordinateTranslation");
 
-    // Prefer live viewport geometry for correctness during/after resize.
-    // Cached mode viewport may lag by a tick and can desync mouse mapping.
-    ModeViewportInfo geo = GetCurrentModeViewport();
-    if (!geo.valid) {
-        const CachedModeViewport& cachedMode = g_viewportModeCache[g_viewportModeCacheIndex.load(std::memory_order_acquire)];
-        if (cachedMode.valid) {
-            geo.valid = true;
-            geo.width = cachedMode.width;
-            geo.height = cachedMode.height;
-            geo.stretchEnabled = cachedMode.stretchEnabled;
-            geo.stretchX = cachedMode.stretchX;
-            geo.stretchY = cachedMode.stretchY;
-            geo.stretchWidth = cachedMode.stretchWidth;
-            geo.stretchHeight = cachedMode.stretchHeight;
-        }
-    }
-    if (!geo.valid || geo.width <= 0 || geo.height <= 0 || geo.stretchWidth <= 0 || geo.stretchHeight <= 0) { return { false, 0 }; }
-
     RECT clientRect{};
     if (!GetClientRect(hWnd, &clientRect)) { return { false, 0 }; }
     const int clientW = clientRect.right - clientRect.left;
     const int clientH = clientRect.bottom - clientRect.top;
     if (clientW <= 0 || clientH <= 0) { return { false, 0 }; }
+
+    ModeViewportInfo geo;
+    const std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+    auto cfgSnap = GetConfigSnapshot();
+    const ModeConfig* currentMode = cfgSnap ? GetModeFromSnapshotOrFallback(*cfgSnap, currentModeId) : nullptr;
+    const bool fullscreenMode = currentMode && EqualsIgnoreCase(currentMode->id, "Fullscreen");
+
+    // Start from the same presented viewport helper the GL hooks use, then correct the
+    // source size and any screen-sized output rects using live state from this message.
+    if (!ResolvePresentedGameViewport(geo)) {
+        if (!currentMode || currentMode->width <= 0 || currentMode->height <= 0) {
+            return { false, 0 };
+        }
+
+        geo.valid = true;
+        geo.x = 0;
+        geo.y = 0;
+        geo.width = currentMode->width;
+        geo.height = currentMode->height;
+        geo.stretchEnabled = currentMode->stretch.enabled;
+        if (fullscreenMode) {
+            geo.stretchX = 0;
+            geo.stretchY = 0;
+            geo.stretchWidth = clientW;
+            geo.stretchHeight = clientH;
+        } else if (currentMode->stretch.enabled) {
+            geo.stretchX = currentMode->stretch.x;
+            geo.stretchY = currentMode->stretch.y;
+            geo.stretchWidth = currentMode->stretch.width;
+            geo.stretchHeight = currentMode->stretch.height;
+        } else {
+            geo.stretchWidth = currentMode->width;
+            geo.stretchHeight = currentMode->height;
+            geo.stretchX = GetCenteredAxisOffset(clientW, geo.stretchWidth);
+            geo.stretchY = GetCenteredAxisOffset(clientH, geo.stretchHeight);
+        }
+    }
+
+    int liveViewportW = 0;
+    int liveViewportH = 0;
+    if (GetLatestGameViewportSize(liveViewportW, liveViewportH)) {
+        geo.width = liveViewportW;
+        geo.height = liveViewportH;
+    }
+
+    if (fullscreenMode) {
+        geo.stretchEnabled = true;
+        geo.stretchX = 0;
+        geo.stretchY = 0;
+        geo.stretchWidth = clientW;
+        geo.stretchHeight = clientH;
+    } else if (!geo.stretchEnabled) {
+        const int outputWidth = geo.stretchWidth > 0 ? geo.stretchWidth : (currentMode ? currentMode->width : geo.width);
+        const int outputHeight = geo.stretchHeight > 0 ? geo.stretchHeight : (currentMode ? currentMode->height : geo.height);
+        if (outputWidth <= 0 || outputHeight <= 0) {
+            return { false, 0 };
+        }
+
+        geo.stretchWidth = outputWidth;
+        geo.stretchHeight = outputHeight;
+        geo.stretchX = GetCenteredAxisOffset(clientW, outputWidth);
+        geo.stretchY = GetCenteredAxisOffset(clientH, outputHeight);
+    }
+
+    if (!geo.valid || geo.width <= 0 || geo.height <= 0 || geo.stretchWidth <= 0 || geo.stretchHeight <= 0) { return { false, 0 }; }
 
     const int viewportLeft = geo.stretchX;
     const int viewportTop = geo.stretchY;
@@ -2592,39 +2678,7 @@ static bool TryResolveLocalKeyRepeatVkFromChar(WPARAM charCode, DWORD& outVk, UI
 }
 
 static bool RebindCannotType(const KeyRebind& rebind) {
-    if (IsTriggerOutputDisabled(rebind)) {
-        return false;
-    }
-
-    DWORD triggerVk = rebind.toKey;
-    if (triggerVk == 0) triggerVk = rebind.fromKey;
-    if (triggerVk == 0) return false;
-
-    UINT triggerScan = (rebind.useCustomOutput && rebind.customOutputScanCode != 0)
-        ? static_cast<UINT>(rebind.customOutputScanCode)
-        : GetScanCodeWithExtendedFlag(triggerVk);
-
-    if (triggerScan != 0 && (triggerScan & 0xFF00) == 0) {
-        UINT vkScan = GetScanCodeWithExtendedFlag(triggerVk);
-        if ((vkScan & 0xFF00) != 0 && ((vkScan & 0xFF) == (triggerScan & 0xFF))) { triggerScan = vkScan; }
-    }
-
-    if (IsModifierVk(triggerVk) || IsModifierScanCode(triggerScan)) return true;
-    if (IsMouseLikeVk(triggerVk)) return true;
-
-    switch (triggerVk) {
-    case VK_BACK:
-    case VK_CAPITAL:
-    case VK_DELETE:
-    case VK_HOME:
-    case VK_INSERT:
-    case VK_END:
-    case VK_PRIOR:
-    case VK_NEXT:
-        return true;
-    default:
-        return false;
-    }
+    return DoesKeyRebindTriggerCannotType(rebind);
 }
 
 static bool TryTranslateVkToChar(DWORD vkCode, bool shiftDown, WCHAR& outChar) {
@@ -2710,7 +2764,7 @@ static void ApplyPreferredOutputShiftState(const KeyRebind& rebind, bool shiftLa
 }
 
 static void EmitRebindTypedChar(HWND hWnd, const KeyRebind& rebind, bool shiftLayerActive, DWORD textVK,
-                                bool preferShiftedText, LPARAM charLParam) {
+                                bool preferShiftedText, UINT charMsg, LPARAM charLParam) {
     const uint32_t configuredUnicodeText =
         (shiftLayerActive && HasShiftLayerOutputUnicode(rebind))
             ? static_cast<uint32_t>(rebind.shiftLayerOutputUnicode)
@@ -2722,7 +2776,7 @@ static void EmitRebindTypedChar(HWND hWnd, const KeyRebind& rebind, bool shiftLa
         if (configuredUnicodeText <= 0xFFFFu) {
             SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, static_cast<WPARAM>(static_cast<WCHAR>(configuredUnicodeText)), charLParam);
         } else {
-            SendUnicodeScalarAsCharMessage(hWnd, WM_CHAR, configuredUnicodeText, charLParam);
+            SendUnicodeScalarAsCharMessage(hWnd, charMsg, configuredUnicodeText, charLParam);
         }
         return;
     }
@@ -3049,7 +3103,7 @@ static void UninstallLowLevelKeyboardHook() {
 static void UpdateLowLevelKeyboardHookInstalledState() {
     if (g_isShuttingDown.load(std::memory_order_acquire) || !HasDeepSuppressionEligibleEnabledRebind()) {
         const HWND targetHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
-        ReleaseActiveLowLevelRebindKeys(targetHwnd);
+        ReleaseSuppressedLowLevelRebindKeys(targetHwnd);
         UninstallLowLevelKeyboardHook();
         return;
     }
@@ -3098,10 +3152,10 @@ static void TrackSyntheticRebindOutputHold(uint64_t sourceId, UINT outputScanCod
     }
 
     if (releaseScanCode != 0) {
-        (void)SendSynthKeyByScanCode(releaseScanCode, false);
+        (void)SendSyntheticRebindOutput(releaseScanCode, false);
     }
     if (sendKeyDown) {
-        (void)SendSynthKeyByScanCode(outputScanCode, true);
+        (void)SendSyntheticRebindOutput(outputScanCode, true);
     }
 }
 
@@ -3132,7 +3186,7 @@ static bool ReleaseTrackedSyntheticRebindOutputHold(uint64_t sourceId) {
     }
 
     if (releaseScanCode != 0) {
-        (void)SendSynthKeyByScanCode(releaseScanCode, false);
+        (void)SendSyntheticRebindOutput(releaseScanCode, false);
     }
     return true;
 }
@@ -3158,13 +3212,11 @@ static void ReleaseAllTrackedSyntheticRebindOutputHolds() {
     }
 
     for (const UINT scanCodeWithFlags : scanCodesToRelease) {
-        (void)SendSynthKeyByScanCode(scanCodeWithFlags, false);
+        (void)SendSyntheticRebindOutput(scanCodeWithFlags, false);
     }
 }
 
-void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
-    s_systemAltTabPassthroughActive = false;
-
+static void ReleaseSuppressedLowLevelRebindKeys(HWND hWnd) {
     std::vector<LowLevelSuppressedKeyState> activeKeys;
     {
         std::lock_guard<std::mutex> lock(s_lowLevelSuppressedKeysMutex);
@@ -3183,15 +3235,17 @@ void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
             (void)HandleKeyRebinding(hWnd, msg, static_cast<WPARAM>(state.rawVk), msgLParam);
         }
     }
+}
+
+void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
+    s_systemAltTabPassthroughActive = false;
+
+    ReleaseSuppressedLowLevelRebindKeys(hWnd);
 
     ReleaseAllTrackedSyntheticRebindOutputHolds();
 }
 
 static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
-#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
-    s_syntheticRebindKeyEventsForTests.push_back(SyntheticRebindKeyEventForTest{ scanCodeWithFlags, keyDown });
-#endif
-
     INPUT in{};
     in.type = INPUT_KEYBOARD;
     in.ki.wVk = 0;
@@ -3203,6 +3257,14 @@ static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
     in.ki.time = 0;
     in.ki.dwExtraInfo = kToolscreenInjectedExtraInfo;
     return ::SendInput(1, &in, sizeof(INPUT)) == 1;
+}
+
+static bool SendSyntheticRebindOutput(UINT scanCodeWithFlags, bool keyDown) {
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+    s_syntheticRebindKeyEventsForTests.push_back(SyntheticRebindKeyEventForTest{ scanCodeWithFlags, keyDown });
+#endif
+
+    return SendSynthKeyByScanCode(scanCodeWithFlags, keyDown);
 }
 
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
@@ -3271,9 +3333,17 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
     DWORD triggerVK = IsTriggerOutputDisabled(rebind)
                           ? 0
                           : NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
-    if (isMouseButton && normalizedCustomOutputVk != 0 && IsNonCharKeyVk(normalizedCustomOutputVk)) {
+    if (normalizedCustomOutputVk != 0 && IsNonCharKeyVk(normalizedCustomOutputVk)) {
         triggerVK = normalizedCustomOutputVk;
     }
+
+    const bool isSystemKeyMsg = (uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP);
+    const bool sourceIsAlt = IsAltVk(vkCode) || IsAltVk(rawVkCode);
+    const bool altContextActive = isSystemKeyMsg && !sourceIsAlt;
+    const bool outputIsAlt = IsAltVk(triggerVK);
+    const bool outputHasAltContext = altContextActive || outputIsAlt;
+    const bool outputUsesSystemMessage = outputHasAltContext;
+    const UINT outputCharMsg = outputHasAltContext ? WM_SYSCHAR : WM_CHAR;
 
     if (ShouldMaskMenuModifierForRebind(rebind, vkCode, rawVkCode, isKeyDown, isAutoRepeatKeyDown, triggerVK)) {
         (void)SendMenuMaskKeyTap();
@@ -3348,13 +3418,13 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
         if (typedOutputDisabled) {
             return;
         }
-        EmitRebindTypedChar(hWnd, rebind, shiftLayerActive, textVK, preferShiftedText, charLParam);
+        EmitRebindTypedChar(hWnd, rebind, shiftLayerActive, textVK, preferShiftedText, outputCharMsg, charLParam);
     };
 
     if (triggerVK == 0) {
         if (isKeyDown && fromKeyIsNonChar) {
             const UINT textScanCode = GetScanCodeWithExtendedFlag((effectiveCustomOutputVk != 0) ? textVK : defaultTextVK);
-            const LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, false, 1, false, false);
+            const LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, outputHasAltContext, 1, false, false);
             emitTypedCharForSource(charLParam);
         }
         return { true, 0 };
@@ -3404,19 +3474,12 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
 
         if (isKeyDown && fromKeyIsNonCharMouse) {
             const UINT textScanCode = GetScanCodeWithExtendedFlag(textVK);
-            LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, false, 1, false, false);
+            LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, outputHasAltContext, 1, false, false);
             emitTypedCharForSource(charLParam);
         }
 
         return { true, mouseResult };
     }
-
-    const bool isSystemKeyMsg = (uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP);
-    const bool sourceIsAlt = IsAltVk(vkCode) || IsAltVk(rawVkCode);
-    const bool altContextActive = isSystemKeyMsg && !sourceIsAlt;
-    const bool outputIsAlt = IsAltVk(triggerVK);
-    const bool outputHasAltContext = altContextActive || outputIsAlt;
-    const bool outputUsesSystemMessage = outputHasAltContext;
     UINT outputMsg = isKeyDown ? (outputUsesSystemMessage ? WM_SYSKEYDOWN : WM_KEYDOWN)
                                : (outputUsesSystemMessage ? WM_SYSKEYUP : WM_KEYUP);
 
@@ -3439,13 +3502,13 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
         }
 
         if (sourceIsScrollWheel) {
-            (void)SendSynthKeyByScanCode(outputScanCode, true);
-            (void)SendSynthKeyByScanCode(outputScanCode, false);
+            (void)SendSyntheticRebindOutput(outputScanCode, true);
+            (void)SendSyntheticRebindOutput(outputScanCode, false);
         } else {
             if (isKeyDown) {
                 TrackSyntheticRebindOutputHold(syntheticOutputSourceId, outputScanCode);
             } else if (!ReleaseTrackedSyntheticRebindOutputHold(syntheticOutputSourceId)) {
-                (void)SendSynthKeyByScanCode(outputScanCode, false);
+                (void)SendSyntheticRebindOutput(outputScanCode, false);
             }
         }
 
@@ -3645,23 +3708,24 @@ InputHandlerResult HandleCustomCharNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam,
     if (uMsg != WM_TOOLSCREEN_CHAR_NO_REBIND) { return { false, 0 }; }
     PROFILE_SCOPE("HandleCustomCharNoRebind");
 
-    //HandleCharLogging(WM_CHAR, wParam, lParam);
+    const UINT forwardedMsg = ((lParam & (static_cast<LPARAM>(1) << 29)) != 0) ? WM_SYSCHAR : WM_CHAR;
 
     if (g_showGui.load()) {
-        ImGuiInputQueue_EnqueueWin32Message(hWnd, WM_CHAR, wParam, lParam);
+        ImGuiInputQueue_EnqueueWin32Message(hWnd, forwardedMsg, wParam, lParam);
         return { true, 1 };
     }
 
-    if (g_originalWndProc) { return { true, CallWindowProc(g_originalWndProc, hWnd, WM_CHAR, wParam, lParam) }; }
-    return { true, DefWindowProc(hWnd, WM_CHAR, wParam, lParam) };
+    if (g_originalWndProc) { return { true, CallWindowProc(g_originalWndProc, hWnd, forwardedMsg, wParam, lParam) }; }
+    return { true, DefWindowProc(hWnd, forwardedMsg, wParam, lParam) };
 }
 
 InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (uMsg != WM_CHAR) { return { false, 0 }; }
+    if (uMsg != WM_CHAR && uMsg != WM_SYSCHAR) { return { false, 0 }; }
     PROFILE_SCOPE("HandleCharRebinding");
 
     auto charRebindCfg = GetConfigSnapshot();
     if (!charRebindCfg || !charRebindCfg->keyRebinds.enabled) { return { false, 0 }; }
+    const bool logHotkeyDebug = charRebindCfg->debug.showHotkeyDebug;
     const bool cursorVisible = IsCursorVisible();
 
     WCHAR inputChar = static_cast<WCHAR>(wParam);
@@ -3716,8 +3780,10 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
                 if (outputVK == 0) {
                     if (RebindCannotType(rebind)) {
-                        Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
-                            " (trigger cannot type)");
+                        if (logHotkeyDebug) {
+                            Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
+                                " (trigger cannot type)");
+                        }
                         return { true, 0 };
                     }
                     return { false, 0 };
@@ -3745,13 +3811,17 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 }
 
                 if (outputChar == 0) {
-                    Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
-                        " (output VK has no WM_CHAR)");
+                    if (logHotkeyDebug) {
+                        Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
+                            " (output VK has no WM_CHAR)");
+                    }
                     return { true, 0 };
                 }
 
-                Log("[REBIND WM_CHAR] Remapping char code " + std::to_string(static_cast<unsigned int>(inputChar)) + " -> " +
-                    std::to_string(static_cast<unsigned int>(outputChar)));
+                if (logHotkeyDebug) {
+                    Log("[REBIND WM_CHAR] Remapping char code " + std::to_string(static_cast<unsigned int>(inputChar)) + " -> " +
+                        std::to_string(static_cast<unsigned int>(outputChar)));
+                }
 
                 return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, outputChar, lParam) };
             }
@@ -3873,14 +3943,15 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
     }
 
-    if (g_showGui.load() && s_forcedShowCursor && g_gameVersion >= GameVersion(1, 13, 0)) {
+    const bool guiOpen = g_showGui.load(std::memory_order_acquire);
+    if (guiOpen && g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire) && g_gameVersion >= GameVersion(1, 13, 0)) {
         EnsureSystemCursorVisible();
         static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
         SetCursor(s_arrowCursor);
     }
-    if (!g_showGui.load() && s_forcedShowCursor) {
+    if (!guiOpen && g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire)) {
         EnsureSystemCursorHidden();
-        s_forcedShowCursor = false;
+        g_forceVisibleCursorWhileGuiOpen.store(false, std::memory_order_release);
     }
 
     UpdateLowLevelKeyboardHookInstalledState();

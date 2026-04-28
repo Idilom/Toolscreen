@@ -168,15 +168,17 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 ImGui::Text(trc("label.width"));
                 ImGui::NextColumn();
                 if (mode.useRelativeSize) {
+                    int displayedWidth = ResolveModeDisplayWidth(mode, modeScreenW, modeScreenH);
                     float widthPct = ((mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f)
                                           ? mode.relativeWidth
-                                          : (static_cast<float>(mode.width) / static_cast<float>(modeScreenW))) *
+                                          : (static_cast<float>(displayedWidth) / static_cast<float>(modeScreenW))) *
                                      100.0f;
                     widthPct = (std::max)(1.0f, (std::min)(100.0f, widthPct));
                     if (ImGui::SliderFloat("##WidthPercent", &widthPct, 1.0f, 100.0f, "%.1f%%")) {
                         mode.useRelativeSize = true;
                         mode.relativeWidth = widthPct / 100.0f;
-                        mode.width = (std::max)(1, static_cast<int>(mode.relativeWidth * static_cast<float>(modeScreenW)));
+                        mode.width = ResolveModeDisplayWidth(mode, modeScreenW, modeScreenH);
+                        displayedWidth = mode.width;
                         g_configIsDirty = true;
                         if (g_currentModeId == mode.id) {
                             HWND hwnd = g_minecraftHwnd.load();
@@ -188,7 +190,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         }
                     }
                     ImGui::SameLine();
-                    ImGui::TextDisabled("(%d px)", mode.width);
+                    ImGui::TextDisabled("(%d px)", displayedWidth);
                 } else {
                     int tempWidth = mode.width;
                     if (Spinner("##Width", &tempWidth, 1, 1)) {
@@ -199,15 +201,17 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 ImGui::Text(trc("label.height"));
                 ImGui::NextColumn();
                 if (mode.useRelativeSize) {
+                    int displayedHeight = ResolveModeDisplayHeight(mode, modeScreenW, modeScreenH);
                     float heightPct = ((mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f)
                                            ? mode.relativeHeight
-                                           : (static_cast<float>(mode.height) / static_cast<float>(modeScreenH))) *
+                                           : (static_cast<float>(displayedHeight) / static_cast<float>(modeScreenH))) *
                                       100.0f;
                     heightPct = (std::max)(1.0f, (std::min)(100.0f, heightPct));
                     if (ImGui::SliderFloat("##HeightPercent", &heightPct, 1.0f, 100.0f, "%.1f%%")) {
                         mode.useRelativeSize = true;
                         mode.relativeHeight = heightPct / 100.0f;
-                        mode.height = (std::max)(1, static_cast<int>(mode.relativeHeight * static_cast<float>(modeScreenH)));
+                        mode.height = ResolveModeDisplayHeight(mode, modeScreenW, modeScreenH);
+                        displayedHeight = mode.height;
                         g_configIsDirty = true;
                         if (g_currentModeId == mode.id) {
                             HWND hwnd = g_minecraftHwnd.load();
@@ -219,7 +223,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         }
                     }
                     ImGui::SameLine();
-                    ImGui::TextDisabled("(%d px)", mode.height);
+                    ImGui::TextDisabled("(%d px)", displayedHeight);
                 } else {
                     int tempHeight = mode.height;
                     if (Spinner("##Height", &tempHeight, 1, 1)) {

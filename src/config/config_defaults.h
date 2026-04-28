@@ -105,7 +105,7 @@ constexpr int BROWSER_OVERLAY_RELOAD_INTERVAL = 0;
 
 constexpr int MODE_WIDTH = 0;
 constexpr int MODE_HEIGHT = 0;
-constexpr int MODE_TRANSITION_DURATION_MS = 500;
+constexpr int MODE_TRANSITION_DURATION_MS = 150;
 constexpr float MODE_EASE_IN_POWER = 1.0f;
 constexpr float MODE_EASE_OUT_POWER = 3.0f;
 constexpr int MODE_BOUNCE_COUNT = 0;
@@ -148,6 +148,26 @@ constexpr int CURSOR_MAX_SIZE = 320;
 constexpr int CURSOR_SIZE = 64;
 
 constexpr bool CURSORS_ENABLED = false;
+
+constexpr bool  CURSOR_TRAIL_ENABLED             = false;
+constexpr bool  CURSOR_TRAIL_ONLY_ON_MY_SCREEN   = false;
+constexpr bool  CURSOR_TRAIL_ONLY_ON_OBS         = false;
+constexpr int   CURSOR_TRAIL_LIFETIME_MS         = 150;
+constexpr int   CURSOR_TRAIL_STAMP_SPACING_PX    = 1;
+constexpr int   CURSOR_TRAIL_SPRITE_SIZE_PX      = 11;
+constexpr float CURSOR_TRAIL_TAIL_SIZE_SCALE     = 0.7f;
+constexpr bool  CURSOR_TRAIL_USE_VELOCITY_SIZE   = false;
+constexpr float CURSOR_TRAIL_VELOCITY_SIZE_INTENSITY = 0.5f;
+constexpr float CURSOR_TRAIL_COLOR_R             = 1.0f;
+constexpr float CURSOR_TRAIL_COLOR_G             = 1.0f;
+constexpr float CURSOR_TRAIL_COLOR_B             = 1.0f;
+constexpr bool  CURSOR_TRAIL_USE_GRADIENT        = false;
+constexpr float CURSOR_TRAIL_TAIL_COLOR_R        = 0.0f;
+constexpr float CURSOR_TRAIL_TAIL_COLOR_G        = 0.0f;
+constexpr float CURSOR_TRAIL_TAIL_COLOR_B        = 0.0f;
+constexpr float CURSOR_TRAIL_OPACITY             = 0.8f;
+inline const std::string CURSOR_TRAIL_BLEND_MODE  = "Alpha";
+inline const std::string CURSOR_TRAIL_SPRITE_PATH = "";
 
 constexpr int EYEZOOM_CLONE_WIDTH = 24;
 constexpr int EYEZOOM_OVERLAY_WIDTH = EYEZOOM_CLONE_WIDTH / 2;
@@ -214,6 +234,7 @@ constexpr bool CONFIG_DISABLE_HOOK_CHAINING = false;
 constexpr float CONFIG_MOUSE_SENSITIVITY = 1.0f;
 constexpr int CONFIG_WINDOWS_MOUSE_SPEED = 0;
 constexpr bool CONFIG_HIDE_ANIMATIONS_IN_GAME = false;
+constexpr bool CONFIG_CAPTURE_FAKE_CURSOR = false;
 constexpr bool CONFIG_LIMIT_CAPTURE_FRAMERATE = false;
 constexpr int CONFIG_OBS_FRAMERATE = 60;
 constexpr bool CONFIG_USE_SYSTEM_KEY_REPEAT = false;

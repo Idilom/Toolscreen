@@ -29,6 +29,23 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     "custom cursor",
                     "crosshair"
                 });
+                const bool showCursorTrailSection = ShouldRenderConfigSearchSection(showAllMouseSections, {
+                    trc("cursor_trail.section_title"),
+                    trc("cursor_trail.enabled"),
+                    trc("cursor_trail.only_on_my_screen"),
+                    trc("cursor_trail.only_on_obs"),
+                    trc("cursor_trail.lifetime_ms"),
+                    trc("cursor_trail.stamp_spacing"),
+                    trc("cursor_trail.color"),
+                    trc("cursor_trail.opacity"),
+                    trc("cursor_trail.blend_mode"),
+                    trc("cursor_trail.sprite_path"),
+                    trc("cursor_trail.use_gradient"),
+                    "cursor trail",
+                    "trail",
+                    "mouse trail",
+                    "gradient"
+                });
 
                 if (showMouseSettingsSection) {
                     ImGui::SeparatorText(trc("inputs.mouse_settings"));
@@ -265,6 +282,162 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             ImGui::SameLine();
                             if (ImGui::Button(trc("label.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
                             ImGui::EndPopup();
+                        }
+                    }
+                }
+
+                if (showCursorTrailSection) {
+                    ImGui::Spacing();
+                    ImGui::SeparatorText(trc("cursor_trail.section_title"));
+                    RecordConfigSearchSectionInteractionRect("config.section.inputs.mouse.cursor_trail");
+
+                    auto& trail = g_config.cursorTrail;
+
+                    if (ImGui::Checkbox(trc("cursor_trail.enabled"), &trail.enabled)) { g_configIsDirty = true; }
+                    ImGui::SameLine();
+                    HelpMarker(trc("cursor_trail.tooltip.enabled"));
+
+                    if (ImGui::Checkbox(trc("cursor_trail.only_on_my_screen"), &trail.onlyOnMyScreen)) {
+                        if (trail.onlyOnMyScreen) trail.onlyOnObs = false;
+                        g_configIsDirty = true;
+                    }
+                    ImGui::SameLine();
+                    HelpMarker(trc("cursor_trail.tooltip.only_on_my_screen"));
+
+                    if (ImGui::Checkbox(trc("cursor_trail.only_on_obs"), &trail.onlyOnObs)) {
+                        if (trail.onlyOnObs) trail.onlyOnMyScreen = false;
+                        g_configIsDirty = true;
+                    }
+                    ImGui::SameLine();
+                    HelpMarker(trc("cursor_trail.tooltip.only_on_obs"));
+
+                    if (trail.enabled) {
+                        const float sliderW = 300.0f;
+
+                        ImGui::Text(trc("cursor_trail.lifetime_ms"));
+                        ImGui::SetNextItemWidth(sliderW);
+                        if (ImGui::SliderInt("##cursor_trail_lifetime", &trail.lifetimeMs, 50, 500, "%d ms",
+                                             ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+
+                        ImGui::Text(trc("cursor_trail.opacity"));
+                        ImGui::SetNextItemWidth(sliderW);
+                        if (ImGui::SliderFloat("##cursor_trail_opacity", &trail.opacity, 0.0f, 1.0f, "%.2f",
+                                               ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+
+                        ImGui::Text(trc("cursor_trail.blend_mode"));
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(sliderW);
+                        const char* blendModes[] = { "Alpha", "Additive" };
+                        const char* blendModeLabels[] = { trc("cursor_trail.blend_mode.alpha"),
+                                                          trc("cursor_trail.blend_mode.additive") };
+                        int blendIdx = 0;
+                        for (int i = 0; i < 2; ++i) {
+                            if (trail.blendMode == blendModes[i]) { blendIdx = i; break; }
+                        }
+                        if (ImGui::BeginCombo("##cursor_trail_blend_mode", blendModeLabels[blendIdx])) {
+                            for (int i = 0; i < 2; ++i) {
+                                const bool selected = (blendIdx == i);
+                                if (ImGui::Selectable(blendModeLabels[i], selected)) {
+                                    trail.blendMode = blendModes[i];
+                                    g_configIsDirty = true;
+                                }
+                                if (selected) { ImGui::SetItemDefaultFocus(); }
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SameLine();
+                        HelpMarker(trc("cursor_trail.tooltip.blend_mode"));
+
+                        if (ImGui::Checkbox(trc("cursor_trail.use_velocity_size"), &trail.useVelocitySize)) { g_configIsDirty = true; }
+                        ImGui::SameLine();
+                        HelpMarker(trc("cursor_trail.tooltip.use_velocity_size"));
+
+                        if (trail.useVelocitySize) {
+                            ImGui::Text(trc("cursor_trail.velocity_size_intensity"));
+                            ImGui::SetNextItemWidth(sliderW);
+                            if (ImGui::SliderFloat("##cursor_trail_velocity_intensity", &trail.velocitySizeIntensity, 0.0f, 1.0f, "%.2f",
+                                                   ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+                        }
+
+                        ImGui::Text(trail.useGradient ? trc("cursor_trail.head_color") : trc("cursor_trail.color"));
+                        float trailColor[3] = { trail.color.r, trail.color.g, trail.color.b };
+                        if (ImGui::ColorEdit3("##cursor_trail_color", trailColor)) {
+                            trail.color.r = trailColor[0];
+                            trail.color.g = trailColor[1];
+                            trail.color.b = trailColor[2];
+                            g_configIsDirty = true;
+                        }
+
+                        if (ImGui::Checkbox(trc("cursor_trail.use_gradient"), &trail.useGradient)) { g_configIsDirty = true; }
+                        ImGui::SameLine();
+                        HelpMarker(trc("cursor_trail.tooltip.use_gradient"));
+
+                        if (trail.useGradient) {
+                            ImGui::Text(trc("cursor_trail.tail_color"));
+                            float trailTailColor[3] = { trail.tailColor.r, trail.tailColor.g, trail.tailColor.b };
+                            if (ImGui::ColorEdit3("##cursor_trail_tail_color", trailTailColor)) {
+                                trail.tailColor.r = trailTailColor[0];
+                                trail.tailColor.g = trailTailColor[1];
+                                trail.tailColor.b = trailTailColor[2];
+                                g_configIsDirty = true;
+                            }
+                        }
+
+                        if (ImGui::CollapsingHeader(trc("cursor_trail.advanced"))) {
+                            ImGui::Text(trc("cursor_trail.stamp_spacing"));
+                            ImGui::SetNextItemWidth(sliderW);
+                            if (ImGui::SliderInt("##cursor_trail_spacing", &trail.stampSpacingPx, 1, 64, "%d px",
+                                                 ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+                            ImGui::SameLine();
+                            HelpMarker(trc("cursor_trail.tooltip.stamp_spacing"));
+
+                            ImGui::Text(trc("cursor_trail.sprite_size"));
+                            ImGui::SetNextItemWidth(sliderW);
+                            if (ImGui::SliderInt("##cursor_trail_sprite_size", &trail.spriteSizePx, 4, 256, "%d px",
+                                                 ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+
+                            ImGui::Text(trc("cursor_trail.tail_size_scale"));
+                            ImGui::SetNextItemWidth(sliderW);
+                            if (ImGui::SliderFloat("##cursor_trail_tail_scale", &trail.tailSizeScale, 0.0f, 2.0f, "%.2fx",
+                                                   ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+                            ImGui::SameLine();
+                            HelpMarker(trc("cursor_trail.tooltip.tail_size_scale"));
+
+                            ImGui::Text(trc("cursor_trail.sprite_path"));
+                            ImGui::SetNextItemWidth(sliderW);
+                            if (ImGui::InputText("##cursor_trail_sprite_path", &trail.spritePath)) {
+                                g_configIsDirty = true;
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button((tr("button.browse") + "##cursor_trail_browse").c_str())) {
+                                ImagePickerResult result = OpenImagePickerAndValidate(
+                                    g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
+                                if (result.completed && result.success) {
+                                    trail.spritePath = result.path;
+                                    g_configIsDirty = true;
+                                }
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button((tr("button.clear") + "##cursor_trail_clear").c_str())) {
+                                if (!trail.spritePath.empty()) {
+                                    trail.spritePath.clear();
+                                    g_configIsDirty = true;
+                                }
+                            }
+                            ImGui::SameLine();
+                            HelpMarker(trc("cursor_trail.tooltip.sprite_path"));
+
+                            static std::string s_lastValidatedPath;
+                            static std::string s_lastValidationError;
+                            if (trail.spritePath != s_lastValidatedPath) {
+                                s_lastValidatedPath = trail.spritePath;
+                                s_lastValidationError = trail.spritePath.empty()
+                                    ? std::string{}
+                                    : ValidateImageFile(trail.spritePath, g_toolscreenPath, 256);
+                            }
+                            if (!s_lastValidationError.empty()) {
+                                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", s_lastValidationError.c_str());
+                            }
                         }
                     }
                 }
@@ -734,6 +907,26 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                 auto isScrollWheelVk = [](DWORD vk) -> bool {
                     return vk == VK_TOOLSCREEN_SCROLL_UP || vk == VK_TOOLSCREEN_SCROLL_DOWN;
+                };
+
+                auto canAcceptTypesVkCaptureFor = [&](const KeyRebind* rb, DWORD originalVk, DWORD capturedVk) -> bool {
+                    if (capturedVk != 0) {
+                        KeyRebind capturedCandidate;
+                        capturedCandidate.enabled = true;
+                        capturedCandidate.fromKey = capturedVk;
+                        if (DoesKeyRebindTriggerCannotType(capturedCandidate)) return false;
+                    }
+
+                    KeyRebind candidate;
+                    if (rb != nullptr) {
+                        candidate = *rb;
+                    }
+                    if (candidate.fromKey == 0) {
+                        candidate.fromKey = originalVk;
+                        candidate.enabled = true;
+                    }
+
+                    return !DoesKeyRebindTriggerCannotType(candidate);
                 };
 
                 auto normalizeModifierVkForDisplay = [](DWORD vk, DWORD scanCodeWithFlags) -> DWORD {
@@ -1625,20 +1818,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     };
 
                     auto isNonTypableTextVk = [&](DWORD vk) -> bool {
-                        if (isModifierVk(vk) || isMouseButtonVk(vk) || isScrollWheelVk(vk)) return true;
-                        switch (vk) {
-                        case VK_BACK:
-                        case VK_CAPITAL:
-                        case VK_DELETE:
-                        case VK_HOME:
-                        case VK_INSERT:
-                        case VK_END:
-                        case VK_PRIOR:
-                        case VK_NEXT:
-                            return true;
-                        default:
-                            return false;
-                        }
+                        if (vk == 0) return false;
+                        KeyRebind candidate;
+                        candidate.enabled = true;
+                        candidate.fromKey = vk;
+                        return DoesKeyRebindTriggerCannotType(candidate);
                     };
 
                     auto hasShiftLayerOverride = [&](const KeyRebind* rb, DWORD originalVk) -> bool {
@@ -1693,29 +1877,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         return displayScan;
                     };
 
-                    auto isModifierTriggerScan = [&](DWORD triggerScan, DWORD triggerVk) -> bool {
-                        if ((triggerScan & 0xFF) == 0) return false;
-
-                        DWORD scanVk = MapVirtualKey(triggerScan, MAPVK_VSC_TO_VK_EX);
-                        if (scanVk == 0 && (triggerScan & 0xFF00) != 0) {
-                            scanVk = MapVirtualKey((triggerScan & 0xFF), MAPVK_VSC_TO_VK_EX);
-                        }
-                        if (scanVk == 0) scanVk = triggerVk;
-
-                        return isModifierVk(scanVk);
-                    };
-
                     auto cannotTypeFor = [&](const KeyRebind* rb, DWORD originalVk) -> bool {
-                        if (isTriggerOutputDisabled(rb)) return false;
-                        const DWORD triggerVk = resolveTriggerVkFor(rb, originalVk);
-                        const DWORD triggerScan = resolveTriggerScanFor(rb, originalVk);
-                        if (isModifierTriggerScan(triggerScan, triggerVk)) return true;
-                        if (isScrollWheelVk(triggerVk)) return true;
-                        if (isMouseButtonVk(triggerVk)) return true;
-                        if (triggerVk == VK_BACK || triggerVk == VK_CAPITAL) return true;
-                        if (triggerVk == VK_DELETE || triggerVk == VK_HOME || triggerVk == VK_INSERT ||
-                            triggerVk == VK_END || triggerVk == VK_PRIOR || triggerVk == VK_NEXT) return true;
-                        return false;
+                        KeyRebind candidate;
+                        if (rb != nullptr) {
+                            candidate = *rb;
+                        }
+                        if (candidate.fromKey == 0) {
+                            candidate.fromKey = originalVk;
+                            candidate.enabled = true;
+                        }
+                        return DoesKeyRebindTriggerCannotType(candidate);
                     };
 
                     auto typesValueForDisplay = [&](const KeyRebind* rb, DWORD originalVk) -> std::string {
@@ -3090,27 +3261,15 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutBindIndex];
                                     bool captureAccepted = true;
                                     if (s_layoutBindTarget == LayoutBindTarget::FullOutputVk) {
-                                        r.toKey = capturedVk;
-                                        r.triggerOutputDisabled = false;
-                                        r.baseOutputDisabled = false;
-                                        r.customOutputUnicode = 0;
                                         r.customOutputScanCode = 0;
-                                        r.baseOutputShifted = false;
-                                        r.shiftLayerEnabled = false;
-                                        r.shiftLayerUsesCapsLock = false;
-                                        r.shiftLayerOutputDisabled = false;
-                                        r.shiftLayerOutputVK = 0;
-                                        r.shiftLayerOutputUnicode = 0;
-                                        r.shiftLayerOutputShifted = false;
-                                        r.customOutputVK = capturedVk;
+                                        r.toKey = capturedVk;
+                                        setFullRebindState(r, r.fromKey);
                                         if (s_layoutBindIndex >= 0 && s_layoutBindIndex < (int)s_rebindUnicodeTextEdit.size()) {
                                             s_rebindUnicodeTextEdit[s_layoutBindIndex].clear();
                                         }
-
-                                        clearBaseTypesOverrideIfDefault(r, r.fromKey);
                                         g_configIsDirty = true;
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TypesVk) {
-                                        if (cannotTypeFor(&r, r.fromKey) || isNonTypableTextVk(capturedVk)) {
+                                        if (!canAcceptTypesVkCaptureFor(&r, r.fromKey, capturedVk)) {
                                             captureAccepted = false;
                                         } else {
                                             r.baseOutputDisabled = false;
@@ -3125,7 +3284,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                             g_configIsDirty = true;
                                         }
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TypesVkShift) {
-                                        if (cannotTypeFor(&r, r.fromKey) || isNonTypableTextVk(capturedVk)) {
+                                        if (!canAcceptTypesVkCaptureFor(&r, r.fromKey, capturedVk)) {
                                             captureAccepted = false;
                                         } else {
                                             r.shiftLayerEnabled = true;
@@ -3141,18 +3300,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                         r.triggerOutputDisabled = false;
 
                                         if (!s_layoutContextSplitMode) {
-                                            r.baseOutputDisabled = false;
-                                            r.customOutputUnicode = 0;
                                             r.customOutputScanCode = 0;
-                                            r.baseOutputShifted = false;
-                                            r.shiftLayerEnabled = false;
-                                            r.shiftLayerUsesCapsLock = false;
-                                            r.shiftLayerOutputDisabled = false;
-                                            r.shiftLayerOutputVK = 0;
-                                            r.shiftLayerOutputUnicode = 0;
-                                            r.shiftLayerOutputShifted = false;
-                                            r.customOutputVK = capturedVk;
-                                            clearBaseTypesOverrideIfDefault(r, r.fromKey);
+                                            setFullRebindState(r, r.fromKey);
                                         }
                                         g_configIsDirty = true;
                                     }
@@ -4120,14 +4269,24 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     if (found->group == SG_Raw) return false;
                                     if (s_scanFilterGroup >= 0 && found->group != s_scanFilterGroup) return false;
 
+                                    const DWORD requestedVk = customLayoutSourceVkFromScan(requestedScan);
+                                    if (requestedVk == 0) return false;
+
                                     idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                     s_layoutContextPreferredIndex = idx;
                                     if (idx < 0) return false;
 
                                     auto& rr = g_config.keyRebinds.rebinds[idx];
+                                    rr.toKey = requestedVk;
                                     rr.triggerOutputDisabled = false;
                                     rr.useCustomOutput = true;
                                     rr.customOutputScanCode = requestedScan;
+                                    if (!s_layoutContextSplitMode) {
+                                        setFullRebindState(rr, rr.fromKey);
+                                        if (idx >= 0 && idx < (int)s_rebindUnicodeTextEdit.size()) {
+                                            s_rebindUnicodeTextEdit[idx].clear();
+                                        }
+                                    }
                                     g_configIsDirty = true;
                                     r = &rr;
                                     return true;
@@ -4654,6 +4813,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     ImGui::EndPopup();
                 }
 
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                if (const int requestedTextOverrideBind = ConsumeGuiTestOpenRebindTextOverrideBindRequest();
+                    requestedTextOverrideBind >= 0 && requestedTextOverrideBind < (int)g_config.keyRebinds.rebinds.size()) {
+                    s_rebindTextOverrideVKToBind = requestedTextOverrideBind;
+                }
+#endif
+
                 bool is_text_vk_binding = (s_rebindTextOverrideVKToBind != -1);
                 if (is_text_vk_binding) { MarkRebindBindingActive(); }
                 if (is_text_vk_binding) { ImGui::OpenPopup(trc("inputs.bind_text_override_vk")); }
@@ -4675,17 +4841,24 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             s_rebindTextOverrideVKToBind = -1;
                             ImGui::CloseCurrentPopup();
                         } else {
+                            bool closePopup = true;
                             if (s_rebindTextOverrideVKToBind >= 0 &&
                                 s_rebindTextOverrideVKToBind < (int)g_config.keyRebinds.rebinds.size()) {
                                 auto& rebind = g_config.keyRebinds.rebinds[s_rebindTextOverrideVKToBind];
-                                rebind.useCustomOutput = true;
-                                rebind.customOutputVK = capturedVk;
-                                g_configIsDirty = true;
+                                if (canAcceptTypesVkCaptureFor(&rebind, rebind.fromKey, capturedVk)) {
+                                    rebind.useCustomOutput = true;
+                                    rebind.customOutputVK = capturedVk;
+                                    g_configIsDirty = true;
+                                } else {
+                                    closePopup = false;
+                                }
                                 (void)capturedLParam;
                                 (void)capturedIsMouse;
                             }
-                            s_rebindTextOverrideVKToBind = -1;
-                            ImGui::CloseCurrentPopup();
+                            if (closePopup) {
+                                s_rebindTextOverrideVKToBind = -1;
+                                ImGui::CloseCurrentPopup();
+                            }
                         }
                     }
 

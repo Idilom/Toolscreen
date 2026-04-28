@@ -192,13 +192,10 @@ if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
         if (openPresetConfirm) {
             ImGui::OpenPopup(trc("ninjabrain.preset_confirm_title"));
         }
-        if (const ImGuiViewport* presetConfirmViewport = ImGui::GetMainViewport()) {
-            ImGui::SetNextWindowPos(presetConfirmViewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        } else {
-            const ImGuiIO& io = ImGui::GetIO();
-            ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing,
-                                    ImVec2(0.5f, 0.5f));
-        }
+        const float ninjabrainModalMinWidth =
+            (std::clamp)(ImGui::GetWindowSize().x * 0.4f, 360.0f, 520.0f);
+        SetNextSettingsModalCentered();
+        ImGui::SetNextWindowSizeConstraints(ImVec2(ninjabrainModalMinWidth, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
         if (ImGui::BeginPopupModal(trc("ninjabrain.preset_confirm_title"), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
             const NinjabrainPresetDefinition* pendingPreset = findNinjabrainPresetById(s_pendingNinjabrainPresetId);
             if (pendingPreset == nullptr) {
@@ -253,6 +250,16 @@ if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", trc("ninjabrain.tooltip_only_on_obs"));
+        if (ImGui::Checkbox((std::string(trc("ninjabrain.hide_if_stale")) + "##nb").c_str(), &nb.hideIfStale)) {
+            changed = true;
+        }
+        if (nb.hideIfStale) {
+            ImGui::Text("%s", trc("ninjabrain.hide_if_stale_delay"));
+            ImGui::SameLine();
+            if (Spinner("##nbHideIfStaleDelay", &nb.hideIfStaleDelaySeconds, 1, 1, 3600, 80.0f, 1.0f)) {
+                changed = true;
+            }
+        }
 
         ImGui::Columns(2, "nb_render_cols", false);
         ImGui::SetColumnWidth(0, kNinjabrainLabelColumnWidth);
@@ -915,11 +922,20 @@ if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
         if (ImGui::Button(trc("ninjabrain.reset_button"))) {
             ImGui::OpenPopup(trc("ninjabrain.reset_title"));
         }
+        const float ninjabrainResetModalMinWidth =
+            (std::clamp)(ImGui::GetWindowSize().x * 0.4f, 360.0f, 520.0f);
+        SetNextSettingsModalCentered();
+        ImGui::SetNextWindowSizeConstraints(ImVec2(ninjabrainResetModalMinWidth, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
         if (ImGui::BeginPopupModal(trc("ninjabrain.reset_title"), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text("%s", trc("ninjabrain.reset_confirm"));
             ImGui::Separator();
             if (ImGui::Button(trc("button.confirm_reset"), ImVec2(120, 0))) {
-                nb = NinjabrainOverlayConfig{};
+                Config defaultConfig;
+                if (LoadEmbeddedDefaultConfig(defaultConfig)) {
+                    nb = std::move(defaultConfig.ninjabrainOverlay);
+                } else {
+                    nb = NinjabrainOverlayConfig{};
+                }
                 changed = true;
                 s_pendingNinjabrainPresetId.clear();
                 s_ninjabrainFontPickerState = {};

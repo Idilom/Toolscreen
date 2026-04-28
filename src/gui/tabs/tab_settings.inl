@@ -30,9 +30,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.other"))) {
         trc("settings.capture_streaming"),
         trc("settings.hide_animations_in_game"),
         trc("settings.enable_virtual_camera"),
+        trc("settings.capture_fake_cursor_overlay"),
         "capture",
         "streaming",
-        "virtual camera"
+        "virtual camera",
+        "cursor"
     });
     const bool showAdvancedSettingsSection = ShouldRenderConfigSearchSection(showAllSettingsSections, {
         trc("config_mode.advanced"),
@@ -144,6 +146,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.other"))) {
         } else {
             HelpMarker(trc("settings.tooltip.virtual_camera"));
         }
+
+        if (ImGui::Checkbox(trc("settings.capture_fake_cursor_overlay"), &g_config.captureFakeCursor)) {
+            g_configIsDirty = true;
+        }
+        ImGui::SameLine();
+        HelpMarker(trc("settings.tooltip.capture_fake_cursor"));
     }
 
     if (showAdvancedSettingsSection) {

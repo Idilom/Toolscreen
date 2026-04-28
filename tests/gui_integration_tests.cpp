@@ -1,5 +1,7 @@
 #include "common/i18n.h"
+#include "common/ninjabrain_information_messages.h"
 #include "common/font_assets.h"
+#include "common/mode_dimensions.h"
 #include "common/profiler.h"
 #include "common/utils.h"
 #include "config/config_toml.h"
@@ -467,6 +469,8 @@ bool ContainsFileName(const std::vector<std::string>& fileNames, std::string_vie
 }
 
 void ResetGlobalTestState(const std::filesystem::path& root) {
+    StopNinjabrainClient();
+
     g_toolscreenPath = root.wstring();
     g_modeFilePath = (root / "mode.txt").wstring();
     g_stateFilePath = (root / "state.txt").wstring();
@@ -601,8 +605,8 @@ class ScopedVisualNinjabrainPreviewSession {
         int originalModeIdIndex_ = 0;
 };
 
-void RenderModeOverlayFrame(DummyWindow& window, const Config& config, const ModeConfig& mode, GLuint gameTextureId,
-                            bool renderGui);
+bool RenderModeOverlayFrame(DummyWindow& window, const Config& config, const ModeConfig& mode, GLuint gameTextureId = 0,
+                            bool renderGui = false, bool expectRendered = true);
 const ModeConfig& FindModeOrThrow(std::string_view modeId);
 
 void RenderSettingsFrame(DummyWindow& window, const char* topLevelTabLabel, const char* inputsSubTabLabel = nullptr) {
@@ -1345,9 +1349,12 @@ void ResetOverlayRenderTestResources() {
     InitializeGPUResources();
 }
 
-void RenderModeOverlayFrame(DummyWindow& window, const Config& config, const ModeConfig& mode, GLuint gameTextureId = 0,
-                            bool renderGui = false) {
-    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
+bool RenderModeOverlayFrame(DummyWindow& window, const Config& config, const ModeConfig& mode, GLuint gameTextureId,
+                            bool renderGui, bool expectRendered) {
+    if (!window.hasModernGL()) {
+        std::cout << "SKIP (no GL 3.3+)" << std::endl;
+        return false;
+    }
     Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
 
     GLState state{};
@@ -1357,7 +1364,10 @@ void RenderModeOverlayFrame(DummyWindow& window, const Config& config, const Mod
     const int surfaceHeight = (std::max)(1, GetCachedWindowHeight());
     const bool rendered = RenderModeOverlaysForIntegrationTest(config, mode, state, surfaceWidth, surfaceHeight, 0, 0,
                                                                surfaceWidth, surfaceHeight, false, gameTextureId, renderGui);
-    Expect(rendered, "Expected mode overlay render path to produce overlay output.");
+    if (expectRendered) {
+        Expect(rendered, "Expected mode overlay render path to produce overlay output.");
+    }
+    return rendered;
 }
 
 template <typename AssertFn>
@@ -1724,6 +1734,8 @@ void PopulateRichConfigFixture() {
     g_config.ninjabrainOverlay.showBoatStateInTopBar = true;
     g_config.ninjabrainOverlay.boatStateSize = 26.0f;
     g_config.ninjabrainOverlay.boatStateMarginRight = 14.0f;
+    g_config.ninjabrainOverlay.hideIfStale = true;
+    g_config.ninjabrainOverlay.hideIfStaleDelaySeconds = 37;
 
     MirrorConfig verifierMirror;
     verifierMirror.name = kVerifierMirrorName;
@@ -2273,6 +2285,9 @@ void VerifyRichWindowOverlays() {
     Expect(ninjabrain.showBoatStateInTopBar, "Expected Ninjabrain showBoatStateInTopBar to roundtrip.");
     ExpectFloatNear(ninjabrain.boatStateSize, 26.0f, "Expected Ninjabrain boatStateSize to roundtrip.");
     ExpectFloatNear(ninjabrain.boatStateMarginRight, 14.0f, "Expected Ninjabrain boatStateMarginRight to roundtrip.");
+    Expect(ninjabrain.hideIfStale, "Expected Ninjabrain hideIfStale to roundtrip.");
+    Expect(ninjabrain.hideIfStaleDelaySeconds == 37,
+           "Expected Ninjabrain hideIfStaleDelaySeconds to roundtrip.");
 }
 
 void VerifyRichBrowserOverlays() {

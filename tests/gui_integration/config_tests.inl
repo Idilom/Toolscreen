@@ -14,6 +14,18 @@ void RunConfigDefaultLoadTest(TestRunMode runMode = TestRunMode::Automated) {
     Expect(!g_config.defaultMode.empty(), "Expected loaded config to have a default mode.");
     Expect(g_config.keyRebinds.indicatorMode == 0,
            "Expected default config load to leave the key rebind indicator disabled.");
+        Expect(g_config.ninjabrainOverlay.relativeTo == "topLeftScreen",
+            "Expected default config load to take the Ninjabrain overlay anchor from embedded default.toml.");
+        Expect(g_config.ninjabrainOverlay.x == 0 && g_config.ninjabrainOverlay.y == 0,
+            "Expected default config load to reset the Ninjabrain overlay position to the preset defaults.");
+        Expect(g_config.ninjabrainOverlay.customFontPath == "fonts/OpenSans-Regular.ttf",
+            "Expected default config load to use the bundled OpenSans Ninjabrain overlay font.");
+        ExpectFloatNear(g_config.ninjabrainOverlay.overlayScale, 0.30000001192092896f,
+                  "Expected default config load to apply the Ninjabrain Bot preset overlay scale.");
+        Expect(!g_config.ninjabrainOverlay.onlyOnMyScreen && !g_config.ninjabrainOverlay.onlyOnObs,
+            "Expected default config load to leave both Ninjabrain visibility filters disabled.");
+        Expect(!g_config.ninjabrainOverlay.hideIfStale && g_config.ninjabrainOverlay.hideIfStaleDelaySeconds == 30,
+            "Expected default config load to use the default stale-hide Ninjabrain settings.");
 
     if (runMode == TestRunMode::Visual) {
         RunVisualLoop(window, "config-default-load", &RenderInteractiveSettingsFrame);
@@ -119,6 +131,8 @@ void RunConfigLoadEmbeddedNinjabrainPresetsTest(TestRunMode runMode = TestRunMod
         "Expected the compact preset to define the current five-column layout.");
     Expect(!compactPreset->overlay.showBoatStateInTopBar,
         "Expected the compact preset to keep the top-bar boat state disabled by default.");
+    Expect(!compactPreset->overlay.hideIfStale && compactPreset->overlay.hideIfStaleDelaySeconds == 10,
+        "Expected the compact preset to define the stale-hide defaults.");
     Expect(compactPreset->overlay.columns.front().header == "Location",
         "Expected the compact preset to rename the coords column header to Location.");
 
@@ -140,6 +154,10 @@ void RunConfigLoadEmbeddedNinjabrainPresetsTest(TestRunMode runMode = TestRunMod
               "Expected the Ninjabrain Bot preset failed-result left margin to come from TOML.");
     Expect(!ninjabrainBotPreset->overlay.onlyOnMyScreen,
         "Expected the Ninjabrain Bot preset to render outside the local-only path.");
+    Expect(!ninjabrainBotPreset->overlay.onlyOnObs,
+        "Expected the Ninjabrain Bot preset to keep the OBS-only filter disabled by default.");
+    Expect(!ninjabrainBotPreset->overlay.hideIfStale && ninjabrainBotPreset->overlay.hideIfStaleDelaySeconds == 10,
+        "Expected the Ninjabrain Bot preset to define the stale-hide defaults.");
 
     if (runMode == TestRunMode::Visual) {
      RunVisualLoop(window, "config-load-embedded-ninjabrain-presets", &RenderInteractiveSettingsFrame);
@@ -945,6 +963,153 @@ showIndicator = true
                       runMode);
 }
 
+void RunConfigLoadKeyRebindCannotTypeClearsTypedOutputTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_key_rebind_cannot_type_clears_typed_output",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[keyRebinds]
+enabled = true
+resolveRebindTargetsForHotkeys = false
+toggleHotkey = []
+
+[[keyRebinds.rebinds]]
+fromKey = 74
+toKey = 36
+enabled = true
+useCustomOutput = true
+baseOutputDisabled = true
+customOutputVK = 75
+customOutputUnicode = "U+00F8"
+customOutputScanCode = 30
+baseOutputShifted = true
+shiftLayerEnabled = true
+shiftLayerUsesCapsLock = true
+shiftLayerOutputDisabled = true
+shiftLayerOutputVK = 76
+shiftLayerOutputUnicode = "U+00D8"
+shiftLayerOutputShifted = true
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-key-rebind-cannot-type-clears-typed-output");
+                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
+
+                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+                          Expect(rebind.useCustomOutput,
+                                 "Expected cannot-type sanitization to preserve trigger-side scan overrides.");
+                          Expect(rebind.customOutputScanCode == 30,
+                                 "Expected cannot-type sanitization to keep the trigger-side scan override.");
+                          Expect(!rebind.baseOutputDisabled,
+                                 "Expected cannot-type sanitization to clear the base typed-output disabled flag.");
+                          Expect(rebind.customOutputVK == 0,
+                                 "Expected cannot-type sanitization to clear invalid base typed-output VK overrides.");
+                          Expect(rebind.customOutputUnicode == 0,
+                                 "Expected cannot-type sanitization to clear invalid base typed-output Unicode overrides.");
+                          Expect(!rebind.baseOutputShifted,
+                                 "Expected cannot-type sanitization to clear invalid base shifted text state.");
+                          Expect(!rebind.shiftLayerEnabled,
+                                 "Expected cannot-type sanitization to disable invalid shift-layer typed output.");
+                          Expect(!rebind.shiftLayerUsesCapsLock,
+                                 "Expected cannot-type sanitization to clear invalid shift-layer Caps Lock state.");
+                          Expect(!rebind.shiftLayerOutputDisabled,
+                                 "Expected cannot-type sanitization to clear invalid shift-layer disabled state.");
+                          Expect(rebind.shiftLayerOutputVK == 0,
+                                 "Expected cannot-type sanitization to clear invalid shift-layer VK overrides.");
+                          Expect(rebind.shiftLayerOutputUnicode == 0,
+                                 "Expected cannot-type sanitization to clear invalid shift-layer Unicode overrides.");
+                          Expect(!rebind.shiftLayerOutputShifted,
+                                 "Expected cannot-type sanitization to clear invalid shift-layer shifted text state.");
+
+                          SaveAndReloadCurrentConfig();
+                          ExpectConfigLoadSucceeded("config-load-key-rebind-cannot-type-clears-typed-output reload");
+                          Expect(g_config.keyRebinds.rebinds.size() == 1,
+                                 "Expected the sanitized key rebind to survive the save-and-reload roundtrip.");
+
+                          const KeyRebind& reloadedRebind = g_config.keyRebinds.rebinds.front();
+                          Expect(reloadedRebind.useCustomOutput,
+                                 "Expected save sanitization to preserve trigger-side scan overrides after reload.");
+                          Expect(reloadedRebind.customOutputScanCode == 30,
+                                 "Expected save sanitization to preserve the trigger-side scan override after reload.");
+                          Expect(reloadedRebind.customOutputVK == 0 && reloadedRebind.customOutputUnicode == 0,
+                                 "Expected save sanitization to keep typed-output overrides cleared after reload.");
+                          Expect(!reloadedRebind.baseOutputDisabled && !reloadedRebind.baseOutputShifted,
+                                 "Expected save sanitization to keep base typed-output flags cleared after reload.");
+                          Expect(!reloadedRebind.shiftLayerEnabled && !reloadedRebind.shiftLayerUsesCapsLock &&
+                                     !reloadedRebind.shiftLayerOutputDisabled && !reloadedRebind.shiftLayerOutputShifted &&
+                                     reloadedRebind.shiftLayerOutputVK == 0 && reloadedRebind.shiftLayerOutputUnicode == 0,
+                                 "Expected save sanitization to keep shift-layer typed-output state cleared after reload.");
+
+                          const std::string savedToml = ReadTextFileUtf8(GetCurrentConfigPath());
+                          Expect(savedToml.find("customOutputVK = 0") != std::string::npos,
+                                 "Expected the saved config TOML to persist a cleared base typed-output VK.");
+                          Expect(savedToml.find("customOutputUnicode = 0") != std::string::npos,
+                                 "Expected the saved config TOML to persist a cleared base typed-output Unicode value.");
+                          Expect(savedToml.find("baseOutputDisabled = false") != std::string::npos,
+                                 "Expected the saved config TOML to persist a cleared base typed-output disabled flag.");
+                          Expect(savedToml.find("shiftLayerEnabled = false") != std::string::npos,
+                                 "Expected the saved config TOML to persist a cleared shift-layer typed-output flag.");
+                          Expect(savedToml.find("shiftLayerOutputUnicode = 0") != std::string::npos,
+                                 "Expected the saved config TOML to persist a cleared shift-layer Unicode value.");
+                      },
+                      runMode);
+}
+
+void RunConfigPublishKeyRebindCannotTypeClearsTypedOutputTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    const std::filesystem::path root = PrepareCaseDirectory("config_publish_key_rebind_cannot_type_clears_typed_output");
+    ResetGlobalTestState(root);
+
+    Config config;
+    config.keyRebinds.enabled = true;
+    config.keyRebinds.resolveRebindTargetsForHotkeys = false;
+
+    KeyRebind rebind;
+    rebind.fromKey = 'J';
+    rebind.toKey = VK_HOME;
+    rebind.enabled = true;
+    rebind.useCustomOutput = true;
+    rebind.baseOutputDisabled = true;
+    rebind.customOutputVK = 'K';
+    rebind.customOutputUnicode = 0x00F8;
+    rebind.customOutputScanCode = 30;
+    rebind.baseOutputShifted = true;
+    rebind.shiftLayerEnabled = true;
+    rebind.shiftLayerUsesCapsLock = true;
+    rebind.shiftLayerOutputDisabled = true;
+    rebind.shiftLayerOutputVK = 'L';
+    rebind.shiftLayerOutputUnicode = 0x00D8;
+    rebind.shiftLayerOutputShifted = true;
+    config.keyRebinds.rebinds.push_back(rebind);
+
+    PublishConfigSnapshot(config);
+
+    auto publishedConfig = GetConfigSnapshot();
+    Expect(publishedConfig != nullptr,
+           "Expected config publish sanitization test to publish a config snapshot.");
+    Expect(publishedConfig->keyRebinds.rebinds.size() == 1,
+           "Expected config publish sanitization test to publish exactly one key rebind.");
+
+    const KeyRebind& publishedRebind = publishedConfig->keyRebinds.rebinds.front();
+    Expect(publishedRebind.useCustomOutput,
+           "Expected config publish sanitization to preserve trigger-side scan overrides.");
+    Expect(publishedRebind.customOutputScanCode == 30,
+           "Expected config publish sanitization to keep the trigger-side scan override.");
+    Expect(!publishedRebind.baseOutputDisabled && !publishedRebind.baseOutputShifted,
+           "Expected config publish sanitization to clear base typed-output flags.");
+    Expect(publishedRebind.customOutputVK == 0 && publishedRebind.customOutputUnicode == 0,
+           "Expected config publish sanitization to clear base typed-output overrides.");
+    Expect(!publishedRebind.shiftLayerEnabled && !publishedRebind.shiftLayerUsesCapsLock &&
+               !publishedRebind.shiftLayerOutputDisabled && !publishedRebind.shiftLayerOutputShifted &&
+               publishedRebind.shiftLayerOutputVK == 0 && publishedRebind.shiftLayerOutputUnicode == 0,
+           "Expected config publish sanitization to clear shift-layer typed-output state.");
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "config-publish-key-rebind-cannot-type-clears-typed-output", &RenderInteractiveSettingsFrame);
+    }
+}
+
 void RunConfigLoadFullscreenStretchRepairedTest(TestRunMode runMode = TestRunMode::Automated) {
     RunConfigLoadCase("config_load_fullscreen_stretch_repaired",
                       []() {
@@ -982,6 +1147,448 @@ void RunConfigLoadFullscreenStretchRepairedTest(TestRunMode runMode = TestRunMod
                       },
                       runMode);
 }
+
+        void RunConfigLoadFullscreenManualDimensionsPreservedTest(TestRunMode runMode = TestRunMode::Automated) {
+            RunConfigLoadCase("config_load_fullscreen_manual_dimensions_preserved",
+                     []() {
+                         Config config;
+                         config.defaultMode = "Fullscreen";
+
+                         ModeConfig fullscreenMode;
+                         fullscreenMode.id = "Fullscreen";
+                         fullscreenMode.useRelativeSize = false;
+                         fullscreenMode.relativeWidth = -1.0f;
+                         fullscreenMode.relativeHeight = -1.0f;
+                         fullscreenMode.width = 1280;
+                         fullscreenMode.height = 720;
+                         fullscreenMode.manualWidth = 1280;
+                         fullscreenMode.manualHeight = 720;
+                         fullscreenMode.stretch.enabled = false;
+                         fullscreenMode.stretch.x = 33;
+                         fullscreenMode.stretch.y = 44;
+                         fullscreenMode.stretch.width = 55;
+                         fullscreenMode.stretch.height = 66;
+                         config.modes.push_back(fullscreenMode);
+
+                         WriteConfigFixtureToDisk(config);
+                     },
+                     []() {
+                         ExpectConfigLoadSucceeded("config-load-fullscreen-manual-dimensions-preserved");
+                         const ModeConfig& fullscreenMode = FindModeOrThrow("Fullscreen");
+
+                         Expect(!fullscreenMode.useRelativeSize,
+                             "Expected Fullscreen manual sizing to stay in manual-pixel mode after recalculation.");
+                         Expect(fullscreenMode.relativeWidth < 0.0f && fullscreenMode.relativeHeight < 0.0f,
+                             "Expected Fullscreen manual sizing to keep relative dimensions disabled.");
+                         Expect(fullscreenMode.width == 1280 && fullscreenMode.height == 720,
+                             "Expected Fullscreen manual render dimensions to preserve the configured internal size.");
+                         Expect(fullscreenMode.manualWidth == 1280 && fullscreenMode.manualHeight == 720,
+                             "Expected Fullscreen manual dimensions to preserve their persisted values.");
+                         Expect(fullscreenMode.stretch.enabled, "Expected Fullscreen stretch to remain forced on.");
+                         Expect(fullscreenMode.stretch.x == 0 && fullscreenMode.stretch.y == 0,
+                             "Expected Fullscreen stretch origin to stay pinned to the top-left corner.");
+                     },
+                     runMode);
+        }
+
+        void RunConfigLoadFullscreenRelativeDimensionsPreservedTest(TestRunMode runMode = TestRunMode::Automated) {
+            constexpr float kRelativeWidth = 0.625f;
+            constexpr float kRelativeHeight = 0.4f;
+            int expectedWidth = 1;
+            int expectedHeight = 1;
+
+            RunConfigLoadCase("config_load_fullscreen_relative_dimensions_preserved",
+                     [&]() {
+                         Config config;
+                         config.defaultMode = "Fullscreen";
+
+                         ModeConfig fullscreenMode;
+                         fullscreenMode.id = "Fullscreen";
+                         fullscreenMode.useRelativeSize = true;
+                         fullscreenMode.relativeWidth = kRelativeWidth;
+                         fullscreenMode.relativeHeight = kRelativeHeight;
+                         fullscreenMode.width = 999;
+                         fullscreenMode.height = 555;
+                         fullscreenMode.manualWidth = 1234;
+                         fullscreenMode.manualHeight = 678;
+                         fullscreenMode.stretch.enabled = false;
+                         fullscreenMode.stretch.x = 33;
+                         fullscreenMode.stretch.y = 44;
+                         fullscreenMode.stretch.width = 55;
+                         fullscreenMode.stretch.height = 66;
+                         config.modes.push_back(fullscreenMode);
+
+                         const int liveScreenWidth = (std::max)(1, GetCachedWindowWidth());
+                         const int liveScreenHeight = (std::max)(1, GetCachedWindowHeight());
+                         expectedWidth = (std::max)(1, static_cast<int>(std::lround(kRelativeWidth * static_cast<float>(liveScreenWidth))));
+                         expectedHeight = (std::max)(1, static_cast<int>(std::lround(kRelativeHeight * static_cast<float>(liveScreenHeight))));
+
+                         WriteConfigFixtureToDisk(config);
+                     },
+                     [&]() {
+                         ExpectConfigLoadSucceeded("config-load-fullscreen-relative-dimensions-preserved");
+                         const ModeConfig& fullscreenMode = FindModeOrThrow("Fullscreen");
+
+                         Expect(fullscreenMode.useRelativeSize,
+                             "Expected Fullscreen percentage sizing to stay marked as relative after recalculation.");
+                         ExpectFloatNear(fullscreenMode.relativeWidth, kRelativeWidth,
+                                "Expected Fullscreen relativeWidth to preserve the configured percentage.");
+                         ExpectFloatNear(fullscreenMode.relativeHeight, kRelativeHeight,
+                                "Expected Fullscreen relativeHeight to preserve the configured percentage.");
+                         Expect(fullscreenMode.width == expectedWidth,
+                             "Expected Fullscreen relative width to be recomputed from the live client width.");
+                         Expect(fullscreenMode.height == expectedHeight,
+                             "Expected Fullscreen relative height to be recomputed from the live client height.");
+                         Expect(fullscreenMode.manualWidth == 1234 && fullscreenMode.manualHeight == 678,
+                             "Expected Fullscreen relative sizing to preserve the persisted manual fallback dimensions.");
+                         Expect(fullscreenMode.stretch.enabled, "Expected Fullscreen stretch to remain forced on.");
+                         Expect(fullscreenMode.stretch.x == 0 && fullscreenMode.stretch.y == 0,
+                             "Expected Fullscreen stretch origin to stay pinned to the top-left corner.");
+                     },
+                     runMode);
+        }
+
+        struct CapturedConfigOriginalWindowMessage {
+            UINT message = 0;
+            WPARAM wParam = 0;
+            LPARAM lParam = 0;
+        };
+
+        static std::vector<CapturedConfigOriginalWindowMessage> g_capturedConfigOriginalWindowMessages;
+
+        static LRESULT CALLBACK CaptureConfigOriginalWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+            (void)hwnd;
+            g_capturedConfigOriginalWindowMessages.push_back({ message, wParam, lParam });
+            return 0;
+        }
+
+        void RunFullscreenRelativeExternalResizeSkipsStaleResendTest(TestRunMode runMode = TestRunMode::Automated) {
+            DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+            const std::filesystem::path root = PrepareCaseDirectory("fullscreen_relative_external_resize_skips_stale_resend");
+            ResetGlobalTestState(root);
+
+            RECT initialClientRect{};
+            Expect(GetClientRect(window.hwnd(), &initialClientRect) != FALSE,
+                "Expected to read the initial client rect for the Fullscreen external-resize regression test.");
+            const int initialClientW = initialClientRect.right - initialClientRect.left;
+            const int initialClientH = initialClientRect.bottom - initialClientRect.top;
+            Expect(initialClientW > 0 && initialClientH > 0,
+                "Expected the Fullscreen external-resize regression test window to have a valid initial client size.");
+            UpdateCachedWindowMetricsFromSize(initialClientW, initialClientH);
+
+            g_config = Config();
+            g_config.defaultMode = "Fullscreen";
+            g_config.restoreWindowedModeOnFullscreenExit = false;
+
+            ModeConfig fullscreenMode;
+            fullscreenMode.id = "Fullscreen";
+            fullscreenMode.useRelativeSize = true;
+            fullscreenMode.relativeWidth = 0.8f;
+            fullscreenMode.relativeHeight = 0.7f;
+            fullscreenMode.width = (std::max)(1, static_cast<int>(std::lround(fullscreenMode.relativeWidth * static_cast<float>(initialClientW))));
+            fullscreenMode.height = (std::max)(1, static_cast<int>(std::lround(fullscreenMode.relativeHeight * static_cast<float>(initialClientH))));
+            fullscreenMode.manualWidth = fullscreenMode.width;
+            fullscreenMode.manualHeight = fullscreenMode.height;
+            fullscreenMode.stretch.enabled = true;
+            fullscreenMode.stretch.x = 0;
+            fullscreenMode.stretch.y = 0;
+            fullscreenMode.stretch.width = initialClientW;
+            fullscreenMode.stretch.height = initialClientH;
+            g_config.modes.push_back(fullscreenMode);
+            PublishConfigSnapshot();
+            g_configLoaded.store(true, std::memory_order_release);
+
+            {
+             std::lock_guard<std::mutex> lock(g_modeIdMutex);
+             g_currentModeId = "Fullscreen";
+             const int nextIndex = 1 - g_currentModeIdIndex.load(std::memory_order_relaxed);
+             g_modeIdBuffers[nextIndex] = "Fullscreen";
+             g_currentModeIdIndex.store(nextIndex, std::memory_order_release);
+            }
+
+            constexpr int kSentinelRequestedW = 321;
+            constexpr int kSentinelRequestedH = 654;
+            Expect(RequestWindowClientResize(window.hwnd(), kSentinelRequestedW, kSentinelRequestedH, "test:prime_resize_state"),
+                "Expected to prime requested resize state for the Fullscreen external-resize regression test.");
+            Expect(window.PumpMessages(), "Expected the Fullscreen external-resize regression test window to stay open after priming.");
+
+            const int staleCachedW = (std::max)(1, initialClientW - 37);
+            const int staleCachedH = (std::max)(1, initialClientH - 23);
+            Expect(staleCachedW != initialClientW || staleCachedH != initialClientH,
+                "Expected the Fullscreen external-resize regression test to stage a stale cached client size.");
+            UpdateCachedWindowMetricsFromSize(staleCachedW, staleCachedH);
+
+            WINDOWPOS pos{};
+            pos.hwnd = window.hwnd();
+            pos.cx = initialClientW;
+            pos.cy = initialClientH;
+            pos.flags = SWP_NOACTIVATE | SWP_NOMOVE;
+
+            const HWND previousSubclassedHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+            const WNDPROC previousOriginalWndProc = g_originalWndProc;
+            g_subclassedHwnd.store(window.hwnd(), std::memory_order_release);
+            g_originalWndProc = &DefWindowProcW;
+
+            try {
+             (void)SubclassedWndProc(window.hwnd(), WM_WINDOWPOSCHANGED, 0, reinterpret_cast<LPARAM>(&pos));
+            } catch (...) {
+             g_originalWndProc = previousOriginalWndProc;
+             g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
+             throw;
+            }
+
+            g_originalWndProc = previousOriginalWndProc;
+            g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
+
+            int requestedW = 0;
+            int requestedH = 0;
+            int previousRequestedW = 0;
+            int previousRequestedH = 0;
+            Expect(GetRecentRequestedWindowClientResizes(requestedW, requestedH, previousRequestedW, previousRequestedH),
+                "Expected requested resize history to be available for the Fullscreen external-resize regression test.");
+            Expect(requestedW == kSentinelRequestedW && requestedH == kSentinelRequestedH,
+                "Expected external resize handling to avoid reposting stale Fullscreen relative WM_SIZE before logic-thread recalculation.");
+
+            if (runMode == TestRunMode::Visual) {
+             RunVisualLoop(window, "fullscreen-relative-external-resize-skips-stale-resend", &RenderInteractiveSettingsFrame);
+            }
+        }
+
+        void RunFullscreenRelativeOsWmSizeOverridesComputedDimensionsTest(TestRunMode runMode = TestRunMode::Automated) {
+            (void)runMode;
+
+            DummyWindow window(kWindowWidth, kWindowHeight, false);
+            const std::filesystem::path root = PrepareCaseDirectory("fullscreen_relative_os_wmsize_overrides_computed_dimensions");
+            ResetGlobalTestState(root);
+
+            RECT clientRect{};
+            Expect(GetClientRect(window.hwnd(), &clientRect) != FALSE,
+                "Expected the Fullscreen WM_SIZE override regression test window to expose a client rect.");
+            const int clientW = clientRect.right - clientRect.left;
+            const int clientH = clientRect.bottom - clientRect.top;
+            Expect(clientW > 0 && clientH > 0,
+                "Expected the Fullscreen WM_SIZE override regression test window to expose a positive client size.");
+            UpdateCachedWindowMetricsFromSize(clientW, clientH);
+
+            constexpr float kRelativeWidth = 0.8f;
+            constexpr float kRelativeHeight = 0.7f;
+            constexpr int kSentinelRequestedW = 321;
+            constexpr int kSentinelRequestedH = 654;
+
+            g_config = Config();
+            g_config.defaultMode = "Fullscreen";
+            g_config.restoreWindowedModeOnFullscreenExit = false;
+
+            ModeConfig fullscreenMode;
+            fullscreenMode.id = "Fullscreen";
+            fullscreenMode.useRelativeSize = true;
+            fullscreenMode.relativeWidth = kRelativeWidth;
+            fullscreenMode.relativeHeight = kRelativeHeight;
+            fullscreenMode.width = 111;
+            fullscreenMode.height = 222;
+            fullscreenMode.manualWidth = 111;
+            fullscreenMode.manualHeight = 222;
+            fullscreenMode.stretch.enabled = true;
+            fullscreenMode.stretch.x = 0;
+            fullscreenMode.stretch.y = 0;
+            fullscreenMode.stretch.width = clientW;
+            fullscreenMode.stretch.height = clientH;
+            g_config.modes.push_back(fullscreenMode);
+            PublishConfigSnapshot();
+            g_configLoaded.store(true, std::memory_order_release);
+
+            {
+             std::lock_guard<std::mutex> lock(g_modeIdMutex);
+             g_currentModeId = "Fullscreen";
+             const int nextIndex = 1 - g_currentModeIdIndex.load(std::memory_order_relaxed);
+             g_modeIdBuffers[nextIndex] = "Fullscreen";
+             g_currentModeIdIndex.store(nextIndex, std::memory_order_release);
+            }
+
+            const int expectedWidth = (std::max)(1, static_cast<int>(std::lround(kRelativeWidth * static_cast<float>(clientW))));
+            const int expectedHeight = (std::max)(1, static_cast<int>(std::lround(kRelativeHeight * static_cast<float>(clientH))));
+            Expect(expectedWidth != clientW || expectedHeight != clientH,
+                "Expected the Fullscreen WM_SIZE override regression test to use an internal render size different from the live client size.");
+
+            RememberRequestedWindowClientResize(kSentinelRequestedW, kSentinelRequestedH);
+
+            const HWND previousSubclassedHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+            const WNDPROC previousOriginalWndProc = g_originalWndProc;
+            g_subclassedHwnd.store(window.hwnd(), std::memory_order_release);
+            g_originalWndProc = &CaptureConfigOriginalWndProc;
+            g_capturedConfigOriginalWindowMessages.clear();
+
+            try {
+             (void)SubclassedWndProc(window.hwnd(), WM_SIZE, SIZE_RESTORED, MAKELPARAM(clientW, clientH));
+
+             Expect(g_capturedConfigOriginalWindowMessages.size() == 1,
+                 "Expected the Fullscreen WM_SIZE override regression test to forward exactly one WM_SIZE to the original window proc.");
+             Expect(g_capturedConfigOriginalWindowMessages.front().message == WM_SIZE,
+                 "Expected the Fullscreen WM_SIZE override regression test to forward a WM_SIZE message.");
+             Expect(LOWORD(g_capturedConfigOriginalWindowMessages.front().lParam) == expectedWidth &&
+                        HIWORD(g_capturedConfigOriginalWindowMessages.front().lParam) == expectedHeight,
+                 "Expected OS-originated Fullscreen WM_SIZE to be overridden with the computed internal render size.");
+
+             int requestedW = 0;
+             int requestedH = 0;
+             int previousRequestedW = 0;
+             int previousRequestedH = 0;
+             Expect(GetRecentRequestedWindowClientResizes(requestedW, requestedH, previousRequestedW, previousRequestedH),
+                 "Expected the Fullscreen WM_SIZE override regression test to populate requested resize history.");
+             Expect(requestedW == expectedWidth && requestedH == expectedHeight,
+                 "Expected OS-originated Fullscreen WM_SIZE overrides to update the requested resize history to the computed size.");
+             Expect(previousRequestedW == kSentinelRequestedW && previousRequestedH == kSentinelRequestedH,
+                 "Expected OS-originated Fullscreen WM_SIZE overrides to replace the previous requested resize history entry.");
+
+             g_capturedConfigOriginalWindowMessages.clear();
+             (void)SubclassedWndProc(window.hwnd(), WM_SIZE, SIZE_RESTORED, MAKELPARAM(expectedWidth, expectedHeight));
+
+             Expect(g_capturedConfigOriginalWindowMessages.size() == 1,
+                 "Expected the Fullscreen WM_SIZE override regression test to forward the synthetic WM_SIZE once.");
+             Expect(LOWORD(g_capturedConfigOriginalWindowMessages.front().lParam) == expectedWidth &&
+                        HIWORD(g_capturedConfigOriginalWindowMessages.front().lParam) == expectedHeight,
+                 "Expected Toolscreen-posted Fullscreen WM_SIZE to pass through without being recomputed again.");
+            } catch (...) {
+             g_originalWndProc = previousOriginalWndProc;
+             g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
+             g_capturedConfigOriginalWindowMessages.clear();
+             throw;
+            }
+
+            g_originalWndProc = previousOriginalWndProc;
+            g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
+            g_capturedConfigOriginalWindowMessages.clear();
+        }
+
+        void RunFullscreenRelativeDisplayDimensionsFollowWindowResizeTest(TestRunMode runMode = TestRunMode::Automated) {
+            (void)runMode;
+
+            ModeConfig fullscreenMode;
+            fullscreenMode.id = "Fullscreen";
+            fullscreenMode.useRelativeSize = true;
+            fullscreenMode.relativeWidth = 0.75f;
+            fullscreenMode.relativeHeight = 0.6f;
+            fullscreenMode.width = 1200;
+            fullscreenMode.height = 700;
+
+            const int initialScreenW = 1600;
+            const int initialScreenH = 900;
+            const int resizedScreenW = 1937;
+            const int resizedScreenH = 1113;
+
+            const int initialDisplayedWidth = ResolveModeDisplayWidth(fullscreenMode, initialScreenW, initialScreenH);
+            const int initialDisplayedHeight = ResolveModeDisplayHeight(fullscreenMode, initialScreenW, initialScreenH);
+            const int resizedDisplayedWidth = ResolveModeDisplayWidth(fullscreenMode, resizedScreenW, resizedScreenH);
+            const int resizedDisplayedHeight = ResolveModeDisplayHeight(fullscreenMode, resizedScreenW, resizedScreenH);
+
+            Expect(initialDisplayedWidth == static_cast<int>(std::lround(fullscreenMode.relativeWidth * static_cast<float>(initialScreenW))),
+                "Expected Fullscreen relative display width to resolve from the initial client width.");
+            Expect(initialDisplayedHeight == static_cast<int>(std::lround(fullscreenMode.relativeHeight * static_cast<float>(initialScreenH))),
+                "Expected Fullscreen relative display height to resolve from the initial client height.");
+            Expect(resizedDisplayedWidth == static_cast<int>(std::lround(fullscreenMode.relativeWidth * static_cast<float>(resizedScreenW))),
+                "Expected Fullscreen relative display width to follow the resized client width immediately.");
+            Expect(resizedDisplayedHeight == static_cast<int>(std::lround(fullscreenMode.relativeHeight * static_cast<float>(resizedScreenH))),
+                "Expected Fullscreen relative display height to follow the resized client height immediately.");
+            Expect(fullscreenMode.width == 1200 && fullscreenMode.height == 700,
+                "Expected display-only relative dimension resolution to avoid mutating the stored Fullscreen GUI dimensions.");
+        }
+
+        void RunFullscreenRelativeGuiPublishPreservesRecalculatedSizeTest(TestRunMode runMode = TestRunMode::Automated) {
+            DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+            const std::filesystem::path root = PrepareCaseDirectory("fullscreen_relative_gui_publish_preserves_recalculated_size");
+            ResetGlobalTestState(root);
+
+            RECT initialClientRect{};
+            Expect(GetClientRect(window.hwnd(), &initialClientRect) != FALSE,
+                "Expected to read the initial client rect for the Fullscreen GUI publish regression test.");
+            const int initialClientW = initialClientRect.right - initialClientRect.left;
+            const int initialClientH = initialClientRect.bottom - initialClientRect.top;
+            Expect(initialClientW > 0 && initialClientH > 0,
+                "Expected the Fullscreen GUI publish regression test window to have a valid initial client size.");
+            UpdateCachedWindowMetricsFromSize(initialClientW, initialClientH);
+
+            constexpr float kRelativeWidth = 0.8f;
+            constexpr float kRelativeHeight = 0.7f;
+
+            g_config = Config();
+            g_sharedConfig = Config();
+            g_config.defaultMode = "Fullscreen";
+
+            ModeConfig fullscreenMode;
+            fullscreenMode.id = "Fullscreen";
+            fullscreenMode.useRelativeSize = true;
+            fullscreenMode.relativeWidth = kRelativeWidth;
+            fullscreenMode.relativeHeight = kRelativeHeight;
+            fullscreenMode.width = (std::max)(1, static_cast<int>(std::lround(kRelativeWidth * static_cast<float>(initialClientW))));
+            fullscreenMode.height = (std::max)(1, static_cast<int>(std::lround(kRelativeHeight * static_cast<float>(initialClientH))));
+            fullscreenMode.manualWidth = fullscreenMode.width;
+            fullscreenMode.manualHeight = fullscreenMode.height;
+            fullscreenMode.stretch.enabled = true;
+            fullscreenMode.stretch.x = 0;
+            fullscreenMode.stretch.y = 0;
+            fullscreenMode.stretch.width = initialClientW;
+            fullscreenMode.stretch.height = initialClientH;
+            g_config.modes.push_back(fullscreenMode);
+
+            PublishGuiConfigSnapshot();
+
+            const int resizedClientW = initialClientW + 137;
+            const int resizedClientH = initialClientH + 91;
+            UpdateCachedWindowMetricsFromSize(resizedClientW, resizedClientH);
+
+            auto publishedBeforeGuiEdit = GetConfigSnapshot();
+            Expect(publishedBeforeGuiEdit != nullptr,
+                "Expected a published config snapshot before staging the Fullscreen GUI publish regression.");
+
+            Config runtimeResolvedConfig = *publishedBeforeGuiEdit;
+            RecalculateModeDimensions(runtimeResolvedConfig, resizedClientW, resizedClientH);
+            PublishConfigSnapshot(runtimeResolvedConfig);
+
+            const int staleWidth = g_config.modes.front().width;
+            const int staleHeight = g_config.modes.front().height;
+            const int expectedWidth = (std::max)(1, static_cast<int>(std::lround(kRelativeWidth * static_cast<float>(resizedClientW))));
+            const int expectedHeight = (std::max)(1, static_cast<int>(std::lround(kRelativeHeight * static_cast<float>(resizedClientH))));
+            Expect(staleWidth != expectedWidth || staleHeight != expectedHeight,
+                "Expected the editable GUI config to keep stale Fullscreen dimensions before the unrelated GUI publish.");
+
+            WindowOverlayConfig overlay;
+            overlay.name = "GUI Publish Overlay";
+            overlay.relativeTo = "centerViewport";
+            g_config.windowOverlays.push_back(overlay);
+            g_configIsDirty.store(true, std::memory_order_release);
+
+            PublishGuiConfigSnapshot();
+
+            auto publishedAfterGuiEdit = GetConfigSnapshot();
+            Expect(publishedAfterGuiEdit != nullptr,
+                "Expected a published config snapshot after the unrelated GUI publish.");
+
+            const ModeConfig* publishedFullscreen = GetModeFromSnapshotOrFallback(*publishedAfterGuiEdit, "Fullscreen");
+            Expect(publishedFullscreen != nullptr,
+                "Expected the published config snapshot to still contain the Fullscreen mode after the unrelated GUI publish.");
+            Expect(publishedFullscreen->useRelativeSize,
+                "Expected the unrelated GUI publish to preserve Fullscreen relative sizing.");
+            ExpectFloatNear(publishedFullscreen->relativeWidth, kRelativeWidth,
+                "Expected the unrelated GUI publish to preserve the Fullscreen relative width percentage.");
+            ExpectFloatNear(publishedFullscreen->relativeHeight, kRelativeHeight,
+                "Expected the unrelated GUI publish to preserve the Fullscreen relative height percentage.");
+            Expect(publishedFullscreen->width == expectedWidth,
+                "Expected the unrelated GUI publish to keep the logic-thread-recalculated Fullscreen width.");
+            Expect(publishedFullscreen->height == expectedHeight,
+                "Expected the unrelated GUI publish to keep the logic-thread-recalculated Fullscreen height.");
+            Expect(publishedFullscreen->stretch.enabled,
+                "Expected the unrelated GUI publish to preserve Fullscreen stretch output.");
+            Expect(publishedFullscreen->stretch.x == 0 && publishedFullscreen->stretch.y == 0,
+                "Expected the unrelated GUI publish to keep the Fullscreen stretch origin pinned to the top-left corner.");
+            Expect(publishedFullscreen->stretch.width == resizedClientW && publishedFullscreen->stretch.height == resizedClientH,
+                "Expected the unrelated GUI publish to keep the Fullscreen stretch size aligned with the resized client area.");
+            Expect(publishedAfterGuiEdit->windowOverlays.size() == 1 && publishedAfterGuiEdit->windowOverlays.front().name == overlay.name,
+                "Expected the unrelated GUI publish to still apply the overlay edit while preserving recalculated Fullscreen dimensions.");
+
+            if (runMode == TestRunMode::Visual) {
+             RunVisualLoop(window, "fullscreen-relative-gui-publish-preserves-recalculated-size", &RenderInteractiveSettingsFrame);
+            }
+        }
 
 void RunConfigLoadPreemptiveSyncExistingModeTest(TestRunMode runMode = TestRunMode::Automated) {
     RunConfigLoadCase("config_load_preemptive_sync_existing_mode",

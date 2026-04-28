@@ -416,6 +416,192 @@ void RunModeMirrorRenderViewportAnchorSizeMatrixTest(TestRunMode runMode = TestR
     CleanupShaders();
 }
 
+void RunModeMirrorRenderRawOutputDynamicBorderSizeTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_raw_output_dynamic_border_size");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Mirror Raw Output Dynamic Border Size";
+
+    MirrorConfig mirror = MakeMirrorRenderTestConfig("Raw Output Dynamic Border Mirror", 17, 11, "topLeftScreen", 28, 24, 1.0f);
+    mirror.output.separateScale = true;
+    mirror.output.scaleX = 3.0f;
+    mirror.output.scaleY = 2.0f;
+    mirror.border.dynamicThickness = 5;
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = 257;
+    mode.height = 211;
+    mode.manualWidth = mode.width;
+    mode.manualHeight = mode.height;
+    mode.mirrorIds = { mirror.name };
+
+    g_config.defaultMode = kModeId;
+    g_config.mirrors = { mirror };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    InitializeMirrorRenderTestResources();
+
+    const SimulatedOverlayGeometry geometry{ "raw-output-dynamic-border", 257, 211, 0, 0, 257, 211 };
+    ScopedTexture2D sourceTexture(geometry.fullW, geometry.fullH,
+                                  MakeSolidRgbaPixels(geometry.fullW, geometry.fullH, 0, 255, 0));
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrameToSimulatedSurface(targetWindow, g_config, g_config.modes.front(), geometry, sourceTexture.id(),
+                                                 [&](const SurfaceSize& surface) {
+            if (runMode != TestRunMode::Automated) {
+                return;
+            }
+
+            std::vector<MirrorConfig> activeMirrors;
+            std::vector<ImageConfig> unusedImages;
+            std::vector<WindowOverlayConfig> unusedWindowOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
+                                         unusedBrowserOverlays, geometry.fullW, geometry.fullH);
+
+            Expect(activeMirrors.size() == 1,
+                   "Expected the raw-output regression test to resolve exactly one active mirror.");
+            const ExpectedMirrorRect expectedRect = ComputeExpectedMirrorRect(activeMirrors[0], surface.width, surface.height,
+                                                                              geometry.gameX, geometry.gameY, geometry.gameW,
+                                                                              geometry.gameH);
+            const ExpectedMirrorRect actualRect = GetCachedMirrorRect(activeMirrors[0].name);
+
+            ExpectMirrorRectNear(actualRect, expectedRect,
+                                 "Raw-output dynamic-border mirror cached bounds should ignore border padding.", 0);
+            ExpectSolidColorRect(expectedRect, surface.height, kExpectedMirrorRenderGreen,
+                                 "Expected the raw-output dynamic-border mirror interior to remain unstretched.");
+
+            const int outsideX = expectedRect.x + expectedRect.width + 3;
+            if (outsideX < surface.width) {
+                ExpectBackgroundPixel(outsideX, expectedRect.y + expectedRect.height / 2, surface.height,
+                                      "Expected pixels just outside the raw-output mirror width to remain background.");
+            }
+        });
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-mirror-render-raw-output-dynamic-border-size",
+                      [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeMirrorRenderLowAlphaVisibilityTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_low_alpha_visibility");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Mirror Low Alpha Visibility";
+
+    MirrorConfig compositeMirror = MakeMirrorRenderTestConfig("Low Opacity Composite Mirror", 18, 12, "topLeftScreen", 24, 32, 4.0f);
+    compositeMirror.rawOutput = false;
+    compositeMirror.opacity = 0.4f;
+    compositeMirror.border.dynamicThickness = 1;
+    compositeMirror.colors.targetColors = { { 0.0f, 1.0f, 0.0f, 1.0f } };
+    compositeMirror.colors.output = { 0.0f, 1.0f, 0.0f, 1.0f };
+    compositeMirror.colors.border = { 1.0f, 0.2f, 0.2f, 1.0f };
+    compositeMirror.colorSensitivity = 0.2f;
+
+    MirrorConfig finalTargetMirror = MakeMirrorRenderTestConfig("Low Alpha Final Target Mirror", 18, 12, "topLeftScreen", 170, 32, 4.0f);
+    finalTargetMirror.rawOutput = false;
+    finalTargetMirror.opacity = 1.0f;
+    finalTargetMirror.border.dynamicThickness = 2;
+    finalTargetMirror.colors.targetColors = { { 0.0f, 1.0f, 0.0f, 1.0f } };
+    finalTargetMirror.colors.output = { 0.0f, 1.0f, 0.0f, 0.4f };
+    finalTargetMirror.colors.border = { 1.0f, 0.8f, 0.1f, 1.0f };
+    finalTargetMirror.colorSensitivity = 0.2f;
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = 320;
+    mode.height = 200;
+    mode.manualWidth = mode.width;
+    mode.manualHeight = mode.height;
+    mode.mirrorIds = { compositeMirror.name, finalTargetMirror.name };
+
+    g_config.defaultMode = kModeId;
+    g_config.mirrors = { compositeMirror, finalTargetMirror };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    InitializeMirrorRenderTestResources();
+
+    const SimulatedOverlayGeometry geometry{ "low-alpha-mirrors", 320, 200, 0, 0, 320, 200 };
+    ScopedTexture2D sourceTexture(geometry.fullW, geometry.fullH,
+                                  MakeSolidRgbaPixels(geometry.fullW, geometry.fullH, 0, 255, 0));
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrameToSimulatedSurface(targetWindow, g_config, g_config.modes.front(), geometry, sourceTexture.id(),
+                                                 [&](const SurfaceSize& surface) {
+            if (runMode != TestRunMode::Automated) {
+                return;
+            }
+
+            std::vector<MirrorConfig> activeMirrors;
+            std::vector<ImageConfig> unusedImages;
+            std::vector<WindowOverlayConfig> unusedWindowOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
+                                         unusedBrowserOverlays, geometry.fullW, geometry.fullH);
+
+            Expect(activeMirrors.size() == 2,
+                   "Expected both low-alpha mirrors to resolve for the low-alpha visibility regression test.");
+
+            const ExpectedMirrorRect compositeRect = GetCachedMirrorRect(compositeMirror.name);
+            const ExpectedMirrorRect finalTargetRect = GetCachedMirrorRect(finalTargetMirror.name);
+
+            Expect(compositeRect.width > 0 && compositeRect.height > 0,
+                   "Expected the low-opacity composite mirror to cache a positive output size.");
+            Expect(finalTargetRect.width > 0 && finalTargetRect.height > 0,
+                   "Expected the low-alpha final-target mirror to cache a positive output size.");
+
+            ExpectFramebufferPixelChannelDominance(compositeRect.x + compositeRect.width / 2,
+                                                   compositeRect.y + compositeRect.height / 2, surface.height, 1, 0.32f,
+                                                   0.18f,
+                                                   "Expected the dynamic-composite low-opacity mirror center to remain visible.");
+            ExpectFramebufferPixelChannelDominance(finalTargetRect.x + finalTargetRect.width / 2,
+                                                   finalTargetRect.y + finalTargetRect.height / 2, surface.height, 1, 0.32f,
+                                                   0.18f,
+                                                   "Expected the final-target low-alpha mirror center to remain visible.");
+
+            if (compositeRect.x > 2) {
+                ExpectBackgroundPixel(compositeRect.x - 2, compositeRect.y + compositeRect.height / 2, surface.height,
+                                      "Expected pixels left of the low-opacity composite mirror to remain background.");
+            }
+            const int finalTargetOutsideX = finalTargetRect.x + finalTargetRect.width + 2;
+            if (finalTargetOutsideX < surface.width) {
+                ExpectBackgroundPixel(finalTargetOutsideX, finalTargetRect.y + finalTargetRect.height / 2, surface.height,
+                                      "Expected pixels right of the low-alpha final-target mirror to remain background.");
+            }
+        });
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-mirror-render-low-alpha-visibility",
+                      [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
 void RunModeMirrorGroupRenderTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
@@ -1256,6 +1442,7 @@ void RunModeNinjabrainOverlayRenderTest(TestRunMode runMode = TestRunMode::Autom
 
     g_config.defaultMode = kModeId;
     g_config.modes = { mode };
+    g_ninjabrainOverlayVisible.store(true, std::memory_order_release);
 
     auto& nb = g_config.ninjabrainOverlay;
     nb.enabled = true;
@@ -1346,29 +1533,65 @@ void RunModeNinjabrainOverlayRenderTest(TestRunMode runMode = TestRunMode::Autom
     data.informationMessages[1].message =
         "Go left 1 blocks, or right 1 blocks, for ~95% certainty after next measurement.";
 
-    PublishNinjabrainData(std::move(data));
+    PublishNinjabrainData(data);
+
+        auto configSnapshot = GetConfigSnapshot();
+        Expect(configSnapshot != nullptr, "Expected the Ninjabrain render fixture to publish a config snapshot.");
+        Expect(configSnapshot->ninjabrainOverlay.enabled,
+            "Expected the published Ninjabrain overlay config snapshot to stay enabled.");
+        Expect(configSnapshot->ninjabrainOverlay.allowedModes.size() == 1 &&
+             configSnapshot->ninjabrainOverlay.allowedModes.front() == kModeId,
+            "Expected the published Ninjabrain overlay config snapshot to keep its allowed mode.");
+
+        auto dataSnapshot = GetNinjabrainDataSnapshot();
+        Expect(dataSnapshot != nullptr, "Expected the Ninjabrain render fixture to publish a data snapshot.");
+        Expect(dataSnapshot->validPrediction && dataSnapshot->resultType == "TRIANGULATION",
+            "Expected the published Ninjabrain render fixture data to contain triangulation results.");
+        Expect(dataSnapshot->lastUpdateTime != std::chrono::steady_clock::time_point{},
+            "Expected the published Ninjabrain render fixture data to record a freshness timestamp.");
+        if (const char* renderFailure = GetNinjabrainOverlayRenderEligibilityFailureForIntegrationTest(kModeId)) {
+            Expect(false, std::string("Expected the Ninjabrain render fixture to be eligible for rendering, but it was blocked: ") +
+                              renderFailure);
+        }
 
     const SurfaceSize surface = GetWindowClientSize(window.hwnd());
     const int sampleX = nb.x + 24;
     const int sampleY = nb.y + 24;
 
-    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+    auto renderAndSample = [&](DummyWindow& targetWindow) {
         RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front());
-        if (runMode == TestRunMode::Automated) {
-            glFinish();
-            const Color sample = ReadFramebufferPixelColor(sampleX, sampleY, surface.height);
-            Expect(!IsColorNear(sample, kExpectedRenderSurfaceClear),
-                   "Expected the NinjaBrain overlay preview fixture to draw an opaque panel into the test surface.");
-        }
+        glFinish();
+        return ReadFramebufferPixelColor(sampleX, sampleY, surface.height);
+    };
+
+    auto renderWithoutOverlayAndSample = [&](DummyWindow& targetWindow) {
+        const bool rendered = RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), 0, false, false);
+        Expect(!rendered, "Expected stale Ninjabrain overlay data to skip overlay rendering.");
+        glFinish();
+        return ReadFramebufferPixelColor(sampleX, sampleY, surface.height);
     };
 
     if (runMode == TestRunMode::Visual) {
         RunVisualLoop(window, "mode-ninjabrain-overlay-render", [&](DummyWindow& visualWindow) {
-            renderAndAssert(visualWindow);
+            (void)renderAndSample(visualWindow);
             visualWindow.PresentSurface();
         });
     } else {
-        renderAndAssert(window);
+        const Color sample = renderAndSample(window);
+        Expect(!IsColorNear(sample, kExpectedRenderSurfaceClear),
+               "Expected the NinjaBrain overlay preview fixture to draw an opaque panel into the test surface.");
+
+        nb.hideIfStale = true;
+        nb.hideIfStaleDelaySeconds = 5;
+        PublishConfigSnapshot();
+
+        NinjabrainData staleData = data;
+        staleData.lastUpdateTime = std::chrono::steady_clock::now() - std::chrono::seconds(nb.hideIfStaleDelaySeconds + 1);
+        PublishNinjabrainData(std::move(staleData));
+
+        const Color staleSample = renderWithoutOverlayAndSample(window);
+        Expect(IsColorNear(staleSample, kExpectedRenderSurfaceClear),
+               "Expected the Ninjabrain overlay preview fixture to hide when its data is stale.");
     }
 
     PublishNinjabrainData(NinjabrainData{});
@@ -1376,6 +1599,61 @@ void RunModeNinjabrainOverlayRenderTest(TestRunMode runMode = TestRunMode::Autom
     CleanupWindowOverlayCache();
     CleanupGPUResources();
     CleanupShaders();
+}
+
+void RunRenderNinjabrainInformationMessageTranslationSpansTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+
+    struct RestoreEnglishTranslation {
+        ~RestoreEnglishTranslation() {
+            if (!LoadTranslation("en")) {
+                std::cerr << "WARN: Failed to reload embedded English translations after the Ninjabrain information-message translation test." << std::endl;
+            }
+        }
+    } restoreEnglishTranslation;
+
+    Expect(LoadTranslation("zh_CN"), "Expected embedded zh_CN translations to load for the Ninjabrain information-message translation test.");
+
+    NinjabrainInformationMessage combinedCertaintyMessage;
+    combinedCertaintyMessage.severity = "INFO";
+    combinedCertaintyMessage.type = "COMBINED_CERTAINTY";
+    combinedCertaintyMessage.message =
+        "Nether coords (-221, 223) have <span style=\"color:#00CE29;\">+84.3%</span> chance to hit the stronghold (it is between the top 2 offsets).";
+
+    const NinjabrainFormattedInformationMessage formattedCombinedCertainty =
+        FormatNinjabrainInformationMessage(combinedCertaintyMessage);
+    Expect(
+        formattedCombinedCertainty.plainText == "下界坐标 (-221, 223) 有 +84.3% 的概率命中要塞（这在最大的两个偏移点之间）。",
+        "Expected the combined-certainty information message to translate through the overlay formatter while preserving the span text.");
+    Expect(formattedCombinedCertainty.runs.size() >= 3,
+           "Expected the combined-certainty information message formatter to split the translated text into multiple styled runs.");
+
+    bool foundGreenCertaintyRun = false;
+    for (const NinjabrainInformationTextRun& run : formattedCombinedCertainty.runs) {
+        if (!run.hasColor || run.text != "+84.3%") {
+            continue;
+        }
+
+        foundGreenCertaintyRun = run.colorRgb == 0x00CE29;
+        if (foundGreenCertaintyRun) {
+            break;
+        }
+    }
+    Expect(foundGreenCertaintyRun,
+           "Expected the translated combined-certainty information message to preserve the original green span color.");
+
+    NinjabrainInformationMessage nextThrowMessage;
+    nextThrowMessage.severity = "INFO";
+    nextThrowMessage.type = "NEXT_THROW_DIRECTION";
+    nextThrowMessage.message = "Go left 1 blocks, or right 3 blocks, for ~95% certainty after next measurement.";
+
+    const NinjabrainFormattedInformationMessage formattedNextThrow =
+        FormatNinjabrainInformationMessage(nextThrowMessage);
+    Expect(
+        formattedNextThrow.plainText == "向左 1 个方块，或者向右 3 个方块，在下次测量时将有 ~95% 的准确性。",
+        "Expected the next-throw information message to translate through the overlay formatter.");
+    Expect(formattedNextThrow.runs.size() == 1 && !formattedNextThrow.runs[0].hasColor,
+           "Expected the next-throw information message to remain a single unstyled run after translation.");
 }
 
 void RunRebindIndicatorRendersBelowSettingsGuiTest(TestRunMode runMode = TestRunMode::Automated) {
