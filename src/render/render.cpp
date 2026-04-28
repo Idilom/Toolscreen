@@ -5599,7 +5599,8 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
             HWND hwnd = g_minecraftHwnd.load(std::memory_order_acquire);
             if (hwnd) {
                 PROFILE_SCOPE_CAT("Render OBS Fake Cursor", "OBS");
-                RenderFakeCursorToCurrentTarget(hwnd, fullW, fullH, finalX, finalY, finalW, finalH);
+                RenderFakeCursorToCurrentTarget(hwnd, fullW, fullH, finalX, finalY, finalW, finalH, current_gameW,
+                                                current_gameH);
             }
         }
     }

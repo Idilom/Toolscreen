@@ -1102,6 +1102,8 @@ static void RenderFakeCursorInternal(HWND hwnd,
                                      int targetY,
                                      int targetWidth,
                                      int targetHeight,
+                                     int sourceWidth,
+                                     int sourceHeight,
                                      bool bindDefaultFramebuffer) {
     if (!hwnd || fullWidth <= 0 || fullHeight <= 0 || targetWidth <= 0 || targetHeight <= 0) { return; }
 
@@ -1148,8 +1150,8 @@ static void RenderFakeCursorInternal(HWND hwnd,
         }
         return;
     }
-    int gameWidth = gameRect.right - gameRect.left;
-    int gameHeight = gameRect.bottom - gameRect.top;
+    int gameWidth = sourceWidth > 0 ? sourceWidth : (gameRect.right - gameRect.left);
+    int gameHeight = sourceHeight > 0 ? sourceHeight : (gameRect.bottom - gameRect.top);
 
     if (gameWidth == 0 || gameHeight == 0) { return; }
 
@@ -1256,7 +1258,7 @@ static void RenderFakeCursorInternal(HWND hwnd,
 }
 
 void RenderFakeCursor(HWND hwnd, int windowWidth, int windowHeight) {
-    RenderFakeCursorInternal(hwnd, windowWidth, windowHeight, 0, 0, windowWidth, windowHeight, true);
+    RenderFakeCursorInternal(hwnd, windowWidth, windowHeight, 0, 0, windowWidth, windowHeight, 0, 0, true);
 }
 
 void RenderFakeCursorToCurrentTarget(HWND hwnd,
@@ -1265,8 +1267,11 @@ void RenderFakeCursorToCurrentTarget(HWND hwnd,
                                      int targetX,
                                      int targetY,
                                      int targetWidth,
-                                     int targetHeight) {
-    RenderFakeCursorInternal(hwnd, fullWidth, fullHeight, targetX, targetY, targetWidth, targetHeight, false);
+                                     int targetHeight,
+                                     int sourceWidth,
+                                     int sourceHeight) {
+    RenderFakeCursorInternal(hwnd, fullWidth, fullHeight, targetX, targetY, targetWidth, targetHeight, sourceWidth,
+                             sourceHeight, false);
 }
 
 
