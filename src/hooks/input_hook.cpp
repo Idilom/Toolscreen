@@ -2528,9 +2528,21 @@ static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wPar
             return { false, 0 };
         }
 
-        if (IsModifierVk(rawVk) && !g_config.modifiersInterruptKeyRepeat) {
-            if (IsLocalRepeatDebugEnabled()) {
-                Log("[LocalRepeat] allow modifier keydown without taking repeat ownership rawVk=" + std::to_string(rawVk));
+        if (IsModifierVk(rawVk)) {
+            if (!g_config.modifiersInterruptKeyRepeat) {
+                if (IsLocalRepeatDebugEnabled()) {
+                    Log("[LocalRepeat] allow modifier keydown without taking repeat ownership rawVk=" + std::to_string(rawVk));
+                }
+                return { false, 0 };
+            }
+
+            if (s_localKeyRepeatOwnerActive || !s_localKeyRepeatHeldKeys.empty()) {
+                if (IsLocalRepeatDebugEnabled()) {
+                    Log("[LocalRepeat] interrupt active repeat on modifier keydown rawVk=" + std::to_string(rawVk));
+                }
+                ResetLocalKeyRepeatState(hWnd);
+            } else if (IsLocalRepeatDebugEnabled()) {
+                Log("[LocalRepeat] allow modifier keydown with no active repeat to interrupt rawVk=" + std::to_string(rawVk));
             }
             return { false, 0 };
         }

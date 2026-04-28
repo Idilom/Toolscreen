@@ -1562,13 +1562,8 @@ void RunKeyRepeatRuntimeAutohotkeyNumpadClearCharOverrideTest(TestRunMode runMod
 
         capture.Clear();
         postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick after interrupting Shift keydown");
-        const bool repeatedAStillForwarded = std::any_of(capture.messages.begin(),
-                                                         capture.messages.end(),
-                                                         [](const CapturedWindowMessage& message) {
-                                                             return message.message == WM_KEYDOWN && message.wParam == 'A';
-                                                         });
-        Expect(!repeatedAStillForwarded,
-               "Expected the previously repeating A key to stop repeating once an interrupting modifier is pressed.");
+         Expect(capture.messages.empty(),
+             "Expected pressing an interrupting modifier to stop the active local key repeat instead of switching repeat ownership to the modifier.");
 
         capture.Clear();
         keyboardState.SetKeyDown(VK_SHIFT, false);
