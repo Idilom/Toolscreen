@@ -473,6 +473,10 @@ bool ContainsFileName(const std::vector<std::string>& fileNames, std::string_vie
 void ResetGlobalTestState(const std::filesystem::path& root) {
     StopNinjabrainClient();
 
+    ResetExactKeyboardMessageStateForTest();
+    ResetHotkeyRuntimeStateForTest();
+    ResetLowLevelExactModifierStateForTest();
+
     g_toolscreenPath = root.wstring();
     g_modeFilePath = (root / "mode.txt").wstring();
     g_stateFilePath = (root / "state.txt").wstring();
