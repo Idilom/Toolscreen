@@ -344,7 +344,7 @@
     "inputs.tooltip.modifiers_interrupt_key_repeat": "仅在禁用系统按键重复时使用。\n启用后，按下 Shift/Ctrl/Alt/Win 会打断当前正在重复的按键。\n禁用后，修饰键不会夺走最近正在重复的按键的重复控制权。",
     "inputs.tooltip.enter_unicode_or_codepoint": "输入 Unicode 字符或码点：",
     "inputs.tooltip.key_rebinding": "拦截键盘输入并在到达游戏前重新映射它们。",
-    "inputs.tooltip.key_repeat_delay": "仅在禁用系统按键重复时使用。\n按住按键时重复按键之间的时间。\n-1 = 自动（5ms），0-50ms = 自定义延迟。\n仅在游戏窗口聚焦时应用。",
+    "inputs.tooltip.key_repeat_delay": "仅在禁用系统按键重复时使用。\n按住按键时重复按键之间的时间。\n-1 = 自动（5ms），0.1-50.0ms = 以 0.1ms 为步进的自定义延迟。\n仅在游戏窗口聚焦时应用。",
     "inputs.tooltip.key_repeat_start_delay": "仅在禁用系统按键重复时使用。\n按住按键开始重复之前的延迟。\n-1 = 自动（200ms），100-300ms = 自定义延迟。\n仅在游戏窗口聚焦时应用。",
     "inputs.tooltip.keyboard_layout_scale": "仅用于键盘布局预览的视觉缩放比例。",
     "inputs.tooltip.rebind_layout_state": "选择你正在编辑的重绑定布局。",

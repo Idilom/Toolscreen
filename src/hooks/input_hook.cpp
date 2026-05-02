@@ -20,6 +20,7 @@
 #include <cmath>
 #include <deque>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <set>
@@ -77,6 +78,8 @@ static void ResetShiftHotkeyPollingState(HWND hWnd);
 static void UpdateShiftHotkeyPollingState(HWND hWnd);
 static void SyncShiftHotkeyPollingStateFromMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
 static InputHandlerResult HandleShiftHotkeyPolling(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+static bool EnsureLocalKeyRepeatSchedulerInitialized();
+static DWORD WINAPI LocalKeyRepeatSchedulerThreadProc(LPVOID parameter);
 
 struct LocalKeyRepeatState {
     DWORD rawVk = 0;
@@ -118,6 +121,12 @@ static std::unordered_map<DWORD, LocalKeyRepeatState> s_localKeyRepeatHeldKeys;
 static LocalKeyRepeatState s_localKeyRepeatOwner;
 static bool s_localKeyRepeatOwnerActive = false;
 static std::vector<SuppressedLocalRepeatChar> s_localKeyRepeatSuppressedChars;
+static HANDLE s_localKeyRepeatHighResTimer = NULL;
+static HANDLE s_localKeyRepeatWakeEvent = NULL;
+static HANDLE s_localKeyRepeatThread = NULL;
+static std::mutex s_localKeyRepeatSchedulerInitMutex;
+static std::atomic<HWND> s_localKeyRepeatScheduledHwnd{ NULL };
+static std::atomic<int64_t> s_localKeyRepeatRequestedDelay100ns{ 0 };
 static std::unordered_map<DWORD, LowLevelSuppressedKeyState> s_lowLevelSuppressedKeys;
 static std::mutex s_lowLevelSuppressedKeysMutex;
 static std::unordered_set<DWORD> s_lowLevelExactModifierKeysDown;
@@ -172,7 +181,7 @@ static bool RetargetLocalKeyRepeatAliasSource(DWORD rawVk, UINT scanCodeWithFlag
 static UINT ResolveLocalKeyRepeatOutputScanCode(DWORD rawVk, UINT incomingScanCodeWithFlags);
 static bool TryResolveLocalKeyRepeatVkFromChar(WPARAM charCode, DWORD& outVk, UINT& outScanCodeWithFlags);
 static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, bool isLocalRepeatTagged);
-bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs);
+bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, float& outRepeatDelayMs);
 static void ReleaseSuppressedLowLevelRebindKeys(HWND hWnd);
 
 static bool MatchesConfiguredGameStateCondition(const std::vector<std::string>& configuredStates, const std::string& gameState) {
@@ -2687,20 +2696,119 @@ static void LogLocalRepeatDebug(const char* phase, UINT uMsg, WPARAM wParam, LPA
     Log(stream.str());
 }
 
+static DWORD WINAPI LocalKeyRepeatSchedulerThreadProc(LPVOID) {
+    HANDLE handles[2] = { s_localKeyRepeatWakeEvent, s_localKeyRepeatHighResTimer };
+    for (;;) {
+        const DWORD waitResult = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+        if (waitResult == WAIT_OBJECT_0) {
+            if (s_localKeyRepeatHighResTimer) {
+                (void)CancelWaitableTimer(s_localKeyRepeatHighResTimer);
+            }
+
+            const HWND targetHwnd = s_localKeyRepeatScheduledHwnd.load(std::memory_order_acquire);
+            const int64_t delay100ns = s_localKeyRepeatRequestedDelay100ns.load(std::memory_order_acquire);
+            if (!targetHwnd || !IsWindow(targetHwnd) || delay100ns <= 0 || !s_localKeyRepeatHighResTimer) {
+                continue;
+            }
+
+            LARGE_INTEGER dueTime;
+            dueTime.QuadPart = -static_cast<LONGLONG>(delay100ns);
+            if (!SetWaitableTimer(s_localKeyRepeatHighResTimer, &dueTime, 0, NULL, NULL, FALSE)) {
+                Log("WARNING: Failed to arm high-resolution local key repeat timer");
+            }
+            continue;
+        }
+
+        if (waitResult == (WAIT_OBJECT_0 + 1)) {
+            const HWND targetHwnd = s_localKeyRepeatScheduledHwnd.load(std::memory_order_acquire);
+            if (targetHwnd && IsWindow(targetHwnd)) {
+                if (::PostMessageW(targetHwnd, WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0) == FALSE) {
+                    Log("WARNING: Failed to post high-resolution local key repeat tick");
+                }
+            }
+            continue;
+        }
+
+        break;
+    }
+
+    return 0;
+}
+
+static bool EnsureLocalKeyRepeatSchedulerInitialized() {
+    if (s_localKeyRepeatWakeEvent && s_localKeyRepeatHighResTimer && s_localKeyRepeatThread) {
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(s_localKeyRepeatSchedulerInitMutex);
+    if (s_localKeyRepeatWakeEvent && s_localKeyRepeatHighResTimer && s_localKeyRepeatThread) {
+        return true;
+    }
+
+    if (!s_localKeyRepeatWakeEvent) {
+        s_localKeyRepeatWakeEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+        if (!s_localKeyRepeatWakeEvent) {
+            Log("WARNING: Failed to create local key repeat wake event; falling back to WM_TIMER");
+            return false;
+        }
+    }
+
+    if (!s_localKeyRepeatHighResTimer) {
+        s_localKeyRepeatHighResTimer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        if (!s_localKeyRepeatHighResTimer) {
+            s_localKeyRepeatHighResTimer = CreateWaitableTimerW(NULL, FALSE, NULL);
+        }
+        if (!s_localKeyRepeatHighResTimer) {
+            Log("WARNING: Failed to create high-resolution local key repeat timer; falling back to WM_TIMER");
+            return false;
+        }
+    }
+
+    if (!s_localKeyRepeatThread) {
+        s_localKeyRepeatThread = CreateThread(NULL, 0, &LocalKeyRepeatSchedulerThreadProc, NULL, 0, NULL);
+        if (!s_localKeyRepeatThread) {
+            Log("WARNING: Failed to create local key repeat scheduler thread; falling back to WM_TIMER");
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static void StopLocalKeyRepeatTimer(HWND hWnd) {
     const HWND targetHwnd = hWnd ? hWnd : g_subclassedHwnd.load(std::memory_order_acquire);
     if (targetHwnd && IsWindow(targetHwnd)) {
         (void)KillTimer(targetHwnd, kToolscreenLocalKeyRepeatTimerId);
     }
+
+    if (s_localKeyRepeatWakeEvent && s_localKeyRepeatHighResTimer) {
+        s_localKeyRepeatScheduledHwnd.store(NULL, std::memory_order_release);
+        s_localKeyRepeatRequestedDelay100ns.store(0, std::memory_order_release);
+        (void)SetEvent(s_localKeyRepeatWakeEvent);
+    }
 }
 
-static void ArmLocalKeyRepeatTimer(HWND hWnd, int delayMs) {
+static void ArmLocalKeyRepeatTimer(HWND hWnd, float delayMs) {
     if (!hWnd || !IsWindow(hWnd)) {
         return;
     }
 
-    const UINT intervalMs = static_cast<UINT>((std::max)(delayMs, 1));
-    if (SetTimer(hWnd, kToolscreenLocalKeyRepeatTimerId, intervalMs, NULL) == 0) {
+    const float intervalMs = (std::max)(delayMs, 0.1f);
+    (void)KillTimer(hWnd, kToolscreenLocalKeyRepeatTimerId);
+
+    if (EnsureLocalKeyRepeatSchedulerInitialized()) {
+        s_localKeyRepeatScheduledHwnd.store(hWnd, std::memory_order_release);
+        s_localKeyRepeatRequestedDelay100ns.store(static_cast<int64_t>(std::llround(static_cast<double>(intervalMs) * 10000.0)),
+                                                  std::memory_order_release);
+        if (SetEvent(s_localKeyRepeatWakeEvent) != FALSE) {
+            return;
+        }
+
+        Log("WARNING: Failed to signal high-resolution local key repeat timer; falling back to WM_TIMER");
+    }
+
+    const UINT fallbackIntervalMs = static_cast<UINT>((std::max)(static_cast<int>(std::ceil(intervalMs)), 1));
+    if (SetTimer(hWnd, kToolscreenLocalKeyRepeatTimerId, fallbackIntervalMs, NULL) == 0) {
         Log("WARNING: Failed to arm local key repeat timer");
     }
 }
@@ -2740,9 +2848,9 @@ static void BeginLocalKeyRepeatTracking(HWND hWnd, DWORD rawVk, UINT scanCodeWit
     s_localKeyRepeatOwnerActive = true;
 
     int startDelayMs = 250;
-    int repeatDelayMs = 33;
+    float repeatDelayMs = 33.0f;
     (void)GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs);
-    ArmLocalKeyRepeatTimer(hWnd, startDelayMs);
+    ArmLocalKeyRepeatTimer(hWnd, static_cast<float>(startDelayMs));
 }
 
 static bool RetargetLocalKeyRepeatAliasSource(DWORD rawVk, UINT scanCodeWithFlags, bool isSystemKey, LPARAM sourceKeyDownLParam) {
@@ -2845,9 +2953,8 @@ static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wPar
         }
 
         int startDelayMs = 250;
-        int repeatDelayMs = 33;
+        float repeatDelayMs = 33.0f;
         (void)GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs);
-
         if (!PostLocalKeyRepeatKeyDown(hWnd)) {
             if (IsLocalRepeatDebugEnabled()) {
                 Log("[LocalRepeat] reset on repeat tick because posting repeat keydown failed");
