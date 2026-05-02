@@ -671,7 +671,7 @@ static int GetFallbackKeyboardRepeatMs() {
     return 33;
 }
 
-bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, float& outRepeatDelayMs) {
+bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs) {
     auto clampKeyRepeatStartDelayValue = [](int value) {
         if (value < 0) {
             return -1;
@@ -684,25 +684,24 @@ bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, float& outRepeatDelayMs)
         return 100 + (((value - 100) + 2) / 5) * 5;
     };
 
-    auto clampKeyRepeatDelayValue = [](float value) {
-        if (value < 0.0f) {
-            return -1.0f;
+    auto clampKeyRepeatDelayValue = [](int value) {
+        if (value < 0) {
+            return -1;
         }
-        if (value > 50.0f) {
-            value = 50.0f;
+        if (value > 50) {
+            value = 50;
         }
-        value = std::round(value * 10.0f) / 10.0f;
-        return (std::max)(value, 0.1f);
+        return (std::max)(value, 1);
     };
 
     int configuredStartDelay = clampKeyRepeatStartDelayValue(g_config.keyRepeatStartDelay);
-    float configuredRepeatDelay = clampKeyRepeatDelayValue(g_config.keyRepeatDelay);
+    int configuredRepeatDelay = clampKeyRepeatDelayValue(g_config.keyRepeatDelay);
     outStartDelayMs =
         (configuredStartDelay >= 0) ? (configuredStartDelay == 0 ? 1 : configuredStartDelay) : ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_START_DELAY_MS;
     outRepeatDelayMs =
-        (configuredRepeatDelay >= 0.0f) ? configuredRepeatDelay : ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS;
+        (configuredRepeatDelay >= 0) ? configuredRepeatDelay : ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS;
     outStartDelayMs = (std::max)(outStartDelayMs, 1);
-    outRepeatDelayMs = (std::max)(outRepeatDelayMs, 0.1f);
+    outRepeatDelayMs = (std::max)(outRepeatDelayMs, 1);
     return true;
 }
 

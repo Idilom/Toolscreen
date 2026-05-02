@@ -2166,16 +2166,15 @@ static int ClampKeyRepeatStartDelayConfigValue(int value) {
     return 100 + (((value - 100) + 2) / 5) * 5;
 }
 
-static float ClampKeyRepeatDelayConfigValue(float value) {
-    if (value < 0.0f) {
-        return -1.0f;
+static int ClampKeyRepeatDelayConfigValue(int value) {
+    if (value < 0) {
+        return -1;
     }
-    if (value > 50.0f) {
-        value = 50.0f;
+    if (value > 50) {
+        value = 50;
     }
 
-    const float roundedToTenths = std::round(value * 10.0f) / 10.0f;
-    return (std::max)(roundedToTenths, 0.1f);
+    return (std::max)(value, 1);
 }
 
 void ConfigToToml(const Config& config, toml::table& out) {
@@ -2475,10 +2474,10 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.modifiersInterruptKeyRepeat =
         GetOr(tbl, "modifiersInterruptKeyRepeat", ConfigDefaults::CONFIG_MODIFIERS_INTERRUPT_KEY_REPEAT);
     int keyRepeatStartDelay = GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY);
-    float keyRepeatDelay = GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY);
+    int keyRepeatDelay = GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY);
     if (originalConfigVersion < ConfigDefaults::DEFAULT_CONFIG_VERSION) {
         if (keyRepeatStartDelay == 0) { keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY; }
-        if (keyRepeatDelay == 0.0f) { keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY; }
+        if (keyRepeatDelay == 0) { keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY; }
     }
     config.keyRepeatStartDelay = ClampKeyRepeatStartDelayConfigValue(keyRepeatStartDelay);
     config.keyRepeatDelay = ClampKeyRepeatDelayConfigValue(keyRepeatDelay);

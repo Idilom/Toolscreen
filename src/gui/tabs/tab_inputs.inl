@@ -508,14 +508,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             return 100 + (((value - 100) + 2) / 5) * 5;
                         };
 
-                        auto clampKeyRepeatDelayValue = [](float value) {
-                            if (value < 0.0f) {
-                                return -1.0f;
+                        auto clampKeyRepeatDelayValue = [](int value) {
+                            if (value < 0) {
+                                return -1;
                             }
 
-                            value = (std::min)(value, 50.0f);
-                            value = std::round(value * 10.0f) / 10.0f;
-                            return (std::max)(value, 0.1f);
+                            value = (std::min)(value, 50);
+                            return (std::max)(value, 1);
                         };
 
                         ImGui::Text(trc("inputs.key_repeat_start_delay"));
@@ -537,12 +536,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                         ImGui::Text(trc("inputs.key_repeat_delay"));
                         ImGui::SetNextItemWidth(600);
-                        float repeatDelayValue = clampKeyRepeatDelayValue(g_config.keyRepeatDelay);
+                        int repeatDelayValue = clampKeyRepeatDelayValue(g_config.keyRepeatDelay);
                         const std::string repeatDelayFormat =
                             GetKeyRepeatDelaySliderFormat(repeatDelayValue, ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS);
-                        if (ImGui::SliderFloatDoubleClickInput("##keyRepeatDelay", &repeatDelayValue, -1.0f, 50.0f,
-                                                               repeatDelayFormat.c_str(),
-                                                               ImGuiSliderFlags_AlwaysClamp)) {
+                        if (ImGui::SliderIntDoubleClickInput("##keyRepeatDelay", &repeatDelayValue, -1, 50, repeatDelayFormat.c_str(),
+                                                             ImGuiSliderFlags_AlwaysClamp)) {
                             repeatDelayValue = clampKeyRepeatDelayValue(repeatDelayValue);
                             g_config.keyRepeatDelay = repeatDelayValue;
                             g_configIsDirty = true;

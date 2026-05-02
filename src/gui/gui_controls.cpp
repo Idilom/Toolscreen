@@ -101,14 +101,12 @@ std::string GetKeyRepeatSliderFormat(int value, int autoValueMs) {
     return std::string(trc("label.auto")) + " (" + std::to_string((std::max)(autoValueMs, 1)) + "ms)";
 }
 
-std::string GetKeyRepeatDelaySliderFormat(float value, float autoValueMs) {
-    if (value >= 0.0f) {
-        return "%.1f ms";
+std::string GetKeyRepeatDelaySliderFormat(int value, int autoValueMs) {
+    if (value >= 0) {
+        return "%d ms";
     }
 
-    std::ostringstream stream;
-    stream << std::fixed << std::setprecision(1) << autoValueMs;
-    return std::string(trc("label.auto")) + " (" + stream.str() + "ms)";
+    return std::string(trc("label.auto")) + " (" + std::to_string((std::max)(autoValueMs, 1)) + "ms)";
 }
 
 void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, const std::string& idSuffix) {

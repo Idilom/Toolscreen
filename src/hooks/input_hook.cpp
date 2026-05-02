@@ -181,7 +181,7 @@ static bool RetargetLocalKeyRepeatAliasSource(DWORD rawVk, UINT scanCodeWithFlag
 static UINT ResolveLocalKeyRepeatOutputScanCode(DWORD rawVk, UINT incomingScanCodeWithFlags);
 static bool TryResolveLocalKeyRepeatVkFromChar(WPARAM charCode, DWORD& outVk, UINT& outScanCodeWithFlags);
 static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, bool isLocalRepeatTagged);
-bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, float& outRepeatDelayMs);
+bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs);
 static void ReleaseSuppressedLowLevelRebindKeys(HWND hWnd);
 
 static bool MatchesConfiguredGameStateCondition(const std::vector<std::string>& configuredStates, const std::string& gameState) {
@@ -2788,17 +2788,17 @@ static void StopLocalKeyRepeatTimer(HWND hWnd) {
     }
 }
 
-static void ArmLocalKeyRepeatTimer(HWND hWnd, float delayMs) {
+static void ArmLocalKeyRepeatTimer(HWND hWnd, int delayMs) {
     if (!hWnd || !IsWindow(hWnd)) {
         return;
     }
 
-    const float intervalMs = (std::max)(delayMs, 0.1f);
+    const int intervalMs = (std::max)(delayMs, 1);
     (void)KillTimer(hWnd, kToolscreenLocalKeyRepeatTimerId);
 
     if (EnsureLocalKeyRepeatSchedulerInitialized()) {
         s_localKeyRepeatScheduledHwnd.store(hWnd, std::memory_order_release);
-        s_localKeyRepeatRequestedDelay100ns.store(static_cast<int64_t>(std::llround(static_cast<double>(intervalMs) * 10000.0)),
+        s_localKeyRepeatRequestedDelay100ns.store(static_cast<int64_t>(intervalMs) * 10000,
                                                   std::memory_order_release);
         if (SetEvent(s_localKeyRepeatWakeEvent) != FALSE) {
             return;
@@ -2807,7 +2807,7 @@ static void ArmLocalKeyRepeatTimer(HWND hWnd, float delayMs) {
         Log("WARNING: Failed to signal high-resolution local key repeat timer; falling back to WM_TIMER");
     }
 
-    const UINT fallbackIntervalMs = static_cast<UINT>((std::max)(static_cast<int>(std::ceil(intervalMs)), 1));
+    const UINT fallbackIntervalMs = static_cast<UINT>((std::max)(intervalMs, 1));
     if (SetTimer(hWnd, kToolscreenLocalKeyRepeatTimerId, fallbackIntervalMs, NULL) == 0) {
         Log("WARNING: Failed to arm local key repeat timer");
     }
@@ -2848,9 +2848,9 @@ static void BeginLocalKeyRepeatTracking(HWND hWnd, DWORD rawVk, UINT scanCodeWit
     s_localKeyRepeatOwnerActive = true;
 
     int startDelayMs = 250;
-    float repeatDelayMs = 33.0f;
+    int repeatDelayMs = 33;
     (void)GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs);
-    ArmLocalKeyRepeatTimer(hWnd, static_cast<float>(startDelayMs));
+    ArmLocalKeyRepeatTimer(hWnd, startDelayMs);
 }
 
 static bool RetargetLocalKeyRepeatAliasSource(DWORD rawVk, UINT scanCodeWithFlags, bool isSystemKey, LPARAM sourceKeyDownLParam) {
@@ -2953,7 +2953,7 @@ static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wPar
         }
 
         int startDelayMs = 250;
-        float repeatDelayMs = 33.0f;
+        int repeatDelayMs = 33;
         (void)GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs);
         if (!PostLocalKeyRepeatKeyDown(hWnd)) {
             if (IsLocalRepeatDebugEnabled()) {

@@ -39,7 +39,7 @@
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 extern std::atomic<bool> g_configLoaded;
 extern std::atomic<HWND> g_subclassedHwnd;
-bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, float& outRepeatDelayMs);
+bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs);
 
 namespace {
 
@@ -1601,7 +1601,7 @@ void PopulateRichConfigFixture() {
     g_config.useSystemKeyRepeat = true;
     g_config.modifiersInterruptKeyRepeat = true;
     g_config.keyRepeatStartDelay = 275;
-    g_config.keyRepeatDelay = 4.2f;
+    g_config.keyRepeatDelay = 4;
     g_config.basicModeEnabled = false;
     g_config.restoreWindowedModeOnFullscreenExit = false;
     g_config.disableFullscreenPrompt = true;
@@ -2041,7 +2041,7 @@ void VerifyRichGlobalSettings() {
     Expect(g_config.useSystemKeyRepeat, "Expected useSystemKeyRepeat to roundtrip.");
     Expect(g_config.modifiersInterruptKeyRepeat, "Expected modifiersInterruptKeyRepeat to roundtrip.");
     Expect(g_config.keyRepeatStartDelay == 275, "Expected keyRepeatStartDelay to roundtrip.");
-    ExpectFloatNear(g_config.keyRepeatDelay, 4.2f, "Expected keyRepeatDelay to roundtrip.");
+    Expect(g_config.keyRepeatDelay == 4, "Expected keyRepeatDelay to roundtrip.");
     Expect(!g_config.basicModeEnabled, "Expected basicModeEnabled to roundtrip.");
     Expect(!g_config.restoreWindowedModeOnFullscreenExit, "Expected restoreWindowedModeOnFullscreenExit to roundtrip.");
     Expect(g_config.disableFullscreenPrompt, "Expected disableFullscreenPrompt to roundtrip.");

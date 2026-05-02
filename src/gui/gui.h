@@ -1008,7 +1008,7 @@ struct Config {
     bool useSystemKeyRepeat = ConfigDefaults::CONFIG_USE_SYSTEM_KEY_REPEAT;
     bool modifiersInterruptKeyRepeat = ConfigDefaults::CONFIG_MODIFIERS_INTERRUPT_KEY_REPEAT;
     int keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY;
-    float keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
+    int keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
     bool basicModeEnabled = false;
     bool restoreWindowedModeOnFullscreenExit = ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT;
     bool disableFullscreenPrompt = false;

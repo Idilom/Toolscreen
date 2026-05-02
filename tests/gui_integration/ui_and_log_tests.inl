@@ -363,7 +363,7 @@ void RunSettingsKeyRepeatSystemRepeatHidesLocalControlsTest(TestRunMode runMode 
     }
 
     int startDelayMs = 0;
-    float repeatDelayMs = 0.0f;
+    int repeatDelayMs = 0;
 
     g_config.useSystemKeyRepeat = true;
     g_config.modifiersInterruptKeyRepeat = true;
@@ -380,16 +380,16 @@ void RunSettingsKeyRepeatSystemRepeatHidesLocalControlsTest(TestRunMode runMode 
     Expect(GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs), "Expected key repeat timings to resolve for Auto values.");
     Expect(startDelayMs == ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_START_DELAY_MS,
         "Expected Auto key repeat start delay to resolve to the fixed 200ms default.");
-    ExpectFloatNear(repeatDelayMs, ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS,
+    Expect(repeatDelayMs == ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS,
         "Expected Auto key repeat delay to resolve to the fixed 5ms default.");
     Expect(GetKeyRepeatSliderFormat(-1, ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_START_DELAY_MS) == "Auto (200ms)",
         "Expected the start delay slider to show the Auto default in its label.");
-    Expect(GetKeyRepeatDelaySliderFormat(-1.0f, ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS) == "Auto (5.0ms)",
+    Expect(GetKeyRepeatDelaySliderFormat(-1, ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS) == "Auto (5ms)",
         "Expected the repeat delay slider to show the Auto default in its label.");
 
-    g_config.keyRepeatDelay = 0.1f;
-    Expect(GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs), "Expected key repeat timings to resolve for a 0.1ms delay value.");
-    ExpectFloatNear(repeatDelayMs, 0.1f, "Expected local key repeat delay to preserve 0.1ms precision.");
+    g_config.keyRepeatDelay = 1;
+    Expect(GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs), "Expected key repeat timings to resolve for a 1ms delay value.");
+    Expect(repeatDelayMs == 1, "Expected local key repeat delay to preserve integer millisecond precision.");
 
     g_config.useSystemKeyRepeat = false;
     RenderSettingsSearchFrame(window, "", tr("tabs.inputs").c_str(), tr("inputs.keyboard").c_str());
@@ -642,7 +642,7 @@ void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Autom
     g_config.useSystemKeyRepeat = true;
     g_config.modifiersInterruptKeyRepeat = true;
     g_config.keyRepeatStartDelay = 42;
-    g_config.keyRepeatDelay = 2.4f;
+    g_config.keyRepeatDelay = 2;
     g_config.autoBorderless = true;
     g_config.hideAnimationsInGame = true;
     g_config.limitCaptureFramerate = false;
@@ -679,7 +679,7 @@ void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Autom
     Expect(dst.useSystemKeyRepeat, "useSystemKeyRepeat should roundtrip.");
     Expect(dst.modifiersInterruptKeyRepeat, "modifiersInterruptKeyRepeat should roundtrip.");
     Expect(dst.keyRepeatStartDelay == 42, "keyRepeatStartDelay should roundtrip.");
-    ExpectFloatNear(dst.keyRepeatDelay, 2.4f, "keyRepeatDelay should roundtrip.");
+    Expect(dst.keyRepeatDelay == 2, "keyRepeatDelay should roundtrip.");
     Expect(dst.autoBorderless == true, "autoBorderless should roundtrip.");
     Expect(dst.hideAnimationsInGame == true, "hideAnimationsInGame should roundtrip.");
     Expect(dst.limitCaptureFramerate == false, "limitCaptureFramerate should roundtrip.");
