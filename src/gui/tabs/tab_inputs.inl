@@ -455,12 +455,19 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     trc("inputs.key_repeat_rate"),
                     trc("inputs.key_repeat_start_delay"),
                     trc("inputs.key_repeat_delay"),
+                    trc("inputs.live_modifier_repeat"),
                     "key repeat",
-                    "repeat delay"
+                    "repeat delay",
+                    "linux",
+                    "modifier repeat",
+                    "live modifier"
                 });
                 const bool showKeyRebindingSection = ShouldRenderConfigSearchSection(showAllKeyboardSections, {
                     trc("inputs.key_rebinding"),
                     trc("inputs.enable_key_rebinding"),
+                    trc("inputs.mouse_rebind_repeat"),
+                    "mouse repeat",
+                    "mouse button repeat",
                     trc("inputs.resolve_rebind_targets_for_hotkeys"),
                     trc("inputs.allow_system_alt_tab"),
                     trc("inputs.allow_system_alt_f4"),
@@ -539,6 +546,24 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     RecordConfigSearchSectionInteractionRect("config.control.inputs.keyboard.key_repeat_delay");
                     ImGui::SameLine();
                     HelpMarker(trc("inputs.tooltip.key_repeat_delay"));
+
+                    ImGui::Spacing();
+
+                    if (ImGui::Checkbox(trc("inputs.live_modifier_repeat"), &g_config.liveModifierRepeat)) {
+                        g_configIsDirty = true;
+                        PublishConfigSnapshot();
+                    }
+                    ImGui::SameLine();
+                    HelpMarker(trc("inputs.tooltip.live_modifier_repeat"));
+
+                    ImGui::Spacing();
+                    
+                    if (ImGui::Checkbox(trc("inputs.mouse_rebind_repeat"), &g_config.mouseRebindRepeat)) {
+                        g_configIsDirty = true;
+                        PublishConfigSnapshot();
+                    }
+                    ImGui::SameLine();
+                    HelpMarker(trc("inputs.tooltip.mouse_rebind_repeat"));
 
                     ImGui::Spacing();
                 }

@@ -70,6 +70,8 @@ static std::mutex s_lowLevelKeyboardHookMutex;
 static std::atomic<bool> s_deferredFocusRegainWmSizePending{ false };
 static constexpr UINT_PTR kToolscreenLocalKeyRepeatTimerId = 0x2A51;
 static constexpr UINT_PTR kToolscreenShiftHotkeyPollTimerId = 0x2A52;
+static constexpr UINT_PTR kToolscreenLiveModifierRepeatTimerId = 0x2A53;
+static constexpr UINT_PTR kToolscreenMouseRebindRepeatTimerId  = 0x2A54;
 static constexpr LPARAM kToolscreenLocalKeyRepeatMessageTag = (static_cast<LPARAM>(1) << 25);
 static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E;
 static constexpr ULONG_PTR kToolscreenMenuMaskExtraInfo = (ULONG_PTR)0x54534D4B;
@@ -154,6 +156,25 @@ static std::unordered_map<uint64_t, UINT> s_activeSyntheticRebindOutputsBySource
 static std::unordered_map<UINT, size_t> s_activeSyntheticRebindOutputRefCounts;
 static std::mutex s_activeSyntheticRebindOutputsMutex;
 
+struct LiveModifierRepeatState {
+    DWORD vk = 0;
+    UINT scanCode = 0;
+    bool isSystemKey = false;
+    LPARAM lParamTemplate = 0;
+    bool timerArmed = false;
+};
+static LiveModifierRepeatState s_liveModifierRepeatState;
+
+struct MouseRebindRepeatState {
+    DWORD  mouseVk      = 0;
+    DWORD  outputVk     = 0;
+    UINT   outputScan   = 0;
+    bool   outputIsSys  = false;
+    ULONGLONG startDeadlineMs = 0;
+    bool   repeating    = false;
+};
+static MouseRebindRepeatState s_mouseRebindRepeatState;
+
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
 struct SyntheticRebindKeyEventForTest {
     UINT scanCodeWithFlags = 0;
@@ -166,6 +187,12 @@ static std::unordered_map<DWORD, bool> s_physicalModifierDownOverridesForTests;
 
 static bool SendMenuMaskKeyTap();
 static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown);
+static void StopLiveModifierRepeatTimer(HWND hWnd);
+static void ResetLiveModifierRepeatState(HWND hWnd);
+static void HandleLiveModifierRepeat(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+static void StopMouseRebindRepeatTimer(HWND hWnd);
+static void ResetMouseRebindRepeatState(HWND hWnd);
+static void HandleMouseRebindRepeat(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static bool SendSyntheticRebindOutput(UINT scanCodeWithFlags, bool keyDown);
 static bool HotkeyUsesWindowsKey(const std::vector<DWORD>& keys);
 static bool ShouldMaskWindowsKeyForHotkey(const std::vector<DWORD>& keys, bool isKeyDown, bool isAutoRepeatKeyDown);
@@ -1199,8 +1226,8 @@ InputHandlerResult HandleDestroy(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     ResetLocalKeyRepeatState(hWnd);
     ResetShiftHotkeyPollingState(hWnd);
     ReleaseActiveLowLevelRebindKeys(hWnd);
-
-    extern GameVersion g_gameVersion;
+    ResetLiveModifierRepeatState(hWnd);
+    ResetMouseRebindRepeatState(hWnd);
     if (g_gameVersion >= GameVersion(1, 13, 0)) { g_isShuttingDown = true; }
     UpdateLowLevelKeyboardHookInstalledState();
     return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
@@ -1846,6 +1873,8 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         ResetLowLevelExactModifierState();
         ResetLocalKeyRepeatState(hWnd);
         ReleaseActiveLowLevelRebindKeys(hWnd);
+        ResetLiveModifierRepeatState(hWnd);
+        ResetMouseRebindRepeatState(hWnd);
 
         if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) {
             Log(std::string("[WINDOW] Window became inactive via ") + focusSource + ".");
@@ -4822,6 +4851,224 @@ static InputHandlerResult HandleShiftHotkeyPolling(HWND hWnd, UINT uMsg, WPARAM 
     return { true, anyConsumed ? lastResult.result : 0 };
 }
 
+static void StopMouseRebindRepeatTimer(HWND hWnd) {
+    if (hWnd) KillTimer(hWnd, kToolscreenMouseRebindRepeatTimerId);
+}
+
+static void ResetMouseRebindRepeatState(HWND hWnd) {
+    StopMouseRebindRepeatTimer(hWnd);
+    s_mouseRebindRepeatState = {};
+}
+
+static void HandleMouseRebindRepeat(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg == WM_TIMER && static_cast<UINT_PTR>(wParam) == kToolscreenMouseRebindRepeatTimerId) {
+        if (s_mouseRebindRepeatState.mouseVk == 0) {
+            StopMouseRebindRepeatTimer(hWnd);
+            return;
+        }
+
+        if ((GetAsyncKeyState(static_cast<int>(s_mouseRebindRepeatState.mouseVk)) & 0x8000) == 0) {
+            ResetMouseRebindRepeatState(hWnd);
+            return;
+        }
+
+        int startDelayMs = 250;
+        int repeatDelayMs = 33;
+        (void)GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs);
+
+        if (!s_mouseRebindRepeatState.repeating) {
+            const ULONGLONG nowMs = GetTickCount64();
+            if (nowMs < s_mouseRebindRepeatState.startDeadlineMs) {
+                const ULONGLONG remaining = s_mouseRebindRepeatState.startDeadlineMs - nowMs;
+                const UINT remainingMs = remaining > 0x7fffffff ? 0x7fffffff : static_cast<UINT>(remaining);
+                SetTimer(hWnd, kToolscreenMouseRebindRepeatTimerId, remainingMs, NULL);
+                return;
+            }
+            s_mouseRebindRepeatState.repeating = true;
+        }
+
+        const UINT downMsg = s_mouseRebindRepeatState.outputIsSys ? WM_SYSKEYDOWN : WM_KEYDOWN;
+        const LPARAM repeatLParam = BuildKeyboardMessageLParam(
+            s_mouseRebindRepeatState.outputScan, true,
+            s_mouseRebindRepeatState.outputIsSys,
+            1, true , false);
+        CallWindowProc(g_originalWndProc, hWnd, downMsg,
+                       static_cast<WPARAM>(s_mouseRebindRepeatState.outputVk), repeatLParam);
+        SetTimer(hWnd, kToolscreenMouseRebindRepeatTimerId, static_cast<UINT>(repeatDelayMs), NULL);
+        return;
+    }
+
+    const bool isMouseDown =
+        uMsg == WM_XBUTTONDOWN || uMsg == WM_LBUTTONDOWN || uMsg == WM_RBUTTONDOWN ||
+        uMsg == WM_MBUTTONDOWN;
+    const bool isMouseUp =
+        uMsg == WM_XBUTTONUP || uMsg == WM_LBUTTONUP || uMsg == WM_RBUTTONUP ||
+        uMsg == WM_MBUTTONUP;
+
+    if (!isMouseDown && !isMouseUp) return;
+
+    DWORD mouseVk = 0;
+    if (uMsg == WM_XBUTTONDOWN || uMsg == WM_XBUTTONUP) {
+        mouseVk = (GET_XBUTTON_WPARAM(wParam) == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
+    } else if (uMsg == WM_LBUTTONDOWN || uMsg == WM_LBUTTONUP) { mouseVk = VK_LBUTTON; }
+    else if (uMsg == WM_RBUTTONDOWN || uMsg == WM_RBUTTONUP)   { mouseVk = VK_RBUTTON; }
+    else if (uMsg == WM_MBUTTONDOWN || uMsg == WM_MBUTTONUP)   { mouseVk = VK_MBUTTON; }
+
+    if (isMouseUp) {
+        if (s_mouseRebindRepeatState.mouseVk == mouseVk) {
+            ResetMouseRebindRepeatState(hWnd);
+        }
+        return;
+    }
+
+    auto rebindCfg = GetConfigSnapshot();
+    if (!rebindCfg || !rebindCfg->keyRebinds.enabled) return;
+    if (!rebindCfg->mouseRebindRepeat) return;
+    if (g_showGui.load(std::memory_order_acquire)) return;
+
+    const KeyRebind* matched = FindPreferredEnabledKeyRebind(
+        rebindCfg->keyRebinds.rebinds,
+        IsCursorVisible(),
+        [&](const KeyRebind& rebind) { return MatchesRebindSourceKey(mouseVk, mouseVk, rebind.fromKey); });
+
+    if (!matched) {
+        if (s_mouseRebindRepeatState.mouseVk == mouseVk) ResetMouseRebindRepeatState(hWnd);
+        return;
+    }
+
+    if (IsConsumeOnlyKeyRebind(*matched)) return;
+
+    DWORD outputVk = IsTriggerOutputDisabled(*matched)
+                         ? 0
+                         : NormalizeModifierVkFromConfig(matched->toKey, (matched->useCustomOutput ? matched->customOutputScanCode : 0));
+    if (matched->useCustomOutput && matched->customOutputVK != 0) {
+        const DWORD normCustom = NormalizeModifierVkFromConfig(matched->customOutputVK, matched->customOutputScanCode);
+        if (IsNonCharKeyVk(normCustom)) outputVk = normCustom;
+    }
+    if (outputVk == 0 || IsMouseLikeVk(outputVk)) return;
+
+    UINT outputScan = GetScanCodeWithExtendedFlag(outputVk);
+    if (matched->useCustomOutput && matched->customOutputScanCode != 0) {
+        outputScan = ResolveOutputScanCode(outputVk, matched->customOutputScanCode);
+    }
+    const bool outputIsSys = IsAltVk(outputVk);
+
+    StopMouseRebindRepeatTimer(hWnd);
+
+    int startDelayMs = 250;
+    int repeatDelayMs = 33;
+    (void)GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs);
+
+    s_mouseRebindRepeatState.mouseVk         = mouseVk;
+    s_mouseRebindRepeatState.outputVk        = outputVk;
+    s_mouseRebindRepeatState.outputScan      = outputScan;
+    s_mouseRebindRepeatState.outputIsSys     = outputIsSys;
+    s_mouseRebindRepeatState.startDeadlineMs = GetTickCount64() + static_cast<ULONGLONG>(startDelayMs);
+    s_mouseRebindRepeatState.repeating       = false;
+
+    SetTimer(hWnd, kToolscreenMouseRebindRepeatTimerId, static_cast<UINT>(startDelayMs), NULL);
+}
+
+static void StopLiveModifierRepeatTimer(HWND hWnd) {
+    if (s_liveModifierRepeatState.timerArmed && hWnd) {
+        KillTimer(hWnd, kToolscreenLiveModifierRepeatTimerId);
+        s_liveModifierRepeatState.timerArmed = false;
+    }
+}
+
+static void ResetLiveModifierRepeatState(HWND hWnd) {
+    StopLiveModifierRepeatTimer(hWnd);
+    s_liveModifierRepeatState = {};
+}
+
+static void InjectLiveModifierRepeatPair(HWND hWnd) {
+    const DWORD repeatVk   = s_liveModifierRepeatState.vk;
+    const UINT  repeatScan = s_liveModifierRepeatState.scanCode;
+    const bool  isSys      = s_liveModifierRepeatState.isSystemKey;
+
+    const LPARAM upLParam   = BuildKeyboardMessageLParam(repeatScan, false, isSys, 1, true,  true);
+    const LPARAM downLParam = BuildKeyboardMessageLParam(repeatScan, true,  isSys, 1, false, false);
+
+    const UINT upMsg   = isSys ? WM_SYSKEYUP   : WM_KEYUP;
+    const UINT downMsg = isSys ? WM_SYSKEYDOWN : WM_KEYDOWN;
+
+    CallWindowProc(g_originalWndProc, hWnd, upMsg,   static_cast<WPARAM>(repeatVk), upLParam);
+    CallWindowProc(g_originalWndProc, hWnd, downMsg, static_cast<WPARAM>(repeatVk), downLParam);
+    s_liveModifierRepeatState.lParamTemplate = downLParam;
+}
+
+static void HandleLiveModifierRepeat(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (!g_config.liveModifierRepeat) {
+        if (s_liveModifierRepeatState.vk != 0 || s_liveModifierRepeatState.timerArmed) {
+            ResetLiveModifierRepeatState(hWnd);
+        }
+        return;
+    }
+
+    if (uMsg == WM_TIMER && static_cast<UINT_PTR>(wParam) == kToolscreenLiveModifierRepeatTimerId) {
+        if (s_liveModifierRepeatState.vk == 0) {
+            StopLiveModifierRepeatTimer(hWnd);
+            return;
+        }
+        if ((GetAsyncKeyState(static_cast<int>(s_liveModifierRepeatState.vk)) & 0x8000) == 0) {
+            ResetLiveModifierRepeatState(hWnd);
+            return;
+        }
+        InjectLiveModifierRepeatPair(hWnd);
+        return;
+    }
+
+    const bool isKeyDown = (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN);
+    const bool isKeyUp   = (uMsg == WM_KEYUP   || uMsg == WM_SYSKEYUP);
+    if (!isKeyDown && !isKeyUp) {
+        return;
+    }
+
+    const DWORD rawVk     = static_cast<DWORD>(wParam);
+    const bool  isModifier = IsModifierVk(rawVk);
+
+    if (isKeyDown && !isModifier) {
+        const bool wasAlreadyTracked = (s_liveModifierRepeatState.vk == rawVk);
+        if (!wasAlreadyTracked) {
+            StopLiveModifierRepeatTimer(hWnd);
+            s_liveModifierRepeatState.vk          = rawVk;
+            s_liveModifierRepeatState.scanCode     = GetScanCodeWithExtendedFlagFromLParam(lParam);
+            s_liveModifierRepeatState.isSystemKey  = (uMsg == WM_SYSKEYDOWN);
+            s_liveModifierRepeatState.lParamTemplate = lParam;
+        }
+        return;
+    }
+
+    if (isKeyUp && !isModifier) {
+        if (s_liveModifierRepeatState.vk == rawVk) {
+            ResetLiveModifierRepeatState(hWnd);
+        }
+        return;
+    }
+
+    if (s_liveModifierRepeatState.vk == 0 || !hWnd || !IsWindow(hWnd)) {
+        return;
+    }
+
+    if ((GetAsyncKeyState(static_cast<int>(s_liveModifierRepeatState.vk)) & 0x8000) == 0) {
+        ResetLiveModifierRepeatState(hWnd);
+        return;
+    }
+
+    InjectLiveModifierRepeatPair(hWnd);
+
+    int startDelayMs = 250;
+    int repeatDelayMs = 33;
+    (void)GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs);
+
+    if (s_liveModifierRepeatState.timerArmed) {
+        KillTimer(hWnd, kToolscreenLiveModifierRepeatTimerId);
+    }
+    if (SetTimer(hWnd, kToolscreenLiveModifierRepeatTimerId, static_cast<UINT>(repeatDelayMs), NULL) != 0) {
+        s_liveModifierRepeatState.timerArmed = true;
+    }
+}
+
 LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("SubclassedWndProc");
 
@@ -4851,6 +5098,16 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     UpdateLowLevelKeyboardHookInstalledState();
     UpdateShiftHotkeyPollingState(hWnd);
     SyncShiftHotkeyPollingStateFromMessage(uMsg, wParam, lParam);
+
+    if (uMsg == WM_TIMER && static_cast<UINT_PTR>(wParam) == kToolscreenLiveModifierRepeatTimerId) {
+        HandleLiveModifierRepeat(hWnd, uMsg, wParam, lParam);
+        return 0;
+    }
+
+    if (uMsg == WM_TIMER && static_cast<UINT_PTR>(wParam) == kToolscreenMouseRebindRepeatTimerId) {
+        HandleMouseRebindRepeat(hWnd, uMsg, wParam, lParam);
+        return 0;
+    }
 
     InputHandlerResult result;
 
@@ -4989,6 +5246,8 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleCustomKeyNoRebind(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
+    HandleMouseRebindRepeat(hWnd, uMsg, wParam, lParam);
+
     result = HandleKeyRebinding(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
@@ -5002,6 +5261,9 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (IsFocusGainMessage(uMsg) && s_deferredFocusRegainWmSizePending.exchange(false, std::memory_order_relaxed)) {
         QueueDeferredFocusRegainWmSize(hWnd);
     }
+
+    HandleLiveModifierRepeat(hWnd, uMsg, wParam, lParam);
+
     return forwarded;
 }
 

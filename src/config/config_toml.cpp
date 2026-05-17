@@ -2201,6 +2201,8 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("obsFramerate", config.obsFramerate);
     out.insert("keyRepeatStartDelay", ClampKeyRepeatStartDelayConfigValue(config.keyRepeatStartDelay));
     out.insert("keyRepeatDelay", ClampKeyRepeatDelayConfigValue(config.keyRepeatDelay, true));
+    out.insert("liveModifierRepeat", config.liveModifierRepeat);
+    out.insert("mouseRebindRepeat", config.mouseRebindRepeat);
     out.insert("basicModeEnabled", config.basicModeEnabled);
     out.insert("restoreWindowedModeOnFullscreenExit", config.restoreWindowedModeOnFullscreenExit);
     out.insert("disableFullscreenPrompt", config.disableFullscreenPrompt);
@@ -2474,6 +2476,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.limitCaptureFramerate = GetOr(tbl, "limitCaptureFramerate", ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE);
     config.obsFramerate = ClampObsFramerateConfigValue(GetOr(tbl, "obsFramerate", ConfigDefaults::CONFIG_OBS_FRAMERATE));
     config.useSystemKeyRepeat = true;
+    config.liveModifierRepeat = GetOr(tbl, "liveModifierRepeat", false);
+    config.mouseRebindRepeat = GetOr(tbl, "mouseRebindRepeat", false);
     int keyRepeatStartDelay = GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY);
     int keyRepeatDelay = GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY);
     if (originalConfigVersion < ConfigDefaults::DEFAULT_CONFIG_VERSION) {
@@ -2941,6 +2945,8 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "obsFramerate",
         "useSystemKeyRepeat",
         "modifiersInterruptKeyRepeat",
+        "liveModifierRepeat",
+        "mouseRebindRepeat",
         "keyRepeatStartDelay",
         "keyRepeatDelay",
         "basicModeEnabled",
